@@ -1,0 +1,28 @@
+(app_routes) {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle /admin* {
+		reverse_proxy api:8000
+	}
+
+	handle /static/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+}
+
+{$APP_HOST} {
+	import app_routes
+}
+
+http://{$APP_IP} {
+	import app_routes
+}
+

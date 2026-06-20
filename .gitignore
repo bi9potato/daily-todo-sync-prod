@@ -12,6 +12,9 @@ credentials.*
 Thumbs.db
 .vscode/
 .idea/
+.corepack/
+.pnpm-store/
+.tmp/
 
 # 前端构建产物
 node_modules/
@@ -24,6 +27,7 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 
 # 日志
 *.log

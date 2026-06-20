@@ -1,0 +1,45 @@
+name: daily-todo-sync
+
+services:
+  api:
+    image: ghcr.io/bi9potato/daily-todo-sync-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  web:
+    image: ghcr.io/bi9potato/daily-todo-sync-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      APP_HOST: ${APP_HOST:-68.183.180.19.sslip.io}
+      APP_IP: ${APP_IP:-68.183.180.19}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
+

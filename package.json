@@ -1,0 +1,15 @@
+{
+  "name": "daily-todo-sync",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev:web": "pnpm --filter @daily-todo-sync/web dev",
+    "build:web": "pnpm --filter @daily-todo-sync/web build",
+    "preview:web": "pnpm --filter @daily-todo-sync/web preview",
+    "check:web": "pnpm --filter @daily-todo-sync/web typecheck",
+    "dev:api": "cd apps/api && python manage.py runserver",
+    "check:api": "cd apps/api && python manage.py check",
+    "test:api": "cd apps/api && python manage.py test"
+  },
+  "devDependencies": {}
+}

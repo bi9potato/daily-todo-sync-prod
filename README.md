@@ -1,37 +1,57 @@
-# Daily Todo
+# Daily Todo Sync
 
-## 亮点
-1. 未完成自动进入下一天。
-
-
-一个本地运行的每日待办清单。打开 `index.html` 即可使用，数据保存在浏览器 `localStorage` 中。
-
-## 功能
-
-- 添加每天的待办事项
-- checkbox 勾选完成状态
-- 每条待办记录原始创建时间
-- 只有日期真的进入第二天后，才会自动复制前一天未完成事项
-- 待处理事项会提示是否会进入下一天清单
-- 删除单条待办，或清空当天已完成事项
-- 支持日期切换，查看历史或未来清单
-
-## 使用
-
-直接用浏览器打开：
+一个面向 Web、未来 Android/iOS 的每日待办应用。当前目标是从静态 MVP 迁移到现代化多端架构：
 
 ```text
-index.html
+React + TypeScript + Vite
+Django + Django Ninja
+Supabase PostgreSQL
+Docker Compose + Caddy
+GitHub Actions
 ```
 
-数据只存在当前浏览器和当前域名/文件环境中。如果换浏览器或清理浏览器数据，清单也会随之变化。
+## 当前状态
 
-## 测试跨天结转
+- `legacy/static-mvp`：已经可用的纯前端 MVP，数据存在浏览器 `localStorage`
+- `apps/web`：新的 React Web 应用骨架
+- `apps/api`：新的 Django API 应用骨架
+- `infra`：部署和反向代理配置
+- `docs`：中文技术文档和服务器设置记录
 
-可以用 URL 参数临时模拟“今天”的日期，不需要修改电脑系统时间。
+## 本地开发
 
-1. 打开 `index.html?today=2026-06-20`，新增一条待处理，不要勾选。
-2. 打开 `index.html?today=2026-06-21`，这条未完成事项会进入 6 月 21 日的待处理。
-3. 回到 `index.html?today=2026-06-20`，把任务勾选完成，再打开 `index.html?today=2026-06-21`，它就不会作为待处理出现。
+前端：
 
-正常使用时直接打开 `index.html`，不要带 `today` 参数即可。
+```bash
+pnpm install
+pnpm dev:web
+```
+
+后端：
+
+```bash
+cd apps/api
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+python manage.py migrate
+python manage.py runserver
+```
+
+## 环境变量
+
+仓库只提交 `.env.example`。真实密钥放在：
+
+- 本机 `.env`
+- 服务器 `/opt/daily-todo-sync/.env`
+- GitHub Actions Secrets
+
+不要把数据库密码、服务器密码、SSH 私钥或 Django secret 提交到 Git。
+
+## 技术文档
+
+- [技术设计](docs/TECHNICAL_DESIGN.md)
+- [服务器初始化](docs/SERVER_SETUP.md)
+- [Supabase 设置](docs/SUPABASE_SETUP.md)
+- [部署说明](docs/DEPLOYMENT.md)
+- [项目信息](docs/PROJECT_INFO.md)
