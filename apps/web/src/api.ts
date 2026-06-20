@@ -31,6 +31,49 @@ export type DayTodos = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
+function formatErrorDetail(detail: unknown): string | null {
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => formatErrorDetail(item))
+      .filter((item): item is string => Boolean(item));
+    return messages.length > 0 ? messages.join("\n") : null;
+  }
+
+  if (detail && typeof detail === "object") {
+    const messages = Object.values(detail)
+      .map((item) => formatErrorDetail(item))
+      .filter((item): item is string => Boolean(item));
+    return messages.length > 0 ? messages.join("\n") : null;
+  }
+
+  return null;
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  const fallback = `请求失败（${response.status}）`;
+  const text = await response.text();
+
+  if (!text) {
+    return fallback;
+  }
+
+  try {
+    const body = JSON.parse(text) as { detail?: unknown; message?: unknown; error?: unknown };
+    return (
+      formatErrorDetail(body.detail) ??
+      formatErrorDetail(body.message) ??
+      formatErrorDetail(body.error) ??
+      fallback
+    );
+  } catch {
+    return text;
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -46,8 +89,7 @@ async function request<T>(
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
   if (response.status === 204) {
