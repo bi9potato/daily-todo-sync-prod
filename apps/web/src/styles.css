@@ -28,7 +28,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -38,7 +39,7 @@ button {
 
 .auth-page,
 .app-shell {
-  width: min(760px, calc(100% - 32px));
+  width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
   padding: 32px 0 48px;
 }
@@ -115,6 +116,7 @@ h2 {
 
 .stack input,
 .add-row input,
+.add-row select,
 .date-controls input {
   min-height: 42px;
   border: 1px solid var(--line);
@@ -127,6 +129,7 @@ h2 {
 
 .stack input:focus,
 .add-row input:focus,
+.add-row select:focus,
 .date-controls input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(25, 115, 77, 0.12);
@@ -176,6 +179,31 @@ h2 {
   gap: 8px;
 }
 
+.view-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #edf1ef;
+}
+
+.view-toggle button {
+  min-height: 38px;
+  min-width: 64px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.view-toggle .active {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(31, 39, 35, 0.08);
+}
+
 .list-section {
   padding: 18px;
   margin-top: 16px;
@@ -207,9 +235,79 @@ h2 {
   margin-bottom: 12px;
 }
 
+.composer-row {
+  grid-template-columns: minmax(180px, 1fr) 130px 140px 42px;
+}
+
 .add-row button {
   font-size: 1.5rem;
   line-height: 1;
+}
+
+.calendar-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.calendar-grid.view-day {
+  grid-template-columns: 1fr;
+}
+
+.calendar-grid.view-week {
+  grid-template-columns: repeat(7, minmax(150px, 1fr));
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.calendar-grid.view-month {
+  grid-template-columns: repeat(7, minmax(130px, 1fr));
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.day-column {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.day-column.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(25, 115, 77, 0.1);
+}
+
+.day-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.day-heading span:first-child {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.day-heading strong {
+  font-size: 1.1rem;
+}
+
+.today-pill {
+  justify-self: end;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 800;
 }
 
 .todo-list {
@@ -222,7 +320,7 @@ h2 {
 
 .todo-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 12px;
   padding: 13px;
@@ -231,8 +329,66 @@ h2 {
   background: #fff;
 }
 
+.task-card {
+  cursor: grab;
+}
+
+.task-card.is-dragging {
+  opacity: 0.45;
+}
+
+.drag-handle {
+  color: var(--muted);
+  font-weight: 800;
+  letter-spacing: -0.12em;
+  user-select: none;
+}
+
+.task-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-body p:first-child {
+  overflow-wrap: anywhere;
+}
+
+.task-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.task-badges span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.task-meta-controls {
+  display: grid;
+  grid-template-columns: 110px 120px;
+  gap: 8px;
+}
+
+.task-meta-controls input,
+.task-meta-controls select {
+  min-height: 34px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  color: var(--ink);
+  padding: 0 8px;
+}
+
 .todo-item.is-done {
   background: #f8faf9;
+  cursor: default;
 }
 
 .todo-item.is-done p:first-child {
@@ -253,6 +409,23 @@ h2 {
   display: block;
 }
 
+.card-list .empty-state {
+  display: block;
+  padding: 12px;
+  font-size: 0.86rem;
+}
+
+.done-list {
+  margin-top: 10px;
+}
+
+.done-list summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.88rem;
+  margin-bottom: 8px;
+}
+
 @media (max-width: 680px) {
   .topbar {
     align-items: stretch;
@@ -267,12 +440,25 @@ h2 {
     flex: 1 1 150px;
   }
 
+  .composer-row {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-grid.view-week,
+  .calendar-grid.view-month {
+    grid-template-columns: repeat(7, minmax(220px, 1fr));
+  }
+
   .todo-item {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto auto minmax(0, 1fr);
   }
 
   .todo-item button {
-    grid-column: 2;
+    grid-column: 3;
     justify-self: start;
+  }
+
+  .task-meta-controls {
+    grid-template-columns: 1fr;
   }
 }

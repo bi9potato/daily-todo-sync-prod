@@ -206,6 +206,12 @@ id
 user_id
 root_id
 text
+reminder_time
+recurrence_kind
+recurrence_interval
+recurrence_days_of_week
+recurrence_until
+recurrence_start_date
 created_at
 updated_at
 deleted_at
@@ -214,6 +220,8 @@ deleted_at
 说明：
 
 - `root_id` 用来标记同一个逻辑任务跨天结转后的共同来源。
+- `reminder_time` 保存提醒时间；具体提醒点由 occurrence 的日期和这个时间组合得出。
+- `recurrence_kind` 等字段保存重复任务 series 规则，第一版支持每天、工作日、每周、每月、每年。
 - `deleted_at` 用软删除，方便以后做离线同步。
 
 ### 7.3 每日任务出现表
@@ -230,6 +238,8 @@ root_id
 task_date
 status
 completed_at
+source
+sort_order
 carryover_from_occurrence_id
 created_at
 updated_at
@@ -252,6 +262,13 @@ unique(user_id, root_id, task_date)
 ```
 
 这个约束保证跨天结转是幂等的，不会重复生成。
+
+说明：
+
+- `source=manual` 表示用户手动创建。
+- `source=carryover` 表示由前一天未完成事项结转生成。
+- `source=recurring` 表示由重复任务 series 生成。
+- `sort_order` 保存某一天内卡片拖动排序结果。
 
 ### 7.4 Refresh Token 表
 
@@ -343,7 +360,9 @@ GET  /auth/me
 
 ```text
 GET    /days/{date}
+GET    /range?start={date}&end={date}
 POST   /days/{date}/tasks
+PATCH  /days/{date}/reorder
 PATCH  /occurrences/{id}
 DELETE /occurrences/{id}
 POST   /days/{date}/clear-completed

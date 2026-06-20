@@ -17,16 +17,44 @@ export type TodoOccurrence = {
   taskDate: string;
   text: string;
   status: "pending" | "done";
+  source: "manual" | "carryover" | "recurring";
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
   carryoverFromOccurrenceId: string | null;
+  firstCreatedAt: string;
+  reminderTime: string | null;
+  reminderAt: string | null;
+  isRecurring: boolean;
+  repeat: RepeatRule;
 };
 
 export type DayTodos = {
   date: string;
   pending: TodoOccurrence[];
   done: TodoOccurrence[];
+};
+
+export type RangeTodos = {
+  start: string;
+  end: string;
+  days: DayTodos[];
+};
+
+export type RepeatKind = "none" | "daily" | "weekdays" | "weekly" | "monthly" | "yearly";
+
+export type RepeatRule = {
+  kind: RepeatKind;
+  interval: number;
+  daysOfWeek: number[];
+  until: string | null;
+};
+
+export type TaskCreatePayload = {
+  text: string;
+  reminderTime?: string | null;
+  repeat?: RepeatRule;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -125,12 +153,16 @@ export function getDay(date: string, accessToken: string) {
   return request<DayTodos>(`/days/${date}`, {}, accessToken);
 }
 
-export function createTask(date: string, text: string, accessToken: string) {
+export function getRange(start: string, end: string, accessToken: string) {
+  return request<RangeTodos>(`/range?start=${start}&end=${end}`, {}, accessToken);
+}
+
+export function createTask(date: string, payload: TaskCreatePayload, accessToken: string) {
   return request<TodoOccurrence>(
     `/days/${date}/tasks`,
     {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     },
     accessToken,
   );
@@ -138,7 +170,7 @@ export function createTask(date: string, text: string, accessToken: string) {
 
 export function updateOccurrence(
   id: string,
-  payload: { done?: boolean; text?: string },
+  payload: { done?: boolean; text?: string; reminderTime?: string | null; repeat?: RepeatRule },
   accessToken: string,
 ) {
   return request<TodoOccurrence>(
@@ -146,6 +178,17 @@ export function updateOccurrence(
     {
       method: "PATCH",
       body: JSON.stringify(payload),
+    },
+    accessToken,
+  );
+}
+
+export function reorderDay(date: string, orderedIds: string[], accessToken: string) {
+  return request<void>(
+    `/days/${date}/reorder`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ orderedIds }),
     },
     accessToken,
   );

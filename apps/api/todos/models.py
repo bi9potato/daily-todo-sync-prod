@@ -5,10 +5,28 @@ from django.db import models
 
 
 class Task(models.Model):
+    class RecurrenceKind(models.TextChoices):
+        NONE = "none", "None"
+        DAILY = "daily", "Daily"
+        WEEKDAYS = "weekdays", "Weekdays"
+        WEEKLY = "weekly", "Weekly"
+        MONTHLY = "monthly", "Monthly"
+        YEARLY = "yearly", "Yearly"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     root_id = models.UUIDField(db_index=True, editable=False)
     text = models.CharField(max_length=280)
+    reminder_time = models.TimeField(null=True, blank=True)
+    recurrence_kind = models.CharField(
+        max_length=16,
+        choices=RecurrenceKind.choices,
+        default=RecurrenceKind.NONE,
+    )
+    recurrence_interval = models.PositiveIntegerField(default=1)
+    recurrence_days_of_week = models.JSONField(default=list, blank=True)
+    recurrence_until = models.DateField(null=True, blank=True)
+    recurrence_start_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -17,6 +35,7 @@ class Task(models.Model):
         indexes = [
             models.Index(fields=["user", "deleted_at"]),
             models.Index(fields=["user", "root_id"]),
+            models.Index(fields=["user", "recurrence_kind", "recurrence_start_date"]),
         ]
 
     def save(self, *args, **kwargs):
@@ -33,6 +52,11 @@ class TodoOccurrence(models.Model):
         PENDING = "pending", "Pending"
         DONE = "done", "Done"
 
+    class Source(models.TextChoices):
+        MANUAL = "manual", "Manual"
+        CARRYOVER = "carryover", "Carryover"
+        RECURRING = "recurring", "Recurring"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="occurrences")
@@ -44,6 +68,12 @@ class TodoOccurrence(models.Model):
         default=Status.PENDING,
     )
     completed_at = models.DateTimeField(null=True, blank=True)
+    source = models.CharField(
+        max_length=16,
+        choices=Source.choices,
+        default=Source.MANUAL,
+    )
+    sort_order = models.PositiveIntegerField(default=0)
     carryover_from_occurrence = models.ForeignKey(
         "self",
         null=True,
@@ -66,11 +96,10 @@ class TodoOccurrence(models.Model):
             )
         ]
         indexes = [
-            models.Index(fields=["user", "task_date", "status"]),
+            models.Index(fields=["user", "task_date", "status", "sort_order"]),
             models.Index(fields=["user", "root_id", "task_date"]),
             models.Index(fields=["deleted_at"]),
         ]
 
     def __str__(self) -> str:
         return f"{self.task_date} {self.task.text}"
-
