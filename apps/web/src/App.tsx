@@ -54,8 +54,15 @@ type DragState = {
   y: number;
 };
 
+type PendingDrag = {
+  state: DragState;
+  timeoutId: number;
+};
+
 const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
 const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
+const LONG_PRESS_TO_DRAG_MS = 420;
+const LONG_PRESS_MOVE_CANCEL_PX = 10;
 
 const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
   { value: "none", label: "不重复" },
@@ -212,8 +219,10 @@ function TodoScreen({
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const pendingDragRef = useRef<PendingDrag | null>(null);
   const suppressOpenTaskIdRef = useRef<string | null>(null);
   const reorderAnimationFrameRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
@@ -383,6 +392,15 @@ function TodoScreen({
     animateReorderFrom(nextState.date, nextState.id, before);
   }
 
+  function clearPendingDrag() {
+    const pending = pendingDragRef.current;
+    if (!pending) {
+      return;
+    }
+    window.clearTimeout(pending.timeoutId);
+    pendingDragRef.current = null;
+  }
+
   function nextTargetIdAfter(date: string, hoveredId: string, draggedId: string) {
     const ids =
       daysByDate
@@ -425,7 +443,8 @@ function TodoScreen({
     event: ReactPointerEvent<HTMLElement>,
   ) {
     const rect = event.currentTarget.getBoundingClientRect();
-    setDragState({
+    clearPendingDrag();
+    const initialState = {
       active: false,
       date,
       height: rect.height,
@@ -439,33 +458,54 @@ function TodoScreen({
       width: rect.width,
       x: event.clientX,
       y: event.clientY,
-    });
+    };
+    pendingDragRef.current = {
+      state: initialState,
+      timeoutId: window.setTimeout(() => {
+        const pending = pendingDragRef.current;
+        if (!pending || pending.state.pointerId !== initialState.pointerId) {
+          return;
+        }
+        pendingDragRef.current = null;
+        setDragState({ ...pending.state, active: true });
+      }, LONG_PRESS_TO_DRAG_MS),
+    };
   }
 
   function moveTaskDrag(event: ReactPointerEvent<HTMLElement>) {
+    const pending = pendingDragRef.current;
+    if (pending?.state.pointerId === event.pointerId) {
+      const deltaX = event.clientX - pending.state.startX;
+      const deltaY = event.clientY - pending.state.startY;
+      if (Math.hypot(deltaX, deltaY) > LONG_PRESS_MOVE_CANCEL_PX) {
+        suppressOpenTaskIdRef.current = pending.state.id;
+        clearPendingDrag();
+        return;
+      }
+      pending.state = {
+        ...pending.state,
+        x: event.clientX,
+        y: event.clientY,
+      };
+      return;
+    }
+
     if (!dragState || event.pointerId !== dragState.pointerId) {
       return;
     }
 
-    const deltaX = event.clientX - dragState.startX;
-    const deltaY = event.clientY - dragState.startY;
-    const active = dragState.active || Math.hypot(deltaX, deltaY) > 6;
-    const targetId = active
-      ? targetIdFromPointer(dragState, event.clientX, event.clientY)
-      : dragState.targetId;
+    const targetId = targetIdFromPointer(dragState, event.clientX, event.clientY);
     const nextState = {
       ...dragState,
-      active,
+      active: true,
       targetId,
       x: event.clientX,
       y: event.clientY,
     };
 
-    if (active) {
-      event.preventDefault();
-    }
+    event.preventDefault();
 
-    if (active && (targetId !== dragState.targetId || active !== dragState.active)) {
+    if (targetId !== dragState.targetId) {
       setDragStateWithReorderAnimation(nextState);
       return;
     }
@@ -474,6 +514,11 @@ function TodoScreen({
   }
 
   function finishTaskDrag() {
+    if (pendingDragRef.current) {
+      clearPendingDrag();
+      return;
+    }
+
     if (!dragState) {
       return;
     }
@@ -492,6 +537,7 @@ function TodoScreen({
   }
 
   function cancelTaskDrag() {
+    clearPendingDrag();
     setDragState(null);
   }
 
@@ -540,10 +586,32 @@ function TodoScreen({
       />
       <aside className="sidebar surface-panel">
         <div className="brand-block">
-          <span className="brand-mark">D</span>
-          <div className="sidebar-label">
-            <p className="eyebrow">Daily Todo Sync</p>
-            <strong>{meQuery.data?.username ?? "账户"}</strong>
+          <div className="account-menu">
+            <button
+              className="account-trigger"
+              type="button"
+              aria-expanded={isAccountMenuOpen}
+              onClick={() => setIsAccountMenuOpen((value) => !value)}
+            >
+              <span className="brand-mark">D</span>
+              <span className="sidebar-label account-copy">
+                <span className="eyebrow">Daily Todo Sync</span>
+                <strong>{meQuery.data?.username ?? "账户"}</strong>
+              </span>
+              <ChevronDownIcon expanded={isAccountMenuOpen} />
+            </button>
+
+            {isAccountMenuOpen ? (
+              <div className="account-dropdown">
+                <button className="account-menu-item is-placeholder" type="button">
+                  <span>Settings</span>
+                  <small>占位，稍后接入</small>
+                </button>
+                <button className="account-menu-item danger-menu-item" type="button" onClick={onLogout}>
+                  登出账户
+                </button>
+              </div>
+            ) : null}
           </div>
           <button
             className="sidebar-icon-button sidebar-collapse-button"
@@ -652,9 +720,6 @@ function TodoScreen({
             </button>
             <button type="button" onClick={() => shiftDate(1)}>
               &gt;
-            </button>
-            <button className="ghost-button" type="button" onClick={onLogout}>
-              退出
             </button>
           </nav>
         </header>
@@ -1265,6 +1330,23 @@ function CloseIcon() {
     >
       <path d="M18 6 6 18" />
       <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      className={`mini-icon chevron-icon ${expanded ? "is-expanded" : ""}`}
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }

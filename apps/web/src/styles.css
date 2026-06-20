@@ -236,7 +236,7 @@ h2 {
   gap: 18px;
   max-height: calc(100vh - 56px);
   border-radius: var(--radius);
-  overflow: hidden;
+  overflow: visible;
   padding: 16px;
   transition:
     transform 0.34s var(--ease-out),
@@ -247,10 +247,106 @@ h2 {
 
 .brand-block {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   min-width: 0;
+}
+
+.account-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.account-trigger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  padding: 3px;
+  text-align: left;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s var(--ease);
+}
+
+.account-trigger:hover,
+.account-trigger[aria-expanded="true"] {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.account-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.account-copy .eyebrow {
+  margin: 0;
+}
+
+.chevron-icon {
+  color: var(--muted);
+  transition: transform 0.22s var(--ease);
+}
+
+.chevron-icon.is-expanded {
+  transform: rotate(180deg);
+}
+
+.account-dropdown {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+  box-shadow: var(--shadow-float);
+  padding: 6px;
+  animation: accountMenuIn 0.18s var(--ease-out) both;
+}
+
+.account-menu-item {
+  display: grid;
+  gap: 2px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  padding: 8px 10px;
+  text-align: left;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.account-menu-item:hover {
+  background: var(--accent-soft);
+}
+
+.account-menu-item small {
+  color: var(--muted);
+}
+
+.account-menu-item.is-placeholder {
+  color: var(--muted);
+  cursor: default;
+}
+
+.danger-menu-item {
+  color: var(--danger);
 }
 
 .brand-mark {
@@ -413,11 +509,22 @@ h2 {
   justify-items: center;
 }
 
+.sidebar-collapsed .account-menu {
+  justify-self: center;
+}
+
+.sidebar-collapsed .account-trigger {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  width: 48px;
+}
+
 .sidebar-collapsed .brand-mark {
   transform: scale(0.94);
 }
 
 .sidebar-collapsed .sidebar-label,
+.sidebar-collapsed .chevron-icon,
 .sidebar-collapsed .sidebar-back span,
 .sidebar-collapsed .sidebar-section p,
 .sidebar-collapsed .sidebar-date,
@@ -428,6 +535,12 @@ h2 {
   opacity: 0;
   pointer-events: none;
   transform: translateX(-6px);
+}
+
+.sidebar-collapsed .account-dropdown {
+  left: 0;
+  right: auto;
+  width: 210px;
 }
 
 .sidebar-collapsed .sidebar-back,
@@ -616,7 +729,7 @@ h2 {
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(253, 254, 251, 0.98)),
     var(--card);
   box-shadow: var(--shadow-card);
-  cursor: grab;
+  cursor: pointer;
   touch-action: none;
   transform-origin: center;
   transition:
@@ -652,8 +765,11 @@ h2 {
 }
 
 .todo-item:active {
-  cursor: grabbing;
   transform: translateY(0) scale(0.995);
+}
+
+.todo-list.is-reordering .todo-item {
+  cursor: grabbing;
 }
 
 .drag-handle {
@@ -928,6 +1044,17 @@ h2 {
   }
 }
 
+@keyframes accountMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -992,11 +1119,22 @@ h2 {
   }
 
   .sidebar-collapsed .brand-block {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     justify-items: stretch;
   }
 
+  .sidebar-collapsed .account-menu {
+    justify-self: stretch;
+  }
+
+  .sidebar-collapsed .account-trigger {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    justify-items: stretch;
+    width: 100%;
+  }
+
   .sidebar-collapsed .sidebar-label,
+  .sidebar-collapsed .chevron-icon,
   .sidebar-collapsed .sidebar-back span,
   .sidebar-collapsed .sidebar-section p,
   .sidebar-collapsed .sidebar-date,
