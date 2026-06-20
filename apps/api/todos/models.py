@@ -17,6 +17,7 @@ class Task(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     root_id = models.UUIDField(db_index=True, editable=False)
     text = models.CharField(max_length=280)
+    note = models.TextField(blank=True, default="")
     reminder_time = models.TimeField(null=True, blank=True)
     recurrence_kind = models.CharField(
         max_length=16,

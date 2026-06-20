@@ -92,3 +92,19 @@ class CarryoverTests(TestCase):
         first.refresh_from_db()
         second.refresh_from_db()
         self.assertLess(second.sort_order, first.sort_order)
+
+    def test_note_can_be_created_and_updated(self):
+        occurrence = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Read",
+            note="  chapter 1  ",
+        )
+
+        self.assertEqual(occurrence.task.note, "chapter 1")
+
+        update_occurrence(self.user, occurrence.id, note="  chapter 2  ")
+        occurrence.refresh_from_db()
+        occurrence.task.refresh_from_db()
+
+        self.assertEqual(occurrence.task.note, "chapter 2")

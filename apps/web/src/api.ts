@@ -16,6 +16,7 @@ export type TodoOccurrence = {
   rootId: string;
   taskDate: string;
   text: string;
+  note: string;
   status: "pending" | "done";
   source: "manual" | "carryover" | "recurring";
   sortOrder: number;
@@ -53,6 +54,7 @@ export type RepeatRule = {
 
 export type TaskCreatePayload = {
   text: string;
+  note?: string;
   reminderTime?: string | null;
   repeat?: RepeatRule;
 };
@@ -170,7 +172,13 @@ export function createTask(date: string, payload: TaskCreatePayload, accessToken
 
 export function updateOccurrence(
   id: string,
-  payload: { done?: boolean; text?: string; reminderTime?: string | null; repeat?: RepeatRule },
+  payload: {
+    done?: boolean;
+    text?: string;
+    note?: string;
+    reminderTime?: string | null;
+    repeat?: RepeatRule;
+  },
   accessToken: string,
 ) {
   return request<TodoOccurrence>(

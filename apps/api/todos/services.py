@@ -76,6 +76,7 @@ def create_task_for_day(
     task_date: date,
     text: str,
     *,
+    note: str = "",
     reminder_time: time | None = None,
     recurrence_kind: str = Task.RecurrenceKind.NONE,
     recurrence_interval: int = 1,
@@ -86,6 +87,7 @@ def create_task_for_day(
     task = Task.objects.create(
         user=user,
         text=text.strip(),
+        note=note.strip(),
         reminder_time=reminder_time,
         recurrence_kind=normalized_kind,
         recurrence_interval=max(recurrence_interval or 1, 1),
@@ -222,6 +224,7 @@ def update_occurrence(
     *,
     done: bool | None = None,
     text: str | None = None,
+    note: str | None = None,
     reminder_time: time | None = None,
     set_reminder_time: bool = False,
     recurrence_kind: str | None = None,
@@ -241,6 +244,9 @@ def update_occurrence(
         if stripped:
             occurrence.task.text = stripped
 
+    if note is not None:
+        occurrence.task.note = note.strip()
+
     if set_reminder_time:
         occurrence.task.reminder_time = reminder_time
 
@@ -256,13 +262,21 @@ def update_occurrence(
 
     task_changed = any(
         value is not None
-        for value in [text, reminder_time, recurrence_kind, recurrence_interval, recurrence_until]
+        for value in [
+            text,
+            note,
+            reminder_time,
+            recurrence_kind,
+            recurrence_interval,
+            recurrence_until,
+        ]
     ) or recurrence_days_of_week is not None or set_reminder_time
 
     if task_changed:
         occurrence.task.save(
             update_fields=[
                 "text",
+                "note",
                 "reminder_time",
                 "recurrence_kind",
                 "recurrence_interval",
@@ -303,7 +317,7 @@ def update_occurrence(
                 deleted_at__isnull=True,
                 carryover_from_occurrence__isnull=False,
             ).update(deleted_at=now, updated_at=now)
-    elif text is not None:
+    elif task_changed:
         occurrence.version += 1
         occurrence.save(update_fields=["version", "updated_at"])
 

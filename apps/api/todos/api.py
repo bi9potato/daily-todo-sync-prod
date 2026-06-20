@@ -28,6 +28,7 @@ class TodoOccurrenceOut(Schema):
     rootId: str
     taskDate: str
     text: str
+    note: str
     status: str
     source: str
     sortOrder: int
@@ -63,6 +64,7 @@ class RepeatRuleIn(Schema):
 
 class TaskCreateIn(Schema):
     text: str
+    note: str = ""
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
 
@@ -70,6 +72,7 @@ class TaskCreateIn(Schema):
 class OccurrencePatchIn(Schema):
     done: bool | None = None
     text: str | None = None
+    note: str | None = None
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
 
@@ -130,6 +133,7 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
         "rootId": str(occurrence.root_id),
         "taskDate": occurrence.task_date.isoformat(),
         "text": task.text,
+        "note": task.note,
         "status": occurrence.status,
         "source": occurrence.source,
         "sortOrder": occurrence.sort_order,
@@ -209,6 +213,7 @@ def create_task(request, day: date, payload: TaskCreateIn):
         request.auth,
         day,
         text,
+        note=payload.note,
         reminder_time=parse_reminder_time(payload.reminderTime),
         **recurrence_payload(payload.repeat),
     )
@@ -230,6 +235,7 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
         occurrence_id,
         done=payload.done,
         text=payload.text,
+        note=payload.note,
         reminder_time=parse_reminder_time(payload.reminderTime),
         set_reminder_time="reminderTime" in data,
         **(recurrence_payload(payload.repeat) if payload.repeat is not None else {}),

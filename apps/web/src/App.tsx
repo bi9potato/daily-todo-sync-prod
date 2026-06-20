@@ -101,7 +101,7 @@ function AuthScreen({
 
   return (
     <main className="auth-page">
-      <section className="auth-panel">
+      <section className="auth-panel surface-panel">
         <p className="eyebrow">Daily Todo Sync</p>
         <h1>{mode === "login" ? "登录" : "注册账号"}</h1>
 
@@ -220,19 +220,24 @@ function TodoScreen({
   }, [rangeQuery.data]);
 
   const allTasks = useMemo(() => {
-    return (
-      rangeQuery.data?.days.flatMap((day) => [...day.pending, ...day.done]) ?? []
-    );
+    return rangeQuery.data?.days.flatMap((day) => [...day.pending, ...day.done]) ?? [];
   }, [rangeQuery.data]);
 
   const selectedTask = allTasks.find((item) => item.id === selectedTaskId) ?? null;
 
   const createMutation = useMutation({
-    mutationFn: (payload: { text: string; reminderTime: string | null; repeat: RepeatRule }) =>
+    mutationFn: (payload: {
+      date: string;
+      text: string;
+      note: string;
+      reminderTime: string | null;
+      repeat: RepeatRule;
+    }) =>
       createTask(
-        selectedDate,
+        payload.date,
         {
           text: payload.text,
+          note: payload.note,
           reminderTime: payload.reminderTime,
           repeat: payload.repeat.kind === "none" ? undefined : payload.repeat,
         },
@@ -249,6 +254,7 @@ function TodoScreen({
       id: string;
       done?: boolean;
       text?: string;
+      note?: string;
       reminderTime?: string | null;
       repeat?: RepeatRule;
     }) => {
@@ -272,6 +278,11 @@ function TodoScreen({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
+  function openMyDay() {
+    setSelectedDate(today);
+    setViewMode("day");
+  }
+
   function shiftDate(amount: number) {
     if (viewMode === "week") {
       setSelectedDate(addDays(selectedDate, amount * 7));
@@ -287,105 +298,151 @@ function TodoScreen({
   }
 
   function viewTitle() {
+    if (viewMode === "day" && selectedDate === today) {
+      return "我的一天";
+    }
     if (viewMode === "day") {
-      return selectedDate === today ? "今天" : selectedDate;
+      return "日视图";
     }
     if (viewMode === "week") {
-      return `${visibleRange.start} - ${visibleRange.end}`;
+      return "周视图";
     }
-    return selectedDate.slice(0, 7);
+    return "月视图";
   }
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Daily Todo Sync</p>
-          <h1>{viewTitle()}</h1>
-          <p className="muted">
-            {meQuery.data ? `${meQuery.data.username} 的 todolist` : "加载账户..."}
-          </p>
+    <main className="app-layout">
+      <aside className="sidebar surface-panel">
+        <div className="brand-block">
+          <span className="brand-mark">D</span>
+          <div>
+            <p className="eyebrow">Daily Todo Sync</p>
+            <strong>{meQuery.data?.username ?? "账户"}</strong>
+          </div>
         </div>
 
-        <nav className="date-controls">
-          <button type="button" onClick={() => shiftDate(-1)}>
-            &lt;
-          </button>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(event) => setSelectedDate(event.target.value)}
-          />
-          <button type="button" onClick={() => setSelectedDate(today)}>
-            今天
-          </button>
-          <button type="button" onClick={() => shiftDate(1)}>
-            &gt;
-          </button>
-          <button className="ghost-button" type="button" onClick={onLogout}>
-            退出
+        <button className="sidebar-back" type="button" onClick={openMyDay}>
+          <ArrowLeftIcon />
+          返回今天
+        </button>
+
+        <nav className="sidebar-nav" aria-label="任务视图">
+          <button
+            className={selectedDate === today && viewMode === "day" ? "active" : ""}
+            type="button"
+            onClick={openMyDay}
+          >
+            <span>我的一天</span>
+            <small>
+              {today} · {weekdayLabel(today)}
+            </small>
           </button>
         </nav>
-      </header>
 
-      <div className="toolbar-row">
-        <div className="view-toggle" role="group" aria-label="视图切换">
-          {(["day", "week", "month"] as ViewMode[]).map((mode) => (
-            <button
-              className={viewMode === mode ? "active" : ""}
-              key={mode}
-              type="button"
-              onClick={() => setViewMode(mode)}
-            >
-              {mode === "day" ? "日" : mode === "week" ? "周" : "月"}
-            </button>
-          ))}
+        <div className="sidebar-section">
+          <p>视图</p>
+          <div className="sidebar-switch">
+            {(["day", "week", "month"] as ViewMode[]).map((mode) => (
+              <button
+                className={viewMode === mode ? "active" : ""}
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+              >
+                {mode === "day" ? "日" : mode === "week" ? "周" : "月"}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <button
-          className="add-task-button"
-          type="button"
-          aria-label="新增任务"
-          onClick={() => setIsAddOpen(true)}
-        >
-          +
-        </button>
-      </div>
+        <div className="sidebar-date">
+          <span>当前日期</span>
+          <strong>{selectedDate}</strong>
+          <small>{weekdayLabel(selectedDate)}</small>
+        </div>
+      </aside>
 
-      {rangeQuery.isLoading ? <p className="empty-state is-visible">加载中...</p> : null}
-      {rangeQuery.isError ? (
-        <p className="empty-state is-visible">加载失败：{String(rangeQuery.error)}</p>
-      ) : null}
+      <section className="workspace">
+        <header className="workspace-header surface-panel">
+          <div>
+            <p className="eyebrow">
+              {visibleRange.start === visibleRange.end
+                ? selectedDate
+                : `${visibleRange.start} - ${visibleRange.end}`}
+            </p>
+            <h1>{viewTitle()}</h1>
+            <p className="muted">
+              {selectedDate} · {weekdayLabel(selectedDate)}
+            </p>
+          </div>
 
-      <section className={`calendar-grid view-${viewMode}`}>
-        {visibleDates.map((date) => (
-          <DayColumn
-            date={date}
-            day={daysByDate.get(date) ?? emptyDay(date)}
-            draggedCard={draggedCard}
-            isSelected={date === selectedDate}
-            isToday={date === today}
-            key={date}
-            onDelete={(id) => deleteMutation.mutate(id)}
-            onDone={(id, done) => updateMutation.mutate({ id, done })}
-            onDropCard={(targetDate, targetId) => {
-              if (!draggedCard || draggedCard.date !== targetDate) {
-                return;
-              }
-              const day = daysByDate.get(targetDate) ?? emptyDay(targetDate);
-              const orderedIds = reorderIds(
-                day.pending.map((item) => item.id),
-                draggedCard.id,
-                targetId,
-              );
-              reorderMutation.mutate({ date: targetDate, orderedIds });
-              setDraggedCard(null);
-            }}
-            onOpenTask={setSelectedTaskId}
-            onSelectDate={setSelectedDate}
-            onStartDrag={(date, id) => setDraggedCard({ date, id })}
-          />
-        ))}
+          <nav className="date-controls">
+            <button type="button" onClick={() => shiftDate(-1)}>
+              &lt;
+            </button>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(event) => setSelectedDate(event.target.value)}
+            />
+            <button type="button" onClick={openMyDay}>
+              今天
+            </button>
+            <button type="button" onClick={() => shiftDate(1)}>
+              &gt;
+            </button>
+            <button className="ghost-button" type="button" onClick={onLogout}>
+              退出
+            </button>
+          </nav>
+        </header>
+
+        <div className="workspace-actions">
+          <button
+            className="add-task-button"
+            type="button"
+            aria-label="新增任务"
+            onClick={() => setIsAddOpen(true)}
+          >
+            +
+          </button>
+        </div>
+
+        {rangeQuery.isLoading ? <p className="empty-state is-visible">加载中...</p> : null}
+        {rangeQuery.isError ? (
+          <p className="empty-state is-visible">加载失败：{String(rangeQuery.error)}</p>
+        ) : null}
+
+        <section className={`calendar-grid view-${viewMode}`}>
+          {visibleDates.map((date) => (
+            <DayColumn
+              date={date}
+              day={daysByDate.get(date) ?? emptyDay(date)}
+              draggedCard={draggedCard}
+              isSelected={date === selectedDate}
+              isToday={date === today}
+              key={date}
+              onDelete={(id) => deleteMutation.mutate(id)}
+              onDone={(id, done) => updateMutation.mutate({ id, done })}
+              onDropCard={(targetDate, targetId) => {
+                if (!draggedCard || draggedCard.date !== targetDate) {
+                  return;
+                }
+                const day = daysByDate.get(targetDate) ?? emptyDay(targetDate);
+                const orderedIds = reorderIds(
+                  day.pending.map((item) => item.id),
+                  draggedCard.id,
+                  targetId,
+                );
+                reorderMutation.mutate({ date: targetDate, orderedIds });
+                setDraggedCard(null);
+              }}
+              onOpenTask={setSelectedTaskId}
+              onSelectDate={setSelectedDate}
+              onStartDrag={(date, id) => setDraggedCard({ date, id })}
+            />
+          ))}
+        </section>
       </section>
 
       {isAddOpen ? (
@@ -437,7 +494,7 @@ function DayColumn({
   onStartDrag: (date: string, id: string) => void;
 }) {
   return (
-    <article className={`day-column ${isSelected ? "is-selected" : ""}`}>
+    <article className={`day-column surface-panel ${isSelected ? "is-selected" : ""}`}>
       <button className="day-heading" type="button" onClick={() => onSelectDate(date)}>
         <span>{weekdayLabel(date)}</span>
         <strong>{formatShortDate(date)}</strong>
@@ -531,6 +588,7 @@ function TodoCard({
         ::
       </span>
       <input
+        className="round-checkbox"
         type="checkbox"
         checked={done}
         onClick={(event) => event.stopPropagation()}
@@ -563,9 +621,17 @@ function AddTaskModal({
   date: string;
   isSaving: boolean;
   onClose: () => void;
-  onSubmit: (payload: { text: string; reminderTime: string | null; repeat: RepeatRule }) => void;
+  onSubmit: (payload: {
+    date: string;
+    text: string;
+    note: string;
+    reminderTime: string | null;
+    repeat: RepeatRule;
+  }) => void;
 }) {
+  const [taskDate, setTaskDate] = useState(date);
   const [text, setText] = useState("");
+  const [note, setNote] = useState("");
   const [reminderTime, setReminderTime] = useState("");
   const [repeatKind, setRepeatKind] = useState<RepeatKind>("none");
 
@@ -575,9 +641,11 @@ function AddTaskModal({
       return;
     }
     onSubmit({
+      date: taskDate,
       text,
+      note,
       reminderTime: reminderTime || null,
-      repeat: repeatRuleForDate(repeatKind, date),
+      repeat: repeatRuleForDate(repeatKind, taskDate),
     });
   }
 
@@ -594,10 +662,23 @@ function AddTaskModal({
             required
           />
         </label>
+        <label>
+          备注
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="补充细节、链接、上下文..."
+            rows={4}
+          />
+        </label>
         <div className="field-grid">
           <label>
             日期
-            <input type="date" value={date} disabled />
+            <input
+              type="date"
+              value={taskDate}
+              onChange={(event) => setTaskDate(event.target.value)}
+            />
           </label>
           <label>
             提醒
@@ -649,11 +730,13 @@ function TaskDetailsModal({
   onDelete: () => void;
   onSave: (changes: {
     text: string;
+    note: string;
     reminderTime: string | null;
     repeat: RepeatRule;
   }) => void;
 }) {
   const [text, setText] = useState(item.text);
+  const [note, setNote] = useState(item.note);
   const [reminderTime, setReminderTime] = useState(item.reminderTime ?? "");
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(item.repeat.kind);
 
@@ -664,6 +747,7 @@ function TaskDetailsModal({
     }
     onSave({
       text,
+      note,
       reminderTime: reminderTime || null,
       repeat: repeatRuleForDate(repeatKind, item.taskDate),
     });
@@ -680,6 +764,15 @@ function TaskDetailsModal({
             onChange={(event) => setText(event.target.value)}
             maxLength={280}
             required
+          />
+        </label>
+        <label>
+          备注
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="补充细节、链接、上下文..."
+            rows={5}
           />
         </label>
         <div className="field-grid">
@@ -787,6 +880,24 @@ function TrashIcon() {
       <path d="M19 6l-1 14H6L5 6" />
       <path d="M10 11v5" />
       <path d="M14 11v5" />
+    </svg>
+  );
+}
+
+function ArrowLeftIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M19 12H5" />
+      <path d="M12 19l-7-7 7-7" />
     </svg>
   );
 }
