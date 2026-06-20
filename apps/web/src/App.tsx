@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createTask,
@@ -11,6 +11,7 @@ import {
   updateOccurrence,
   type DayTodos,
   type RepeatKind,
+  type RepeatRule,
   type TodoOccurrence,
 } from "./api";
 import {
@@ -184,9 +185,8 @@ function TodoScreen({
   const today = useMemo(() => toDateKey(new Date()), []);
   const [selectedDate, setSelectedDate] = useState(today);
   const [viewMode, setViewMode] = useState<ViewMode>("day");
-  const [newText, setNewText] = useState("");
-  const [newReminderTime, setNewReminderTime] = useState("");
-  const [newRepeatKind, setNewRepeatKind] = useState<RepeatKind>("none");
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<{ date: string; id: string } | null>(null);
   const queryClient = useQueryClient();
 
@@ -219,31 +219,27 @@ function TodoScreen({
     return new Map(rangeQuery.data?.days.map((day) => [day.date, day]) ?? []);
   }, [rangeQuery.data]);
 
-  const createMutation = useMutation({
-    mutationFn: () => {
-      const selected = fromDateKey(selectedDate);
-      const repeat =
-        newRepeatKind === "none"
-          ? undefined
-          : {
-              kind: newRepeatKind,
-              interval: 1,
-              daysOfWeek: newRepeatKind === "weekly" ? [(selected.getDay() + 6) % 7] : [],
-              until: null,
-            };
+  const allTasks = useMemo(() => {
+    return (
+      rangeQuery.data?.days.flatMap((day) => [...day.pending, ...day.done]) ?? []
+    );
+  }, [rangeQuery.data]);
 
-      return createTask(
+  const selectedTask = allTasks.find((item) => item.id === selectedTaskId) ?? null;
+
+  const createMutation = useMutation({
+    mutationFn: (payload: { text: string; reminderTime: string | null; repeat: RepeatRule }) =>
+      createTask(
         selectedDate,
         {
-          text: newText,
-          reminderTime: newReminderTime || null,
-          repeat,
+          text: payload.text,
+          reminderTime: payload.reminderTime,
+          repeat: payload.repeat.kind === "none" ? undefined : payload.repeat,
         },
         accessToken,
-      );
-    },
+      ),
     onSuccess: () => {
-      setNewText("");
+      setIsAddOpen(false);
       queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
@@ -254,7 +250,7 @@ function TodoScreen({
       done?: boolean;
       text?: string;
       reminderTime?: string | null;
-      repeat?: TodoOccurrence["repeat"];
+      repeat?: RepeatRule;
     }) => {
       const { id, ...changes } = payload;
       return updateOccurrence(id, changes, accessToken);
@@ -264,7 +260,10 @@ function TodoScreen({
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteOccurrence(id, accessToken),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
+    onSuccess: () => {
+      setSelectedTaskId(null);
+      queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
   });
 
   const reorderMutation = useMutation({
@@ -272,14 +271,6 @@ function TodoScreen({
       reorderDay(payload.date, payload.orderedIds, accessToken),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
-
-  function addTask(event: FormEvent) {
-    event.preventDefault();
-
-    if (newText.trim()) {
-      createMutation.mutate();
-    }
-  }
 
   function shiftDate(amount: number) {
     if (viewMode === "week") {
@@ -337,56 +328,29 @@ function TodoScreen({
         </nav>
       </header>
 
-      <div className="view-toggle" role="group" aria-label="视图切换">
-        {(["day", "week", "month"] as ViewMode[]).map((mode) => (
-          <button
-            className={viewMode === mode ? "active" : ""}
-            key={mode}
-            type="button"
-            onClick={() => setViewMode(mode)}
-          >
-            {mode === "day" ? "日" : mode === "week" ? "周" : "月"}
-          </button>
-        ))}
-      </div>
-
-      <section className="list-section composer-section">
-        <div className="section-heading">
-          <div>
-            <h2>待处理</h2>
-            <p className="muted">新增到当前选中日期；未完成项会在当天结束后进入下一天。</p>
-          </div>
+      <div className="toolbar-row">
+        <div className="view-toggle" role="group" aria-label="视图切换">
+          {(["day", "week", "month"] as ViewMode[]).map((mode) => (
+            <button
+              className={viewMode === mode ? "active" : ""}
+              key={mode}
+              type="button"
+              onClick={() => setViewMode(mode)}
+            >
+              {mode === "day" ? "日" : mode === "week" ? "周" : "月"}
+            </button>
+          ))}
         </div>
 
-        <form className="add-row composer-row" onSubmit={addTask}>
-          <input
-            value={newText}
-            onChange={(event) => setNewText(event.target.value)}
-            placeholder="新增待处理..."
-            maxLength={280}
-          />
-          <input
-            aria-label="提醒时间"
-            type="time"
-            value={newReminderTime}
-            onChange={(event) => setNewReminderTime(event.target.value)}
-          />
-          <select
-            aria-label="重复规则"
-            value={newRepeatKind}
-            onChange={(event) => setNewRepeatKind(event.target.value as RepeatKind)}
-          >
-            {REPEAT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <button type="submit" aria-label="新增">
-            +
-          </button>
-        </form>
-      </section>
+        <button
+          className="add-task-button"
+          type="button"
+          aria-label="新增任务"
+          onClick={() => setIsAddOpen(true)}
+        >
+          +
+        </button>
+      </div>
 
       {rangeQuery.isLoading ? <p className="empty-state is-visible">加载中...</p> : null}
       {rangeQuery.isError ? (
@@ -404,7 +368,6 @@ function TodoScreen({
             key={date}
             onDelete={(id) => deleteMutation.mutate(id)}
             onDone={(id, done) => updateMutation.mutate({ id, done })}
-            onMetaChange={(id, changes) => updateMutation.mutate({ id, ...changes })}
             onDropCard={(targetDate, targetId) => {
               if (!draggedCard || draggedCard.date !== targetDate) {
                 return;
@@ -418,11 +381,32 @@ function TodoScreen({
               reorderMutation.mutate({ date: targetDate, orderedIds });
               setDraggedCard(null);
             }}
+            onOpenTask={setSelectedTaskId}
             onSelectDate={setSelectedDate}
             onStartDrag={(date, id) => setDraggedCard({ date, id })}
           />
         ))}
       </section>
+
+      {isAddOpen ? (
+        <AddTaskModal
+          date={selectedDate}
+          isSaving={createMutation.isPending}
+          onClose={() => setIsAddOpen(false)}
+          onSubmit={(payload) => createMutation.mutate(payload)}
+        />
+      ) : null}
+
+      {selectedTask ? (
+        <TaskDetailsModal
+          item={selectedTask}
+          isDeleting={deleteMutation.isPending}
+          isSaving={updateMutation.isPending}
+          onClose={() => setSelectedTaskId(null)}
+          onDelete={() => deleteMutation.mutate(selectedTask.id)}
+          onSave={(changes) => updateMutation.mutate({ id: selectedTask.id, ...changes })}
+        />
+      ) : null}
     </main>
   );
 }
@@ -435,8 +419,8 @@ function DayColumn({
   isToday,
   onDelete,
   onDone,
-  onMetaChange,
   onDropCard,
+  onOpenTask,
   onSelectDate,
   onStartDrag,
 }: {
@@ -447,11 +431,8 @@ function DayColumn({
   isToday: boolean;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
-  onMetaChange: (
-    id: string,
-    changes: { reminderTime?: string | null; repeat?: TodoOccurrence["repeat"] },
-  ) => void;
   onDropCard: (date: string, targetId: string | null) => void;
+  onOpenTask: (id: string) => void;
   onSelectDate: (date: string) => void;
   onStartDrag: (date: string, id: string) => void;
 }) {
@@ -478,8 +459,8 @@ function DayColumn({
             key={item.id}
             onDelete={onDelete}
             onDone={onDone}
-            onMetaChange={onMetaChange}
             onDrop={(targetId) => onDropCard(date, targetId)}
+            onOpen={() => onOpenTask(item.id)}
             onStartDrag={() => onStartDrag(date, item.id)}
           />
         ))}
@@ -497,7 +478,7 @@ function DayColumn({
                 key={item.id}
                 onDelete={onDelete}
                 onDone={onDone}
-                onMetaChange={onMetaChange}
+                onOpen={() => onOpenTask(item.id)}
               />
             ))}
           </ul>
@@ -513,8 +494,8 @@ function TodoCard({
   item,
   onDelete,
   onDone,
-  onMetaChange,
   onDrop,
+  onOpen,
   onStartDrag,
 }: {
   done?: boolean;
@@ -522,71 +503,291 @@ function TodoCard({
   item: TodoOccurrence;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
-  onMetaChange: (
-    id: string,
-    changes: { reminderTime?: string | null; repeat?: TodoOccurrence["repeat"] },
-  ) => void;
   onDrop?: (targetId: string) => void;
+  onOpen: () => void;
   onStartDrag?: () => void;
 }) {
   return (
     <li
       className={`todo-item task-card ${done ? "is-done" : ""} ${dragged ? "is-dragging" : ""}`}
-      draggable={!done}
+      onClick={onOpen}
       onDragOver={(event) => event.preventDefault()}
-      onDragStart={() => onStartDrag?.()}
       onDrop={(event) => {
         event.stopPropagation();
         onDrop?.(item.id);
       }}
     >
-      <span className="drag-handle" aria-hidden="true">
+      <span
+        className="drag-handle"
+        aria-hidden="true"
+        draggable={!done}
+        onClick={(event) => event.stopPropagation()}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", item.id);
+          onStartDrag?.();
+        }}
+      >
         ::
       </span>
       <input
         type="checkbox"
         checked={done}
+        onClick={(event) => event.stopPropagation()}
         onChange={(event) => onDone(item.id, event.target.checked)}
       />
       <div className="task-body">
         <p>{item.text}</p>
-        <div className="task-badges">
-          {item.isRecurring ? <span>重复：{repeatLabel(item.repeat.kind)}</span> : null}
-          {item.reminderTime ? <span>提醒：{item.reminderTime}</span> : null}
-          {item.source === "carryover" ? <span>结转</span> : null}
-          {item.source === "recurring" ? <span>重复生成</span> : null}
-        </div>
-        <p className="muted">首次创建：{new Date(item.firstCreatedAt).toLocaleString()}</p>
-        <div className="task-meta-controls">
-          <input
-            aria-label="修改提醒时间"
-            type="time"
-            value={item.reminderTime ?? ""}
-            onChange={(event) =>
-              onMetaChange(item.id, { reminderTime: event.target.value || null })
-            }
-          />
-          <select
-            aria-label="修改重复规则"
-            value={item.repeat.kind}
-            onChange={(event) =>
-              onMetaChange(item.id, {
-                repeat: repeatRuleForDate(event.target.value as RepeatKind, item.taskDate),
-              })
-            }
-          >
-            {REPEAT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
-      <button type="button" onClick={() => onDelete(item.id)}>
-        删除
+      <button
+        className="icon-button"
+        type="button"
+        aria-label="删除任务"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete(item.id);
+        }}
+      >
+        <TrashIcon />
       </button>
     </li>
+  );
+}
+
+function AddTaskModal({
+  date,
+  isSaving,
+  onClose,
+  onSubmit,
+}: {
+  date: string;
+  isSaving: boolean;
+  onClose: () => void;
+  onSubmit: (payload: { text: string; reminderTime: string | null; repeat: RepeatRule }) => void;
+}) {
+  const [text, setText] = useState("");
+  const [reminderTime, setReminderTime] = useState("");
+  const [repeatKind, setRepeatKind] = useState<RepeatKind>("none");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!text.trim()) {
+      return;
+    }
+    onSubmit({
+      text,
+      reminderTime: reminderTime || null,
+      repeat: repeatRuleForDate(repeatKind, date),
+    });
+  }
+
+  return (
+    <ModalShell title="新增任务" onClose={onClose}>
+      <form className="modal-form" onSubmit={submit}>
+        <label>
+          任务内容
+          <input
+            autoFocus
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            maxLength={280}
+            required
+          />
+        </label>
+        <div className="field-grid">
+          <label>
+            日期
+            <input type="date" value={date} disabled />
+          </label>
+          <label>
+            提醒
+            <input
+              type="time"
+              value={reminderTime}
+              onChange={(event) => setReminderTime(event.target.value)}
+            />
+          </label>
+          <label>
+            重复
+            <select
+              value={repeatKind}
+              onChange={(event) => setRepeatKind(event.target.value as RepeatKind)}
+            >
+              {REPEAT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary-button" disabled={isSaving} type="submit">
+            {isSaving ? "保存中..." : "保存"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function TaskDetailsModal({
+  item,
+  isDeleting,
+  isSaving,
+  onClose,
+  onDelete,
+  onSave,
+}: {
+  item: TodoOccurrence;
+  isDeleting: boolean;
+  isSaving: boolean;
+  onClose: () => void;
+  onDelete: () => void;
+  onSave: (changes: {
+    text: string;
+    reminderTime: string | null;
+    repeat: RepeatRule;
+  }) => void;
+}) {
+  const [text, setText] = useState(item.text);
+  const [reminderTime, setReminderTime] = useState(item.reminderTime ?? "");
+  const [repeatKind, setRepeatKind] = useState<RepeatKind>(item.repeat.kind);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!text.trim()) {
+      return;
+    }
+    onSave({
+      text,
+      reminderTime: reminderTime || null,
+      repeat: repeatRuleForDate(repeatKind, item.taskDate),
+    });
+  }
+
+  return (
+    <ModalShell title="任务详情" onClose={onClose}>
+      <form className="modal-form" onSubmit={submit}>
+        <label>
+          任务内容
+          <input
+            autoFocus
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            maxLength={280}
+            required
+          />
+        </label>
+        <div className="field-grid">
+          <label>
+            日期
+            <input type="date" value={item.taskDate} disabled />
+          </label>
+          <label>
+            创建时间
+            <input value={new Date(item.firstCreatedAt).toLocaleString()} disabled />
+          </label>
+          <label>
+            状态
+            <input value={item.status === "done" ? "已完成" : "待处理"} disabled />
+          </label>
+          <label>
+            提醒
+            <input
+              type="time"
+              value={reminderTime}
+              onChange={(event) => setReminderTime(event.target.value)}
+            />
+          </label>
+          <label>
+            重复
+            <select
+              value={repeatKind}
+              onChange={(event) => setRepeatKind(event.target.value as RepeatKind)}
+            >
+              {REPEAT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button
+            className="icon-button danger-button"
+            type="button"
+            aria-label="删除任务"
+            disabled={isDeleting}
+            onClick={onDelete}
+          >
+            <TrashIcon />
+          </button>
+          <span className="modal-spacer" />
+          <button className="ghost-button" type="button" onClick={onClose}>
+            关闭
+          </button>
+          <button className="primary-button" disabled={isSaving} type="submit">
+            {isSaving ? "保存中..." : "保存"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function ModalShell({
+  children,
+  onClose,
+  title,
+}: {
+  children: ReactNode;
+  onClose: () => void;
+  title: string;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="modal-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2>{title}</h2>
+          <button className="icon-button" type="button" aria-label="关闭" onClick={onClose}>
+            x
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      className="trash-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
   );
 }
 
@@ -610,11 +811,7 @@ function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
   ];
 }
 
-function repeatLabel(kind: RepeatKind) {
-  return REPEAT_OPTIONS.find((option) => option.value === kind)?.label ?? "重复";
-}
-
-function repeatRuleForDate(kind: RepeatKind, date: string): TodoOccurrence["repeat"] {
+function repeatRuleForDate(kind: RepeatKind, date: string): RepeatRule {
   const selected = fromDateKey(date);
   return {
     kind,

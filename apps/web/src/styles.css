@@ -179,11 +179,18 @@ h2 {
   gap: 8px;
 }
 
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
 .view-toggle {
   display: inline-grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
-  margin-bottom: 14px;
   padding: 4px;
   border-radius: 8px;
   background: #edf1ef;
@@ -202,6 +209,23 @@ h2 {
   background: #fff;
   color: var(--ink);
   box-shadow: 0 1px 4px rgba(31, 39, 35, 0.08);
+}
+
+.add-task-button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.add-task-button:hover {
+  background: var(--accent-dark);
 }
 
 .list-section {
@@ -321,7 +345,7 @@ h2 {
 .todo-item {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 12px;
   padding: 13px;
   border: 1px solid #edf1ef;
@@ -330,7 +354,16 @@ h2 {
 }
 
 .task-card {
-  cursor: grab;
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.task-card:hover {
+  border-color: #cfdad4;
+  box-shadow: 0 8px 18px rgba(31, 39, 35, 0.06);
 }
 
 .task-card.is-dragging {
@@ -342,6 +375,7 @@ h2 {
   font-weight: 800;
   letter-spacing: -0.12em;
   user-select: none;
+  cursor: grab;
 }
 
 .task-body {
@@ -354,41 +388,8 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.task-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.task-badges span {
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.task-meta-controls {
-  display: grid;
-  grid-template-columns: 110px 120px;
-  gap: 8px;
-}
-
-.task-meta-controls input,
-.task-meta-controls select {
-  min-height: 34px;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfb;
-  color: var(--ink);
-  padding: 0 8px;
-}
-
 .todo-item.is-done {
   background: #f8faf9;
-  cursor: default;
 }
 
 .todo-item.is-done p:first-child {
@@ -426,6 +427,118 @@ h2 {
   margin-bottom: 8px;
 }
 
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  padding: 0;
+}
+
+.icon-button:hover {
+  border-color: #cfdad4;
+  color: var(--ink);
+}
+
+.danger-button {
+  color: var(--danger);
+}
+
+.danger-button:hover {
+  border-color: rgba(180, 35, 24, 0.35);
+  color: var(--danger);
+}
+
+.trash-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(31, 39, 35, 0.36);
+}
+
+.modal-panel {
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(31, 39, 35, 0.18);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 0;
+}
+
+.modal-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.modal-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.modal-form input,
+.modal-form select {
+  min-height: 42px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  color: var(--ink);
+  outline: 0;
+  padding: 0 12px;
+}
+
+.modal-form input:focus,
+.modal-form select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(25, 115, 77, 0.12);
+}
+
+.modal-form input:disabled {
+  color: var(--muted);
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.modal-spacer {
+  flex: 1;
+}
+
 @media (max-width: 680px) {
   .topbar {
     align-items: stretch;
@@ -440,6 +553,10 @@ h2 {
     flex: 1 1 150px;
   }
 
+  .toolbar-row {
+    align-items: stretch;
+  }
+
   .composer-row {
     grid-template-columns: 1fr;
   }
@@ -450,15 +567,15 @@ h2 {
   }
 
   .todo-item {
-    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
   }
 
   .todo-item button {
-    grid-column: 3;
+    grid-column: auto;
     justify-self: start;
   }
 
-  .task-meta-controls {
+  .field-grid {
     grid-template-columns: 1fr;
   }
 }
