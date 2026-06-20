@@ -1,21 +1,24 @@
 :root {
   color-scheme: light;
-  --bg: #eef4f0;
-  --panel: rgba(255, 255, 255, 0.88);
+  --bg: #f2f4f0;
+  --panel: rgba(255, 255, 252, 0.9);
   --panel-strong: #ffffff;
-  --ink: #17231d;
-  --muted: #66756d;
-  --line: #dbe5df;
-  --line-strong: #c8d6ce;
-  --accent: #19734d;
-  --accent-dark: #0f5f3e;
-  --accent-soft: #e4f3ec;
+  --ink: #171b17;
+  --muted: #6d746d;
+  --line: #e0e4dc;
+  --line-strong: #cbd3c8;
+  --accent: #2e6049;
+  --accent-dark: #224d3a;
+  --accent-soft: #edf3ee;
   --danger: #b42318;
-  --shadow: 0 18px 48px rgba(23, 35, 29, 0.08);
-  --shadow-soft: 0 10px 28px rgba(23, 35, 29, 0.06);
+  --shadow: 0 18px 44px rgba(23, 27, 23, 0.08);
+  --shadow-soft: 0 8px 22px rgba(23, 27, 23, 0.055);
+  --shadow-float: 0 24px 70px rgba(23, 27, 23, 0.16);
   --radius: 8px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --sidebar-width: clamp(220px, 21vw, 278px);
+  --sidebar-collapsed-width: 76px;
 }
 
 * {
@@ -31,9 +34,7 @@ body {
   margin: 0;
   min-height: 100vh;
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at top left, rgba(228, 243, 236, 0.95), transparent 34rem),
-    linear-gradient(180deg, #f8fbf9 0%, var(--bg) 100%);
+  background: linear-gradient(180deg, #fbfbf8 0%, var(--bg) 100%);
   color: var(--ink);
   font-family:
     Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
@@ -201,12 +202,24 @@ h2 {
 
 .app-layout {
   display: grid;
-  grid-template-columns: clamp(210px, 21vw, 276px) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   gap: clamp(16px, 2vw, 28px);
   width: min(100%, 1480px);
   min-height: 100vh;
   margin: 0 auto;
   padding: clamp(14px, 2vw, 28px);
+  transition:
+    grid-template-columns 0.32s var(--ease-out),
+    padding 0.24s ease;
+}
+
+.app-layout.sidebar-collapsed {
+  grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
+}
+
+.sidebar-scrim,
+.mobile-appbar {
+  display: none;
 }
 
 .sidebar {
@@ -217,13 +230,21 @@ h2 {
   gap: 18px;
   max-height: calc(100vh - 56px);
   border-radius: var(--radius);
-  padding: 18px;
+  overflow: hidden;
+  padding: 16px;
+  transition:
+    transform 0.34s var(--ease-out),
+    opacity 0.2s ease,
+    padding 0.26s ease,
+    box-shadow 0.24s ease;
 }
 
 .brand-block {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -235,6 +256,48 @@ h2 {
   background: var(--accent);
   color: #fff;
   font-weight: 900;
+  transition: transform 0.24s var(--ease);
+}
+
+.sidebar-label,
+.nav-label,
+.nav-meta,
+.sidebar-back span,
+.sidebar-section p,
+.sidebar-date {
+  min-width: 0;
+  transition:
+    opacity 0.2s ease,
+    transform 0.24s var(--ease),
+    width 0.24s var(--ease);
+}
+
+.sidebar-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--muted);
+  padding: 0;
+  transition:
+    transform 0.22s var(--ease),
+    border-color 0.2s ease,
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.sidebar-icon-button:hover {
+  border-color: var(--line-strong);
+  background: #fff;
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.sidebar-close-button {
+  display: none;
 }
 
 .sidebar-back,
@@ -255,24 +318,38 @@ h2 {
 .sidebar-back {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   min-height: 40px;
+  padding: 0 10px;
   color: var(--muted);
 }
 
 .sidebar-nav button {
   display: grid;
-  gap: 4px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
   padding: 12px;
 }
 
-.sidebar-nav button span {
+.nav-label {
   font-weight: 800;
+}
+
+.nav-icon {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
 }
 
 .sidebar-nav button small,
 .sidebar-date small {
   color: var(--muted);
+}
+
+.nav-meta {
+  grid-column: 2;
 }
 
 .sidebar-nav button:hover,
@@ -320,11 +397,57 @@ h2 {
   border-top: 1px solid var(--line);
 }
 
+.sidebar-collapsed .sidebar {
+  gap: 14px;
+  padding: 14px;
+}
+
+.sidebar-collapsed .brand-block {
+  grid-template-columns: 1fr;
+  justify-items: center;
+}
+
+.sidebar-collapsed .brand-mark {
+  transform: scale(0.94);
+}
+
+.sidebar-collapsed .sidebar-label,
+.sidebar-collapsed .sidebar-back span,
+.sidebar-collapsed .sidebar-section p,
+.sidebar-collapsed .sidebar-date,
+.sidebar-collapsed .nav-label,
+.sidebar-collapsed .nav-meta {
+  position: absolute;
+  width: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-6px);
+}
+
+.sidebar-collapsed .sidebar-back,
+.sidebar-collapsed .sidebar-nav button,
+.sidebar-collapsed .sidebar-switch button {
+  justify-content: center;
+  min-height: 42px;
+  padding: 0;
+  text-align: center;
+}
+
+.sidebar-collapsed .sidebar-nav button {
+  grid-template-columns: 1fr;
+  place-items: center;
+}
+
+.sidebar-collapsed .sidebar-switch {
+  grid-template-columns: 1fr;
+}
+
 .workspace {
   display: grid;
   align-content: start;
   gap: 16px;
   min-width: 0;
+  transition: transform 0.28s var(--ease);
 }
 
 .workspace-header {
@@ -395,7 +518,7 @@ h2 {
 }
 
 .calendar-grid.view-day {
-  grid-template-columns: minmax(0, 760px);
+  grid-template-columns: minmax(0, min(760px, 100%));
   max-width: 100%;
 }
 
@@ -476,7 +599,7 @@ h2 {
   border: 1px solid rgba(219, 229, 223, 0.92);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.94);
-  cursor: pointer;
+  cursor: grab;
   transform-origin: center;
   transition:
     transform 0.24s var(--ease),
@@ -498,15 +621,31 @@ h2 {
 }
 
 .todo-item:active {
+  cursor: grabbing;
   transform: translateY(0) scale(0.995);
 }
 
 .drag-handle {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 34px;
   color: var(--muted);
   font-weight: 800;
   letter-spacing: 0;
   user-select: none;
   cursor: grab;
+  opacity: 0.72;
+  transition:
+    color 0.2s ease,
+    opacity 0.2s ease,
+    transform 0.2s var(--ease);
+}
+
+.todo-item:hover .drag-handle {
+  color: var(--accent);
+  opacity: 1;
+  transform: translateY(-1px);
 }
 
 .round-checkbox {
@@ -519,6 +658,7 @@ h2 {
   border: 2px solid var(--line-strong);
   border-radius: 999px;
   background: #fff;
+  cursor: pointer;
   transition:
     border-color 0.18s ease,
     background 0.18s ease,
@@ -547,6 +687,7 @@ h2 {
 
 .todo-item.is-done {
   background: rgba(248, 251, 249, 0.92);
+  cursor: pointer;
 }
 
 .todo-item.is-done p:first-child {
@@ -593,6 +734,7 @@ h2 {
   border-radius: var(--radius);
   background: #fff;
   color: var(--muted);
+  cursor: pointer;
   padding: 0;
   transition:
     transform 0.2s var(--ease),
@@ -617,7 +759,8 @@ h2 {
 }
 
 .trash-icon,
-.mini-icon {
+.mini-icon,
+.grip-icon {
   width: 18px;
   height: 18px;
 }
@@ -720,11 +863,118 @@ h2 {
 @media (max-width: 920px) {
   .app-layout {
     grid-template-columns: 1fr;
+    width: 100%;
+    padding: 12px;
   }
 
   .sidebar {
-    position: static;
+    position: fixed;
+    top: 12px;
+    bottom: 12px;
+    left: 12px;
+    z-index: 30;
+    width: min(312px, calc(100vw - 24px));
     max-height: none;
+    transform: translateX(calc(-100% - 24px));
+    box-shadow: var(--shadow-float);
+  }
+
+  .mobile-sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    display: block;
+    border: 0;
+    background: rgba(23, 27, 23, 0.28);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.24s ease;
+  }
+
+  .mobile-sidebar-open .sidebar-scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-collapse-button {
+    display: none;
+  }
+
+  .sidebar-close-button {
+    display: inline-grid;
+  }
+
+  .sidebar-collapsed .sidebar {
+    gap: 18px;
+    padding: 16px;
+  }
+
+  .sidebar-collapsed .brand-block {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    justify-items: stretch;
+  }
+
+  .sidebar-collapsed .sidebar-label,
+  .sidebar-collapsed .sidebar-back span,
+  .sidebar-collapsed .sidebar-section p,
+  .sidebar-collapsed .sidebar-date,
+  .sidebar-collapsed .nav-label,
+  .sidebar-collapsed .nav-meta {
+    position: static;
+    width: auto;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  .sidebar-collapsed .sidebar-back,
+  .sidebar-collapsed .sidebar-nav button,
+  .sidebar-collapsed .sidebar-switch button {
+    justify-content: flex-start;
+    min-height: 40px;
+    padding: 0 10px;
+    text-align: left;
+  }
+
+  .sidebar-collapsed .sidebar-nav button {
+    grid-template-columns: auto minmax(0, 1fr);
+    place-items: initial;
+    align-items: center;
+    padding: 12px;
+  }
+
+  .sidebar-collapsed .sidebar-switch {
+    grid-template-columns: repeat(3, minmax(80px, 1fr));
+  }
+
+  .mobile-appbar {
+    position: sticky;
+    top: 10px;
+    z-index: 18;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-radius: var(--radius);
+    padding: 10px;
+  }
+
+  .mobile-appbar div {
+    display: grid;
+    min-width: 0;
+  }
+
+  .mobile-appbar strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-appbar small {
+    color: var(--muted);
   }
 
   .sidebar-switch {
@@ -747,16 +997,42 @@ h2 {
 
 @media (max-width: 680px) {
   .app-layout {
-    padding: 12px;
+    padding: 10px;
+  }
+
+  .workspace {
+    gap: 12px;
+  }
+
+  .workspace-header {
+    padding: 16px;
+  }
+
+  .workspace-actions {
+    justify-content: stretch;
+  }
+
+  .add-task-button {
+    width: 100%;
+    height: 46px;
+    font-size: 1.55rem;
   }
 
   .calendar-grid.view-week,
   .calendar-grid.view-month {
-    grid-template-columns: repeat(7, minmax(220px, 1fr));
+    grid-template-columns: repeat(7, minmax(78vw, 1fr));
+    scroll-snap-type: x proximity;
+  }
+
+  .calendar-grid.view-week .day-column,
+  .calendar-grid.view-month .day-column {
+    scroll-snap-align: start;
   }
 
   .todo-item {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
+    min-height: 56px;
+    padding: 10px;
   }
 
   .field-grid {
@@ -784,5 +1060,4 @@ h2 {
   .date-controls button {
     width: 100%;
   }
-
 }

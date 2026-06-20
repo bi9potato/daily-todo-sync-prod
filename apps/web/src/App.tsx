@@ -1,4 +1,10 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useMemo,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createTask,
@@ -186,6 +192,8 @@ function TodoScreen({
   const [selectedDate, setSelectedDate] = useState(today);
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<{ date: string; id: string } | null>(null);
   const queryClient = useQueryClient();
@@ -281,6 +289,12 @@ function TodoScreen({
   function openMyDay() {
     setSelectedDate(today);
     setViewMode("day");
+    setIsMobileSidebarOpen(false);
+  }
+
+  function changeViewMode(mode: ViewMode) {
+    setViewMode(mode);
+    setIsMobileSidebarOpen(false);
   }
 
   function shiftDate(amount: number) {
@@ -311,19 +325,49 @@ function TodoScreen({
   }
 
   return (
-    <main className="app-layout">
+    <main
+      className={[
+        "app-layout",
+        isSidebarCollapsed ? "sidebar-collapsed" : "",
+        isMobileSidebarOpen ? "mobile-sidebar-open" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <button
+        className="sidebar-scrim"
+        type="button"
+        aria-label="关闭侧边栏"
+        onClick={() => setIsMobileSidebarOpen(false)}
+      />
       <aside className="sidebar surface-panel">
         <div className="brand-block">
           <span className="brand-mark">D</span>
-          <div>
+          <div className="sidebar-label">
             <p className="eyebrow">Daily Todo Sync</p>
             <strong>{meQuery.data?.username ?? "账户"}</strong>
           </div>
+          <button
+            className="sidebar-icon-button sidebar-collapse-button"
+            type="button"
+            aria-label={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+            onClick={() => setIsSidebarCollapsed((value) => !value)}
+          >
+            <PanelIcon />
+          </button>
+          <button
+            className="sidebar-icon-button sidebar-close-button"
+            type="button"
+            aria-label="关闭侧边栏"
+            onClick={() => setIsMobileSidebarOpen(false)}
+          >
+            <CloseIcon />
+          </button>
         </div>
 
         <button className="sidebar-back" type="button" onClick={openMyDay}>
           <ArrowLeftIcon />
-          返回今天
+          <span>返回今天</span>
         </button>
 
         <nav className="sidebar-nav" aria-label="任务视图">
@@ -332,8 +376,11 @@ function TodoScreen({
             type="button"
             onClick={openMyDay}
           >
-            <span>我的一天</span>
-            <small>
+            <span className="nav-icon">
+              <SunIcon />
+            </span>
+            <span className="nav-label">我的一天</span>
+            <small className="nav-meta">
               {today} · {weekdayLabel(today)}
             </small>
           </button>
@@ -347,7 +394,7 @@ function TodoScreen({
                 className={viewMode === mode ? "active" : ""}
                 key={mode}
                 type="button"
-                onClick={() => setViewMode(mode)}
+                onClick={() => changeViewMode(mode)}
               >
                 {mode === "day" ? "日" : mode === "week" ? "周" : "月"}
               </button>
@@ -363,6 +410,23 @@ function TodoScreen({
       </aside>
 
       <section className="workspace">
+        <div className="mobile-appbar surface-panel">
+          <button
+            className="sidebar-icon-button"
+            type="button"
+            aria-label="打开侧边栏"
+            onClick={() => setIsMobileSidebarOpen(true)}
+          >
+            <MenuIcon />
+          </button>
+          <div>
+            <strong>{viewTitle()}</strong>
+            <small>
+              {selectedDate} · {weekdayLabel(selectedDate)}
+            </small>
+          </div>
+        </div>
+
         <header className="workspace-header surface-panel">
           <div>
             <p className="eyebrow">
@@ -437,6 +501,7 @@ function TodoScreen({
                 reorderMutation.mutate({ date: targetDate, orderedIds });
                 setDraggedCard(null);
               }}
+              onEndDrag={() => setDraggedCard(null)}
               onOpenTask={setSelectedTaskId}
               onSelectDate={setSelectedDate}
               onStartDrag={(date, id) => setDraggedCard({ date, id })}
@@ -477,6 +542,7 @@ function DayColumn({
   onDelete,
   onDone,
   onDropCard,
+  onEndDrag,
   onOpenTask,
   onSelectDate,
   onStartDrag,
@@ -489,6 +555,7 @@ function DayColumn({
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
   onDropCard: (date: string, targetId: string | null) => void;
+  onEndDrag: () => void;
   onOpenTask: (id: string) => void;
   onSelectDate: (date: string) => void;
   onStartDrag: (date: string, id: string) => void;
@@ -517,6 +584,7 @@ function DayColumn({
             onDelete={onDelete}
             onDone={onDone}
             onDrop={(targetId) => onDropCard(date, targetId)}
+            onEndDrag={onEndDrag}
             onOpen={() => onOpenTask(item.id)}
             onStartDrag={() => onStartDrag(date, item.id)}
           />
@@ -535,6 +603,7 @@ function DayColumn({
                 key={item.id}
                 onDelete={onDelete}
                 onDone={onDone}
+                onEndDrag={onEndDrag}
                 onOpen={() => onOpenTask(item.id)}
               />
             ))}
@@ -552,6 +621,7 @@ function TodoCard({
   onDelete,
   onDone,
   onDrop,
+  onEndDrag,
   onOpen,
   onStartDrag,
 }: {
@@ -561,14 +631,28 @@ function TodoCard({
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
   onDrop?: (targetId: string) => void;
+  onEndDrag: () => void;
   onOpen: () => void;
   onStartDrag?: () => void;
 }) {
+  function startDrag(event: DragEvent<HTMLElement>) {
+    if (done) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", item.id);
+    onStartDrag?.();
+  }
+
   return (
     <li
       className={`todo-item task-card ${done ? "is-done" : ""} ${dragged ? "is-dragging" : ""}`}
+      draggable={!done}
       onClick={onOpen}
       onDragOver={(event) => event.preventDefault()}
+      onDragStart={startDrag}
+      onDragEnd={onEndDrag}
       onDrop={(event) => {
         event.stopPropagation();
         onDrop?.(item.id);
@@ -577,15 +661,9 @@ function TodoCard({
       <span
         className="drag-handle"
         aria-hidden="true"
-        draggable={!done}
         onClick={(event) => event.stopPropagation()}
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("text/plain", item.id);
-          onStartDrag?.();
-        }}
       >
-        ::
+        <GripIcon />
       </span>
       <input
         className="round-checkbox"
@@ -898,6 +976,104 @@ function ArrowLeftIcon() {
     >
       <path d="M19 12H5" />
       <path d="M12 19l-7-7 7-7" />
+    </svg>
+  );
+}
+
+function PanelIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M9 5v14" />
+    </svg>
+  );
+}
+
+function MenuIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 7h16" />
+      <path d="M4 12h16" />
+      <path d="M4 17h16" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </svg>
+  );
+}
+
+function GripIcon() {
+  return (
+    <svg
+      className="grip-icon"
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill="currentColor"
+    >
+      <circle cx="7" cy="5" r="1.2" />
+      <circle cx="13" cy="5" r="1.2" />
+      <circle cx="7" cy="10" r="1.2" />
+      <circle cx="13" cy="10" r="1.2" />
+      <circle cx="7" cy="15" r="1.2" />
+      <circle cx="13" cy="15" r="1.2" />
     </svg>
   );
 }
