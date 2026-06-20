@@ -1,10 +1,12 @@
 import {
   useMemo,
+  useRef,
   useState,
-  type DragEvent,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createTask,
@@ -35,6 +37,22 @@ import {
 
 type AuthMode = "login" | "register";
 type ViewMode = "day" | "week" | "month";
+
+type DragState = {
+  active: boolean;
+  date: string;
+  height: number;
+  id: string;
+  offsetX: number;
+  offsetY: number;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  targetId: string | null;
+  width: number;
+  x: number;
+  y: number;
+};
 
 const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
 const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
@@ -195,7 +213,9 @@ function TodoScreen({
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [draggedCard, setDraggedCard] = useState<{ date: string; id: string } | null>(null);
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const suppressOpenTaskIdRef = useRef<string | null>(null);
+  const reorderAnimationFrameRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
 
   const visibleRange = useMemo(() => {
@@ -232,6 +252,8 @@ function TodoScreen({
   }, [rangeQuery.data]);
 
   const selectedTask = allTasks.find((item) => item.id === selectedTaskId) ?? null;
+  const draggedTask =
+    dragState?.active ? allTasks.find((item) => item.id === dragState.id) ?? null : null;
 
   const createMutation = useMutation({
     mutationFn: (payload: {
@@ -295,6 +317,182 @@ function TodoScreen({
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode);
     setIsMobileSidebarOpen(false);
+  }
+
+  function openTaskDetails(id: string) {
+    if (suppressOpenTaskIdRef.current === id) {
+      suppressOpenTaskIdRef.current = null;
+      return;
+    }
+    setSelectedTaskId(id);
+  }
+
+  function measureTaskRects(date: string) {
+    const rects = new Map<string, DOMRect>();
+    document
+      .querySelectorAll<HTMLElement>(`[data-day-date="${date}"] [data-task-id]`)
+      .forEach((element) => {
+        const taskId = element.dataset.taskId;
+        if (taskId) {
+          rects.set(taskId, element.getBoundingClientRect());
+        }
+      });
+    return rects;
+  }
+
+  function animateReorderFrom(
+    date: string,
+    draggedId: string,
+    before: Map<string, DOMRect>,
+  ) {
+    if (reorderAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(reorderAnimationFrameRef.current);
+    }
+    reorderAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      document
+        .querySelectorAll<HTMLElement>(`[data-day-date="${date}"] [data-task-id]`)
+        .forEach((element) => {
+          const taskId = element.dataset.taskId;
+          const previous = taskId ? before.get(taskId) : null;
+          if (!previous || taskId === draggedId) {
+            return;
+          }
+          const next = element.getBoundingClientRect();
+          const deltaX = previous.left - next.left;
+          const deltaY = previous.top - next.top;
+          if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
+            return;
+          }
+          element.animate(
+            [
+              { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
+              { transform: "translate3d(0, 0, 0)" },
+            ],
+            {
+              duration: 210,
+              easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+            },
+          );
+        });
+    });
+  }
+
+  function setDragStateWithReorderAnimation(nextState: DragState) {
+    const before = measureTaskRects(nextState.date);
+    flushSync(() => setDragState(nextState));
+    animateReorderFrom(nextState.date, nextState.id, before);
+  }
+
+  function nextTargetIdAfter(date: string, hoveredId: string, draggedId: string) {
+    const ids =
+      daysByDate
+        .get(date)
+        ?.pending.map((item) => item.id)
+        .filter((id) => id !== draggedId) ?? [];
+    const index = ids.indexOf(hoveredId);
+    if (index === -1) {
+      return null;
+    }
+    return ids[index + 1] ?? null;
+  }
+
+  function targetIdFromPointer(current: DragState, clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY);
+    const hoveredCard = element?.closest<HTMLElement>('[data-task-sortable="true"]');
+    if (hoveredCard?.dataset.taskDate === current.date) {
+      const hoveredId = hoveredCard.dataset.taskId;
+      if (!hoveredId || hoveredId === current.id) {
+        return current.targetId;
+      }
+      const rect = hoveredCard.getBoundingClientRect();
+      const shouldInsertAfter = clientY > rect.top + rect.height / 2;
+      return shouldInsertAfter
+        ? nextTargetIdAfter(current.date, hoveredId, current.id)
+        : hoveredId;
+    }
+
+    const hoveredList = element?.closest<HTMLElement>("[data-day-date]");
+    if (hoveredList?.dataset.dayDate === current.date) {
+      return null;
+    }
+
+    return current.targetId;
+  }
+
+  function startTaskDrag(
+    date: string,
+    id: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setDragState({
+      active: false,
+      date,
+      height: rect.height,
+      id,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      targetId: id,
+      width: rect.width,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  function moveTaskDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (!dragState || event.pointerId !== dragState.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragState.startX;
+    const deltaY = event.clientY - dragState.startY;
+    const active = dragState.active || Math.hypot(deltaX, deltaY) > 6;
+    const targetId = active
+      ? targetIdFromPointer(dragState, event.clientX, event.clientY)
+      : dragState.targetId;
+    const nextState = {
+      ...dragState,
+      active,
+      targetId,
+      x: event.clientX,
+      y: event.clientY,
+    };
+
+    if (active) {
+      event.preventDefault();
+    }
+
+    if (active && (targetId !== dragState.targetId || active !== dragState.active)) {
+      setDragStateWithReorderAnimation(nextState);
+      return;
+    }
+
+    setDragState(nextState);
+  }
+
+  function finishTaskDrag() {
+    if (!dragState) {
+      return;
+    }
+
+    if (dragState.active) {
+      suppressOpenTaskIdRef.current = dragState.id;
+      const day = daysByDate.get(dragState.date) ?? emptyDay(dragState.date);
+      const currentIds = day.pending.map((item) => item.id);
+      const orderedIds = reorderIds(currentIds, dragState.id, dragState.targetId);
+      if (orderedIds.join("|") !== currentIds.join("|")) {
+        reorderMutation.mutate({ date: dragState.date, orderedIds });
+      }
+    }
+
+    setDragState(null);
+  }
+
+  function cancelTaskDrag() {
+    setDragState(null);
   }
 
   function shiftDate(amount: number) {
@@ -482,33 +680,37 @@ function TodoScreen({
             <DayColumn
               date={date}
               day={daysByDate.get(date) ?? emptyDay(date)}
-              draggedCard={draggedCard}
+              dragState={dragState}
               isSelected={date === selectedDate}
               isToday={date === today}
               key={date}
               onDelete={(id) => deleteMutation.mutate(id)}
               onDone={(id, done) => updateMutation.mutate({ id, done })}
-              onDropCard={(targetDate, targetId) => {
-                if (!draggedCard || draggedCard.date !== targetDate) {
-                  return;
-                }
-                const day = daysByDate.get(targetDate) ?? emptyDay(targetDate);
-                const orderedIds = reorderIds(
-                  day.pending.map((item) => item.id),
-                  draggedCard.id,
-                  targetId,
-                );
-                reorderMutation.mutate({ date: targetDate, orderedIds });
-                setDraggedCard(null);
-              }}
-              onEndDrag={() => setDraggedCard(null)}
-              onOpenTask={setSelectedTaskId}
+              onCancelDrag={cancelTaskDrag}
+              onEndDrag={finishTaskDrag}
+              onMoveDrag={moveTaskDrag}
+              onOpenTask={openTaskDetails}
               onSelectDate={setSelectedDate}
-              onStartDrag={(date, id) => setDraggedCard({ date, id })}
+              onStartDrag={startTaskDrag}
             />
           ))}
         </section>
       </section>
+
+      {dragState?.active && draggedTask ? (
+        <div
+          className="drag-floating-card"
+          style={{
+            height: dragState.height,
+            left: dragState.x - dragState.offsetX,
+            top: dragState.y - dragState.offsetY,
+            width: dragState.width,
+          }}
+        >
+          <GripIcon />
+          <span>{draggedTask.text}</span>
+        </div>
+      ) : null}
 
       {isAddOpen ? (
         <AddTaskModal
@@ -536,30 +738,39 @@ function TodoScreen({
 function DayColumn({
   date,
   day,
-  draggedCard,
+  dragState,
   isSelected,
   isToday,
+  onCancelDrag,
   onDelete,
   onDone,
-  onDropCard,
   onEndDrag,
+  onMoveDrag,
   onOpenTask,
   onSelectDate,
   onStartDrag,
 }: {
   date: string;
   day: DayTodos;
-  draggedCard: { date: string; id: string } | null;
+  dragState: DragState | null;
   isSelected: boolean;
   isToday: boolean;
+  onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
-  onDropCard: (date: string, targetId: string | null) => void;
   onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpenTask: (id: string) => void;
   onSelectDate: (date: string) => void;
-  onStartDrag: (date: string, id: string) => void;
+  onStartDrag: (
+    date: string,
+    id: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) => void;
 }) {
+  const pendingItems = previewPendingItems(day.pending, dragState, date);
+  const isReordering = dragState?.active && dragState.date === date;
+
   return (
     <article className={`day-column surface-panel ${isSelected ? "is-selected" : ""}`}>
       <button className="day-heading" type="button" onClick={() => onSelectDate(date)}>
@@ -569,24 +780,25 @@ function DayColumn({
       </button>
 
       <ul
-        className="todo-list card-list"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={() => onDropCard(date, null)}
+        className={`todo-list card-list ${isReordering ? "is-reordering" : ""}`}
+        data-day-date={date}
       >
         {day.pending.length === 0 ? (
           <li className="empty-state is-visible">无待处理</li>
         ) : null}
-        {day.pending.map((item) => (
+        {pendingItems.map((item) => (
           <TodoCard
-            dragged={draggedCard?.id === item.id}
+            date={date}
+            dragged={Boolean(dragState?.active && dragState.id === item.id)}
             item={item}
             key={item.id}
+            onCancelDrag={onCancelDrag}
             onDelete={onDelete}
             onDone={onDone}
-            onDrop={(targetId) => onDropCard(date, targetId)}
             onEndDrag={onEndDrag}
+            onMoveDrag={onMoveDrag}
             onOpen={() => onOpenTask(item.id)}
-            onStartDrag={() => onStartDrag(date, item.id)}
+            onStartDrag={(event) => onStartDrag(date, item.id, event)}
           />
         ))}
       </ul>
@@ -598,13 +810,17 @@ function DayColumn({
             {day.done.map((item) => (
               <TodoCard
                 done
+                date={date}
                 dragged={false}
                 item={item}
                 key={item.id}
+                onCancelDrag={onCancelDrag}
                 onDelete={onDelete}
                 onDone={onDone}
                 onEndDrag={onEndDrag}
+                onMoveDrag={onMoveDrag}
                 onOpen={() => onOpenTask(item.id)}
+                onStartDrag={(event) => onStartDrag(date, item.id, event)}
               />
             ))}
           </ul>
@@ -615,48 +831,66 @@ function DayColumn({
 }
 
 function TodoCard({
+  date,
   done = false,
   dragged,
   item,
+  onCancelDrag,
   onDelete,
   onDone,
-  onDrop,
   onEndDrag,
+  onMoveDrag,
   onOpen,
   onStartDrag,
 }: {
+  date: string;
   done?: boolean;
   dragged: boolean;
   item: TodoOccurrence;
+  onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
-  onDrop?: (targetId: string) => void;
   onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpen: () => void;
-  onStartDrag?: () => void;
+  onStartDrag: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
-  function startDrag(event: DragEvent<HTMLElement>) {
+  function isInteractiveTarget(target: EventTarget) {
+    return Boolean(
+      target instanceof Element &&
+        target.closest("button, input, textarea, select, a"),
+    );
+  }
+
+  function startDrag(event: ReactPointerEvent<HTMLElement>) {
     if (done) {
-      event.preventDefault();
       return;
     }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", item.id);
-    onStartDrag?.();
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onStartDrag(event);
+  }
+
+  function endDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    onEndDrag();
   }
 
   return (
     <li
       className={`todo-item task-card ${done ? "is-done" : ""} ${dragged ? "is-dragging" : ""}`}
-      draggable={!done}
+      data-task-date={date}
+      data-task-id={item.id}
+      data-task-sortable={done ? undefined : "true"}
       onClick={onOpen}
-      onDragOver={(event) => event.preventDefault()}
-      onDragStart={startDrag}
-      onDragEnd={onEndDrag}
-      onDrop={(event) => {
-        event.stopPropagation();
-        onDrop?.(item.id);
-      }}
+      onPointerCancel={onCancelDrag}
+      onPointerDown={startDrag}
+      onPointerMove={onMoveDrag}
+      onPointerUp={endDrag}
     >
       <span
         className="drag-handle"
@@ -1080,6 +1314,29 @@ function GripIcon() {
 
 function emptyDay(date: string): DayTodos {
   return { date, pending: [], done: [] };
+}
+
+function previewPendingItems(
+  items: TodoOccurrence[],
+  dragState: DragState | null,
+  date: string,
+) {
+  if (!dragState?.active || dragState.date !== date) {
+    return items;
+  }
+
+  const byId = new Map(items.map((item) => [item.id, item]));
+  if (!byId.has(dragState.id)) {
+    return items;
+  }
+
+  return reorderIds(
+    items.map((item) => item.id),
+    dragState.id,
+    dragState.targetId,
+  )
+    .map((id) => byId.get(id))
+    .filter((item): item is TodoOccurrence => Boolean(item));
 }
 
 function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
