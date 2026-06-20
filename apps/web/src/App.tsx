@@ -7,7 +7,12 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import {
   createTask,
   deleteOccurrence,
@@ -18,6 +23,7 @@ import {
   reorderDay,
   updateOccurrence,
   type DayTodos,
+  type RangeTodos,
   type RepeatKind,
   type RepeatRule,
   type TodoOccurrence,
@@ -57,6 +63,15 @@ type DragState = {
 type PendingDrag = {
   state: DragState;
   timeoutId: number;
+};
+
+type ReorderPayload = {
+  date: string;
+  orderedIds: string[];
+};
+
+type ReorderContext = {
+  previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
 };
 
 const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
@@ -312,10 +327,27 @@ function TodoScreen({
     },
   });
 
-  const reorderMutation = useMutation({
-    mutationFn: (payload: { date: string; orderedIds: string[] }) =>
+  const reorderMutation = useMutation<void, Error, ReorderPayload, ReorderContext>({
+    mutationFn: (payload) =>
       reorderDay(payload.date, payload.orderedIds, accessToken),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
+      const previousRanges = queryClient.getQueriesData<RangeTodos>({
+        queryKey: ["range"],
+      });
+
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOptimisticDayOrder(data, payload),
+      );
+
+      return { previousRanges };
+    },
+    onError: (_error, _payload, context) => {
+      context?.previousRanges.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
   function openMyDay() {
@@ -1382,6 +1414,39 @@ function emptyDay(date: string): DayTodos {
 
 function orderedDayItems(day: DayTodos) {
   return [...day.pending, ...day.done].sort(compareOccurrences);
+}
+
+function applyOptimisticDayOrder(
+  data: RangeTodos | undefined,
+  payload: ReorderPayload,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const orderById = new Map(
+    payload.orderedIds.map((id, index) => [id, (index + 1) * 1000]),
+  );
+
+  const updateSortOrder = (item: TodoOccurrence) => {
+    const sortOrder = orderById.get(item.id);
+    return sortOrder === undefined ? item : { ...item, sortOrder };
+  };
+
+  const days = data.days.map((day) => {
+    if (day.date !== payload.date) {
+      return day;
+    }
+    changed = true;
+    return {
+      ...day,
+      pending: day.pending.map(updateSortOrder).sort(compareOccurrences),
+      done: day.done.map(updateSortOrder).sort(compareOccurrences),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
 }
 
 function compareOccurrences(left: TodoOccurrence, right: TodoOccurrence) {
