@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Daily Todo</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Daily Todo</p>
+          <h1 id="dayTitle">今天</h1>
+          <p id="daySubtitle" class="muted">准备你的清单</p>
+          <p id="testMode" class="test-mode" hidden></p>
+        </div>
+
+        <nav class="date-controls" aria-label="日期切换">
+          <button id="prevDay" class="icon-button" type="button" aria-label="前一天">‹</button>
+          <input id="datePicker" type="date" aria-label="选择日期">
+          <button id="todayButton" class="ghost-button" type="button">今天</button>
+          <button id="nextDay" class="icon-button" type="button" aria-label="后一天">›</button>
+        </nav>
+      </header>
+
+      <section class="list-section pending-section" aria-labelledby="pendingTitle">
+        <div class="section-heading">
+          <div>
+            <h2 id="pendingTitle">待处理</h2>
+            <p id="carryHint" class="muted"></p>
+          </div>
+          <span id="pendingCount" class="count-pill">0</span>
+        </div>
+
+        <form id="todoForm" class="add-row" aria-label="新增待处理">
+          <label for="todoInput" class="sr-only">新增待处理</label>
+          <input
+            id="todoInput"
+            type="text"
+            maxlength="280"
+            placeholder="新增待处理..."
+            autocomplete="off"
+            required
+          >
+          <button class="add-button" type="submit" aria-label="新增">+</button>
+        </form>
+
+        <ul id="pendingList" class="todo-list"></ul>
+        <p id="pendingEmpty" class="empty-state">这里还没有待处理事项。</p>
+      </section>
+
+      <section class="list-section" aria-labelledby="doneTitle">
+        <div class="section-heading">
+          <div>
+            <h2 id="doneTitle">已完成</h2>
+            <p class="muted"><span id="doneCount">0</span> 条已完成</p>
+          </div>
+          <button id="clearDone" class="text-button" type="button">清空</button>
+        </div>
+        <ul id="doneList" class="todo-list done-list"></ul>
+        <p id="doneEmpty" class="empty-state">勾选完成后会出现在这里。</p>
+      </section>
+    </main>
+
+    <template id="todoTemplate">
+      <li class="todo-item">
+        <label class="check-wrap">
+          <input class="todo-check" type="checkbox">
+          <span class="fake-check" aria-hidden="true"></span>
+        </label>
+        <div class="todo-content">
+          <div class="todo-line">
+            <p class="todo-text"></p>
+            <span class="carry-badge"></span>
+          </div>
+          <p class="todo-meta"></p>
+        </div>
+        <button class="delete-button" type="button" aria-label="删除待办">删除</button>
+      </li>
+    </template>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>

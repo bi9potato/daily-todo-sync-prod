@@ -1,0 +1,29 @@
+# 本地环境变量和密钥
+.env
+.env.*
+!.env.example
+secrets.*
+credentials.*
+*.pem
+*.key
+
+# 系统和编辑器文件
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 前端构建产物
+node_modules/
+dist/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 日志
+*.log
