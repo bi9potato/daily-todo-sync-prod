@@ -866,6 +866,10 @@ h2 {
 
 .task-body p:first-child {
   overflow-wrap: anywhere;
+  text-decoration-color: transparent;
+  transition:
+    color 0.22s ease,
+    text-decoration-color 0.22s ease;
 }
 
 .todo-item.is-done {
@@ -876,6 +880,7 @@ h2 {
 .todo-item.is-done p:first-child {
   color: var(--muted);
   text-decoration: line-through;
+  text-decoration-color: rgba(104, 113, 104, 0.7);
 }
 
 .empty-state {

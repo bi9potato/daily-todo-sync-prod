@@ -263,6 +263,7 @@ function TodoScreen({
   const selectedTask = allTasks.find((item) => item.id === selectedTaskId) ?? null;
   const draggedTask =
     dragState?.active ? allTasks.find((item) => item.id === dragState.id) ?? null : null;
+  const isMyDay = viewMode === "day" && selectedDate === today;
 
   const createMutation = useMutation({
     mutationFn: (payload: {
@@ -403,10 +404,9 @@ function TodoScreen({
 
   function nextTargetIdAfter(date: string, hoveredId: string, draggedId: string) {
     const ids =
-      daysByDate
-        .get(date)
-        ?.pending.map((item) => item.id)
-        .filter((id) => id !== draggedId) ?? [];
+      orderedDayItems(daysByDate.get(date) ?? emptyDay(date))
+        .map((item) => item.id)
+        .filter((id) => id !== draggedId);
     const index = ids.indexOf(hoveredId);
     if (index === -1) {
       return null;
@@ -526,7 +526,7 @@ function TodoScreen({
     if (dragState.active) {
       suppressOpenTaskIdRef.current = dragState.id;
       const day = daysByDate.get(dragState.date) ?? emptyDay(dragState.date);
-      const currentIds = day.pending.map((item) => item.id);
+      const currentIds = orderedDayItems(day).map((item) => item.id);
       const orderedIds = reorderIds(currentIds, dragState.id, dragState.targetId);
       if (orderedIds.join("|") !== currentIds.join("|")) {
         reorderMutation.mutate({ date: dragState.date, orderedIds });
@@ -574,6 +574,7 @@ function TodoScreen({
         "app-layout",
         isSidebarCollapsed ? "sidebar-collapsed" : "",
         isMobileSidebarOpen ? "mobile-sidebar-open" : "",
+        isMyDay ? "is-my-day" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -686,42 +687,44 @@ function TodoScreen({
             <MenuIcon />
           </button>
           <div>
-            <strong>{viewTitle()}</strong>
-            <small>
-              {selectedDate} · {weekdayLabel(selectedDate)}
-            </small>
+            <strong>Daily Todo Sync</strong>
+            <small>{meQuery.data?.username ?? "账户"}</small>
           </div>
         </div>
 
         <header className="workspace-header surface-panel">
           <div>
-            <p className="eyebrow">
-              {visibleRange.start === visibleRange.end
-                ? selectedDate
-                : `${visibleRange.start} - ${visibleRange.end}`}
-            </p>
+            {!isMyDay ? (
+              <p className="eyebrow">
+                {visibleRange.start === visibleRange.end
+                  ? selectedDate
+                  : `${visibleRange.start} - ${visibleRange.end}`}
+              </p>
+            ) : null}
             <h1>{viewTitle()}</h1>
             <p className="muted">
               {selectedDate} · {weekdayLabel(selectedDate)}
             </p>
           </div>
 
-          <nav className="date-controls">
-            <button type="button" onClick={() => shiftDate(-1)}>
-              &lt;
-            </button>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-            />
-            <button type="button" onClick={openMyDay}>
-              今天
-            </button>
-            <button type="button" onClick={() => shiftDate(1)}>
-              &gt;
-            </button>
-          </nav>
+          {!isMyDay ? (
+            <nav className="date-controls">
+              <button type="button" onClick={() => shiftDate(-1)}>
+                &lt;
+              </button>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(event) => setSelectedDate(event.target.value)}
+              />
+              <button type="button" onClick={openMyDay}>
+                今天
+              </button>
+              <button type="button" onClick={() => shiftDate(1)}>
+                &gt;
+              </button>
+            </nav>
+          ) : null}
         </header>
 
         <div className="workspace-actions">
@@ -748,6 +751,7 @@ function TodoScreen({
               dragState={dragState}
               isSelected={date === selectedDate}
               isToday={date === today}
+              hideHeading={isMyDay}
               key={date}
               onDelete={(id) => deleteMutation.mutate(id)}
               onDone={(id, done) => updateMutation.mutate({ id, done })}
@@ -804,6 +808,7 @@ function DayColumn({
   date,
   day,
   dragState,
+  hideHeading,
   isSelected,
   isToday,
   onCancelDrag,
@@ -818,6 +823,7 @@ function DayColumn({
   date: string;
   day: DayTodos;
   dragState: DragState | null;
+  hideHeading: boolean;
   isSelected: boolean;
   isToday: boolean;
   onCancelDrag: () => void;
@@ -833,27 +839,30 @@ function DayColumn({
     event: ReactPointerEvent<HTMLElement>,
   ) => void;
 }) {
-  const pendingItems = previewPendingItems(day.pending, dragState, date);
+  const items = previewDayItems(orderedDayItems(day), dragState, date);
   const isReordering = dragState?.active && dragState.date === date;
 
   return (
     <article className={`day-column surface-panel ${isSelected ? "is-selected" : ""}`}>
-      <button className="day-heading" type="button" onClick={() => onSelectDate(date)}>
-        <span>{weekdayLabel(date)}</span>
-        <strong>{formatShortDate(date)}</strong>
-        {isToday ? <span className="today-pill">今天</span> : null}
-      </button>
+      {!hideHeading ? (
+        <button className="day-heading" type="button" onClick={() => onSelectDate(date)}>
+          <span>{weekdayLabel(date)}</span>
+          <strong>{formatShortDate(date)}</strong>
+          {isToday ? <span className="today-pill">今天</span> : null}
+        </button>
+      ) : null}
 
       <ul
         className={`todo-list card-list ${isReordering ? "is-reordering" : ""}`}
         data-day-date={date}
       >
-        {day.pending.length === 0 ? (
-          <li className="empty-state is-visible">无待处理</li>
+        {items.length === 0 ? (
+          <li className="empty-state is-visible">暂无任务</li>
         ) : null}
-        {pendingItems.map((item) => (
+        {items.map((item) => (
           <TodoCard
             date={date}
+            done={item.status === "done"}
             dragged={Boolean(dragState?.active && dragState.id === item.id)}
             item={item}
             key={item.id}
@@ -867,30 +876,6 @@ function DayColumn({
           />
         ))}
       </ul>
-
-      {day.done.length > 0 ? (
-        <details className="done-list">
-          <summary>已完成 {day.done.length}</summary>
-          <ul className="todo-list">
-            {day.done.map((item) => (
-              <TodoCard
-                done
-                date={date}
-                dragged={false}
-                item={item}
-                key={item.id}
-                onCancelDrag={onCancelDrag}
-                onDelete={onDelete}
-                onDone={onDone}
-                onEndDrag={onEndDrag}
-                onMoveDrag={onMoveDrag}
-                onOpen={() => onOpenTask(item.id)}
-                onStartDrag={(event) => onStartDrag(date, item.id, event)}
-              />
-            ))}
-          </ul>
-        </details>
-      ) : null}
     </article>
   );
 }
@@ -928,9 +913,6 @@ function TodoCard({
   }
 
   function startDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (done) {
-      return;
-    }
     if (isInteractiveTarget(event.target)) {
       return;
     }
@@ -950,7 +932,7 @@ function TodoCard({
       className={`todo-item task-card ${done ? "is-done" : ""} ${dragged ? "is-dragging" : ""}`}
       data-task-date={date}
       data-task-id={item.id}
-      data-task-sortable={done ? undefined : "true"}
+      data-task-sortable="true"
       onClick={onOpen}
       onPointerCancel={onCancelDrag}
       onPointerDown={startDrag}
@@ -1398,7 +1380,18 @@ function emptyDay(date: string): DayTodos {
   return { date, pending: [], done: [] };
 }
 
-function previewPendingItems(
+function orderedDayItems(day: DayTodos) {
+  return [...day.pending, ...day.done].sort(compareOccurrences);
+}
+
+function compareOccurrences(left: TodoOccurrence, right: TodoOccurrence) {
+  if (left.sortOrder !== right.sortOrder) {
+    return left.sortOrder - right.sortOrder;
+  }
+  return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+}
+
+function previewDayItems(
   items: TodoOccurrence[],
   dragState: DragState | null,
   date: string,
