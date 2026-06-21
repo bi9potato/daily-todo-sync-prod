@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -86,6 +87,17 @@ type DailyAnalytics = {
   total: number;
 };
 
+type TodayAnalyticsSnapshot = DailyAnalytics & {
+  allItems: TodoOccurrence[];
+  carryoverRate: number;
+  doneItems: TodoOccurrence[];
+  focusScore: number;
+  insights: string[];
+  pendingItems: TodoOccurrence[];
+  recurringRate: number;
+  reminderCoverage: number;
+};
+
 type WeekdayAnalytics = {
   completionRate: number;
   done: number;
@@ -107,6 +119,18 @@ type AnalyticsSnapshot = {
   reminderCoverage: number;
   total: number;
   weekdayStats: WeekdayAnalytics[];
+};
+
+type CalendarTimedItem = {
+  item: TodoOccurrence;
+  lane: number;
+  laneCount: number;
+  minutes: number;
+};
+
+type CalendarTaskBuckets = {
+  allDay: TodoOccurrence[];
+  timed: CalendarTimedItem[];
 };
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
@@ -185,6 +209,9 @@ const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
 const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
 const LONG_PRESS_TO_DRAG_MS = 320;
 const LONG_PRESS_MOVE_CANCEL_PX = 10;
+const CALENDAR_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+const CALENDAR_MINUTES_PER_DAY = 24 * 60;
+const CALENDAR_EVENT_HEIGHT = 42;
 
 const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
   { value: "none", label: "不重复" },
@@ -355,13 +382,15 @@ function TodoScreen({
 
   const visibleRange = useMemo(() => {
     if (viewMode === "analytics") {
-      return { start: addDays(today, -29), end: today };
+      return { start: today, end: today };
     }
     if (viewMode === "week") {
       return { start: startOfWeek(selectedDate), end: endOfWeek(selectedDate) };
     }
     if (viewMode === "month") {
-      return { start: startOfMonth(selectedDate), end: endOfMonth(selectedDate) };
+      const monthStart = startOfMonth(selectedDate);
+      const monthEnd = endOfMonth(selectedDate);
+      return { start: startOfWeek(monthStart), end: endOfWeek(monthEnd) };
     }
     return { start: selectedDate, end: selectedDate };
   }, [selectedDate, today, viewMode]);
@@ -877,7 +906,7 @@ function TodoScreen({
               <AnalyticsIcon />
             </span>
             <span className="nav-label">分析</span>
-            <small className="nav-meta">近 30 天</small>
+            <small className="nav-meta">今天</small>
           </button>
         </nav>
 
@@ -899,10 +928,10 @@ function TodoScreen({
 
         <div className="sidebar-date">
           <span>{isAnalytics ? "分析范围" : "当前日期"}</span>
-          <strong>{isAnalytics ? "近 30 天" : selectedDate}</strong>
+          <strong>{isAnalytics ? "今天" : selectedDate}</strong>
           <small>
             {isAnalytics
-              ? `${visibleRange.start} - ${visibleRange.end}`
+              ? `${today} · ${weekdayLabel(today)}`
               : weekdayLabel(selectedDate)}
           </small>
         </div>
@@ -927,7 +956,7 @@ function TodoScreen({
         <header className="workspace-header surface-panel">
           <div>
             {isAnalytics ? (
-              <p className="eyebrow">近 30 天</p>
+              <p className="eyebrow">今天</p>
             ) : !isMyDay ? (
               <p className="eyebrow">
                 {visibleRange.start === visibleRange.end
@@ -938,7 +967,7 @@ function TodoScreen({
             <h1>{viewTitle()}</h1>
             <p className="muted">
               {isAnalytics
-                ? `${visibleRange.start} - ${visibleRange.end} · 单向日历同步策略`
+                ? `${today} · ${weekdayLabel(today)} · 只分析当天任务`
                 : `${selectedDate} · ${weekdayLabel(selectedDate)}`}
             </p>
           </div>
@@ -982,11 +1011,10 @@ function TodoScreen({
           isAnalytics ? (
             <AnalyticsDashboard
               days={rangeQuery.data?.days ?? []}
-              range={visibleRange}
               today={today}
             />
-          ) : (
-            <section className={`calendar-grid view-${viewMode}`}>
+          ) : isMyDay ? (
+            <section className="calendar-grid view-day">
               {visibleDates.map((date) => (
                 <DayColumn
                   date={date}
@@ -994,7 +1022,7 @@ function TodoScreen({
                   dragState={dragState}
                   isSelected={date === selectedDate}
                   isToday={date === today}
-                  hideHeading={isMyDay}
+                  hideHeading
                   key={date}
                   onDelete={(id) => deleteMutation.mutate(id)}
                   onDone={(id, done) => updateMutation.mutate({ id, done })}
@@ -1007,6 +1035,23 @@ function TodoScreen({
                 />
               ))}
             </section>
+          ) : (
+            <CalendarBoard
+              dates={visibleDates}
+              daysByDate={daysByDate}
+              dragState={dragState}
+              selectedDate={selectedDate}
+              today={today}
+              viewMode={viewMode as CalendarViewMode}
+              onCancelDrag={cancelTaskDrag}
+              onDelete={(id) => deleteMutation.mutate(id)}
+              onDone={(id, done) => updateMutation.mutate({ id, done })}
+              onEndDrag={finishTaskDrag}
+              onMoveDrag={moveTaskDrag}
+              onOpenTask={openTaskDetails}
+              onSelectDate={setSelectedDate}
+              onStartDrag={startTaskDrag}
+            />
           )
         ) : null}
       </section>
@@ -1064,6 +1109,435 @@ function TodoScreen({
         />
       ) : null}
     </main>
+  );
+}
+
+function CalendarBoard({
+  dates,
+  daysByDate,
+  dragState,
+  selectedDate,
+  today,
+  viewMode,
+  onCancelDrag,
+  onDelete,
+  onDone,
+  onEndDrag,
+  onMoveDrag,
+  onOpenTask,
+  onSelectDate,
+  onStartDrag,
+}: {
+  dates: string[];
+  daysByDate: Map<string, DayTodos>;
+  dragState: DragState | null;
+  selectedDate: string;
+  today: string;
+  viewMode: CalendarViewMode;
+  onCancelDrag: () => void;
+  onDelete: (id: string) => void;
+  onDone: (id: string, done: boolean) => void;
+  onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpenTask: (id: string) => void;
+  onSelectDate: (date: string) => void;
+  onStartDrag: (
+    date: string,
+    id: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) => void;
+}) {
+  if (viewMode === "month") {
+    return (
+      <MonthCalendar
+        dates={dates}
+        daysByDate={daysByDate}
+        dragState={dragState}
+        selectedDate={selectedDate}
+        today={today}
+        onCancelDrag={onCancelDrag}
+        onDelete={onDelete}
+        onDone={onDone}
+        onEndDrag={onEndDrag}
+        onMoveDrag={onMoveDrag}
+        onOpenTask={onOpenTask}
+        onSelectDate={onSelectDate}
+        onStartDrag={onStartDrag}
+      />
+    );
+  }
+
+  return (
+    <TimeCalendar
+      dates={dates}
+      daysByDate={daysByDate}
+      dragState={dragState}
+      today={today}
+      viewMode={viewMode}
+      onCancelDrag={onCancelDrag}
+      onDelete={onDelete}
+      onDone={onDone}
+      onEndDrag={onEndDrag}
+      onMoveDrag={onMoveDrag}
+      onOpenTask={onOpenTask}
+      onSelectDate={onSelectDate}
+      onStartDrag={onStartDrag}
+    />
+  );
+}
+
+function TimeCalendar({
+  dates,
+  daysByDate,
+  dragState,
+  today,
+  viewMode,
+  onCancelDrag,
+  onDelete,
+  onDone,
+  onEndDrag,
+  onMoveDrag,
+  onOpenTask,
+  onSelectDate,
+  onStartDrag,
+}: {
+  dates: string[];
+  daysByDate: Map<string, DayTodos>;
+  dragState: DragState | null;
+  today: string;
+  viewMode: CalendarViewMode;
+  onCancelDrag: () => void;
+  onDelete: (id: string) => void;
+  onDone: (id: string, done: boolean) => void;
+  onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpenTask: (id: string) => void;
+  onSelectDate: (date: string) => void;
+  onStartDrag: (
+    date: string,
+    id: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) => void;
+}) {
+  const gridStyle = {
+    "--calendar-days": dates.length,
+  } as CSSProperties;
+
+  return (
+    <section className={`calendar-board time-calendar view-${viewMode}`}>
+      <div className="time-calendar-shell surface-panel">
+        <div className="time-calendar-grid" style={gridStyle}>
+          <div className="time-zone-cell">GMT+8</div>
+          {dates.map((date) => (
+            <button
+              className={`calendar-day-head ${date === today ? "is-today" : ""}`}
+              key={`head-${date}`}
+              type="button"
+              onClick={() => onSelectDate(date)}
+            >
+              <span>{weekdayLabel(date)}</span>
+              <strong>{formatShortDate(date)}</strong>
+              {date === today ? <i>今天</i> : null}
+            </button>
+          ))}
+
+          <div className="all-day-label">全天</div>
+          {dates.map((date) => {
+            const day = daysByDate.get(date) ?? emptyDay(date);
+            const items = previewDayItems(orderedDayItems(day), dragState, date);
+            const buckets = buildCalendarTaskBuckets(items);
+            const isReordering = dragState?.active && dragState.date === date;
+
+            return (
+              <div
+                className={`all-day-cell ${isReordering ? "is-reordering" : ""}`}
+                data-day-date={date}
+                key={`all-day-${date}`}
+              >
+                {buckets.allDay.length === 0 ? (
+                  <span className="calendar-empty-hint">无全天任务</span>
+                ) : null}
+                {buckets.allDay.map((item) => (
+                  <CalendarTaskChip
+                    date={date}
+                    dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                    item={item}
+                    key={item.id}
+                    variant="all-day"
+                    onCancelDrag={onCancelDrag}
+                    onDelete={onDelete}
+                    onDone={onDone}
+                    onEndDrag={onEndDrag}
+                    onMoveDrag={onMoveDrag}
+                    onOpen={() => onOpenTask(item.id)}
+                    onStartDrag={(event) => onStartDrag(date, item.id, event)}
+                  />
+                ))}
+              </div>
+            );
+          })}
+
+          <div className="time-rail">
+            {CALENDAR_HOURS.map((hour) => (
+              <span key={hour}>{formatHourLabel(hour)}</span>
+            ))}
+          </div>
+          {dates.map((date) => {
+            const day = daysByDate.get(date) ?? emptyDay(date);
+            const items = previewDayItems(orderedDayItems(day), dragState, date);
+            const buckets = buildCalendarTaskBuckets(items);
+            const isReordering = dragState?.active && dragState.date === date;
+
+            return (
+              <div
+                className={`time-day-lane ${date === today ? "is-today" : ""} ${
+                  isReordering ? "is-reordering" : ""
+                }`}
+                data-day-date={date}
+                key={`lane-${date}`}
+              >
+                {CALENDAR_HOURS.map((hour) => (
+                  <span
+                    className="time-slot-line"
+                    key={hour}
+                    style={{ top: `${(hour / 24) * 100}%` }}
+                  />
+                ))}
+                {buckets.timed.map(({ item, lane, laneCount, minutes }) => {
+                  const top = Math.max(
+                    0,
+                    Math.min(CALENDAR_MINUTES_PER_DAY - 30, minutes),
+                  );
+                  const laneWidth = 100 / laneCount;
+                  const style = {
+                    minHeight: CALENDAR_EVENT_HEIGHT,
+                    top: `${(top / CALENDAR_MINUTES_PER_DAY) * 100}%`,
+                    left: `calc(${lane * laneWidth}% + 6px)`,
+                    width: `calc(${laneWidth}% - 10px)`,
+                  } as CSSProperties;
+
+                  return (
+                    <CalendarTaskChip
+                      date={date}
+                      dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                      item={item}
+                      key={item.id}
+                      style={style}
+                      variant="timed"
+                      onCancelDrag={onCancelDrag}
+                      onDelete={onDelete}
+                      onDone={onDone}
+                      onEndDrag={onEndDrag}
+                      onMoveDrag={onMoveDrag}
+                      onOpen={() => onOpenTask(item.id)}
+                      onStartDrag={(event) => onStartDrag(date, item.id, event)}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MonthCalendar({
+  dates,
+  daysByDate,
+  dragState,
+  selectedDate,
+  today,
+  onCancelDrag,
+  onDelete,
+  onDone,
+  onEndDrag,
+  onMoveDrag,
+  onOpenTask,
+  onSelectDate,
+  onStartDrag,
+}: {
+  dates: string[];
+  daysByDate: Map<string, DayTodos>;
+  dragState: DragState | null;
+  selectedDate: string;
+  today: string;
+  onCancelDrag: () => void;
+  onDelete: (id: string) => void;
+  onDone: (id: string, done: boolean) => void;
+  onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpenTask: (id: string) => void;
+  onSelectDate: (date: string) => void;
+  onStartDrag: (
+    date: string,
+    id: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) => void;
+}) {
+  const selectedMonth = fromDateKey(selectedDate).getMonth();
+
+  return (
+    <section className="calendar-board month-calendar surface-panel">
+      <div className="month-weekdays">
+        {WEEKDAY_NAMES.map((label) => (
+          <span key={label}>{label}</span>
+        ))}
+      </div>
+      <div className="month-grid">
+        {dates.map((date) => {
+          const day = daysByDate.get(date) ?? emptyDay(date);
+          const items = previewDayItems(orderedDayItems(day), dragState, date);
+          const isOutsideMonth = fromDateKey(date).getMonth() !== selectedMonth;
+          const isReordering = dragState?.active && dragState.date === date;
+          const visibleItems = items.slice(0, 5);
+          const hiddenCount = Math.max(0, items.length - visibleItems.length);
+
+          return (
+            <article
+              className={[
+                "month-cell",
+                date === today ? "is-today" : "",
+                date === selectedDate ? "is-selected" : "",
+                isOutsideMonth ? "is-outside-month" : "",
+                isReordering ? "is-reordering" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              data-day-date={date}
+              key={date}
+            >
+              <button
+                className="month-day-button"
+                type="button"
+                onClick={() => onSelectDate(date)}
+              >
+                <span>{fromDateKey(date).getDate()}</span>
+                {date === today ? <strong>今天</strong> : null}
+              </button>
+              <div className="month-task-list">
+                {visibleItems.map((item) => (
+                  <CalendarTaskChip
+                    date={date}
+                    dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                    item={item}
+                    key={item.id}
+                    variant="month"
+                    onCancelDrag={onCancelDrag}
+                    onDelete={onDelete}
+                    onDone={onDone}
+                    onEndDrag={onEndDrag}
+                    onMoveDrag={onMoveDrag}
+                    onOpen={() => onOpenTask(item.id)}
+                    onStartDrag={(event) => onStartDrag(date, item.id, event)}
+                  />
+                ))}
+                {hiddenCount > 0 ? (
+                  <button
+                    className="month-more-button"
+                    type="button"
+                    onClick={() => onSelectDate(date)}
+                  >
+                    还有 {hiddenCount} 项
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CalendarTaskChip({
+  date,
+  dragged,
+  item,
+  style,
+  variant,
+  onCancelDrag,
+  onDelete,
+  onDone,
+  onEndDrag,
+  onMoveDrag,
+  onOpen,
+  onStartDrag,
+}: {
+  date: string;
+  dragged: boolean;
+  item: TodoOccurrence;
+  style?: CSSProperties;
+  variant: "all-day" | "month" | "timed";
+  onCancelDrag: () => void;
+  onDelete: (id: string) => void;
+  onDone: (id: string, done: boolean) => void;
+  onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpen: () => void;
+  onStartDrag: (event: ReactPointerEvent<HTMLElement>) => void;
+}) {
+  const done = item.status === "done";
+
+  function isInteractiveTarget(target: EventTarget) {
+    return Boolean(
+      target instanceof Element &&
+        target.closest("button, input, textarea, select, a"),
+    );
+  }
+
+  function startDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onStartDrag(event);
+  }
+
+  function endDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    onEndDrag();
+  }
+
+  return (
+    <div
+      className={`calendar-task-chip is-${variant} ${done ? "is-done" : ""} ${
+        dragged ? "is-dragging" : ""
+      }`}
+      data-task-date={date}
+      data-task-id={item.id}
+      data-task-sortable="true"
+      onClick={onOpen}
+      onPointerCancel={onCancelDrag}
+      onPointerDown={startDrag}
+      onPointerMove={onMoveDrag}
+      onPointerUp={endDrag}
+      style={style}
+    >
+      <input
+        className="mini-checkbox"
+        type="checkbox"
+        checked={done}
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onDone(item.id, event.target.checked)}
+      />
+      <span className="calendar-chip-title">{item.text}</span>
+      {item.reminderTime ? <time>{item.reminderTime}</time> : null}
+      <button
+        className="calendar-chip-delete"
+        type="button"
+        aria-label="删除任务"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete(item.id);
+        }}
+      >
+        <TrashIcon />
+      </button>
+    </div>
   );
 }
 
@@ -1235,6 +1709,157 @@ function TodoCard({
 }
 
 function AnalyticsDashboard({
+  days,
+  today,
+}: {
+  days: DayTodos[];
+  today: string;
+}) {
+  const snapshot = useMemo(
+    () => buildTodayAnalyticsSnapshot(days, today),
+    [days, today],
+  );
+
+  return (
+    <section className="analytics-dashboard today-analytics">
+      <div className="analytics-hero surface-panel">
+        <div>
+          <p className="eyebrow">今日复盘</p>
+          <h2>{snapshot.total > 0 ? "今天的推进已经整理好了" : "今天还没有任务记录"}</h2>
+          <p className="muted">
+            {today} · 完成 {snapshot.done} 项，待处理 {snapshot.pending} 项。
+          </p>
+        </div>
+        <div className="completion-ring-wrap">
+          <div
+            className="completion-ring"
+            style={{
+              background: `conic-gradient(var(--accent) ${snapshot.completionRate}%, rgba(213, 221, 211, 0.72) 0)`,
+            }}
+          >
+            <span>{snapshot.completionRate}%</span>
+          </div>
+          <small>今日完成率</small>
+        </div>
+      </div>
+
+      <div className="metric-grid">
+        <MetricCard label="今日任务" value={String(snapshot.total)} detail="全部待办" />
+        <MetricCard label="已完成" value={String(snapshot.done)} detail="今天做完的事" />
+        <MetricCard label="未完成" value={String(snapshot.pending)} detail="还留在今天" />
+        <MetricCard label="专注分" value={`${snapshot.focusScore}`} detail="完成率与压力综合" />
+      </div>
+
+      <div className="analytics-grid today-analytics-grid">
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">结构</p>
+              <h2>今天任务构成</h2>
+            </div>
+          </div>
+          <div className="today-donut-row">
+            <div
+              className="today-donut"
+              style={{
+                background: `conic-gradient(var(--accent) 0 ${snapshot.completionRate}%, rgba(216, 206, 181, 0.95) ${snapshot.completionRate}% 100%)`,
+              }}
+            >
+              <span>{snapshot.done}/{snapshot.total}</span>
+            </div>
+            <div className="today-legend">
+              <span><i className="legend-done" />已完成 {snapshot.done}</span>
+              <span><i className="legend-pending" />未完成 {snapshot.pending}</span>
+              <span><i className="legend-muted" />结转 {snapshot.carryover}</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">质量</p>
+              <h2>今天的任务状态</h2>
+            </div>
+          </div>
+          <div className="quality-list">
+            <QualityMeter label="提醒覆盖" value={snapshot.reminderCoverage} />
+            <QualityMeter label="结转压力" value={snapshot.carryoverRate} inverse />
+            <QualityMeter label="重复任务" value={snapshot.recurringRate} />
+          </div>
+        </section>
+
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">已完成</p>
+              <h2>今天干了啥</h2>
+            </div>
+            <span>{snapshot.doneItems.length} 项</span>
+          </div>
+          <TaskSummaryList
+            emptyText="今天还没有完成项。"
+            items={snapshot.doneItems}
+          />
+        </section>
+
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">未完成</p>
+              <h2>今天还剩什么</h2>
+            </div>
+            <span>{snapshot.pendingItems.length} 项</span>
+          </div>
+          <TaskSummaryList
+            emptyText="今天没有遗留任务，节奏很干净。"
+            items={snapshot.pendingItems}
+          />
+        </section>
+
+        <section className="analytics-panel surface-panel today-insights-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">总结</p>
+              <h2>今天的下一步</h2>
+            </div>
+          </div>
+          <ul className="insight-list">
+            {snapshot.insights.map((insight) => (
+              <li key={insight}>{insight}</li>
+            ))}
+          </ul>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function TaskSummaryList({
+  emptyText,
+  items,
+}: {
+  emptyText: string;
+  items: TodoOccurrence[];
+}) {
+  if (items.length === 0) {
+    return <p className="task-summary-empty">{emptyText}</p>;
+  }
+
+  return (
+    <ul className="task-summary-list">
+      {items.slice(0, 8).map((item) => (
+        <li key={item.id}>
+          <span>{item.text}</span>
+          {item.reminderTime ? <time>{item.reminderTime}</time> : null}
+        </li>
+      ))}
+      {items.length > 8 ? <li className="task-summary-more">还有 {items.length - 8} 项</li> : null}
+    </ul>
+  );
+}
+
+function LegacyAnalyticsDashboard({
   days,
   range,
   today,
@@ -2115,6 +2740,57 @@ function orderedDayItems(day: DayTodos) {
   return [...day.pending, ...day.done].sort(compareOccurrences);
 }
 
+function buildCalendarTaskBuckets(items: TodoOccurrence[]): CalendarTaskBuckets {
+  const allDay: TodoOccurrence[] = [];
+  const byMinute = new Map<number, TodoOccurrence[]>();
+
+  items.forEach((item) => {
+    const minutes = parseReminderMinutes(item.reminderTime);
+    if (minutes === null) {
+      allDay.push(item);
+      return;
+    }
+
+    byMinute.set(minutes, [...(byMinute.get(minutes) ?? []), item]);
+  });
+
+  const timed = [...byMinute.entries()]
+    .sort(([left], [right]) => left - right)
+    .flatMap(([minutes, group]) =>
+      group.sort(compareOccurrences).map((item, lane) => ({
+        item,
+        lane,
+        laneCount: group.length,
+        minutes,
+      })),
+    );
+
+  return { allDay, timed };
+}
+
+function parseReminderMinutes(reminderTime: string | null) {
+  if (!reminderTime) {
+    return null;
+  }
+
+  const match = /^(\d{1,2}):(\d{2})/.exec(reminderTime);
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function formatHourLabel(hour: number) {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
 function applyOptimisticDayOrder(
   data: RangeTodos | undefined,
   payload: ReorderPayload,
@@ -2192,6 +2868,89 @@ function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
     draggedId,
     ...withoutDragged.slice(targetIndex),
   ];
+}
+
+function buildTodayAnalyticsSnapshot(
+  days: DayTodos[],
+  today: string,
+): TodayAnalyticsSnapshot {
+  const day = days.find((item) => item.date === today) ?? emptyDay(today);
+  const allItems = orderedDayItems(day);
+  const doneItems = allItems.filter((item) => item.status === "done");
+  const pendingItems = allItems.filter((item) => item.status !== "done");
+  const carryover = allItems.filter((item) => item.source === "carryover").length;
+  const recurring = allItems.filter((item) => item.isRecurring).length;
+  const reminders = allItems.filter((item) => Boolean(item.reminderTime)).length;
+  const completionRate = percentage(doneItems.length, allItems.length);
+  const carryoverRate = percentage(carryover, allItems.length);
+  const reminderCoverage = percentage(reminders, allItems.length);
+  const recurringRate = percentage(recurring, allItems.length);
+  const focusScore =
+    allItems.length === 0
+      ? 0
+      : Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round(completionRate + reminderCoverage * 0.15 - carryoverRate * 0.2),
+          ),
+        );
+
+  const snapshot: TodayAnalyticsSnapshot = {
+    allItems,
+    carryover,
+    carryoverRate,
+    completionRate,
+    date: today,
+    done: doneItems.length,
+    doneItems,
+    focusScore,
+    insights: [],
+    pending: pendingItems.length,
+    pendingItems,
+    recurring,
+    recurringRate,
+    reminderCoverage,
+    reminders,
+    total: allItems.length,
+  };
+
+  return {
+    ...snapshot,
+    insights: buildTodayAnalyticsInsights(snapshot),
+  };
+}
+
+function buildTodayAnalyticsInsights(snapshot: TodayAnalyticsSnapshot) {
+  if (snapshot.total === 0) {
+    return ["今天还没有任务记录。可以先加一个最关键的小任务，让分析页开始形成当天画像。"];
+  }
+
+  const insights: string[] = [];
+
+  if (snapshot.done > 0) {
+    insights.push(`今天已经完成 ${snapshot.done} 项，主要进展已经沉淀在完成列表里。`);
+  }
+
+  if (snapshot.pending > 0) {
+    insights.push(`还有 ${snapshot.pending} 项未完成，建议先挑最小的一项收尾，避免继续结转。`);
+  } else {
+    insights.push("今天没有遗留任务，当前节奏很干净。");
+  }
+
+  if (snapshot.carryover > 0) {
+    insights.push(`今天有 ${snapshot.carryover} 项来自结转，适合检查任务是不是需要拆小。`);
+  }
+
+  if (snapshot.reminders === 0 && snapshot.pending > 0) {
+    insights.push("未完成任务还没有提醒时间，重要事项可以补一个提醒，减少靠记忆维护。");
+  }
+
+  if (snapshot.recurring > 0) {
+    insights.push(`今天有 ${snapshot.recurring} 项重复任务，适合后续优先同步到 Google Calendar。`);
+  }
+
+  return insights.slice(0, 4);
 }
 
 function buildAnalyticsSnapshot(days: DayTodos[], today: string): AnalyticsSnapshot {
