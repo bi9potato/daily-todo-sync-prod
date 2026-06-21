@@ -29,6 +29,16 @@ export type TodoOccurrence = {
   reminderAt: string | null;
   isRecurring: boolean;
   repeat: RepeatRule;
+  attachments: TaskAttachment[];
+};
+
+export type TaskAttachment = {
+  id: string;
+  originalFilename: string;
+  contentType: string;
+  sizeBytes: number;
+  createdAt: string;
+  contentUrl: string;
 };
 
 export type DayTodos = {
@@ -137,13 +147,17 @@ async function request<T>(
   options: RequestInit = {},
   accessToken?: string,
 ): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -290,11 +304,56 @@ export function setGoogleCalendarSyncEnabled(enabled: boolean, accessToken: stri
 }
 
 export function syncGoogleCalendar(accessToken: string) {
+  return syncGoogleCalendarForDays(45, accessToken);
+}
+
+export function syncGoogleCalendarForDays(days: number, accessToken: string) {
   return request<GoogleCalendarSyncResult>(
-    "/integrations/google-calendar/sync",
+    `/integrations/google-calendar/sync?days=${encodeURIComponent(String(days))}`,
     {
       method: "POST",
     },
     accessToken,
   );
+}
+
+export function uploadTaskAttachment(
+  occurrenceId: string,
+  file: File,
+  accessToken: string,
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request<TaskAttachment>(
+    `/occurrences/${occurrenceId}/attachments`,
+    {
+      method: "POST",
+      body: formData,
+    },
+    accessToken,
+  );
+}
+
+export function deleteTaskAttachment(attachmentId: string, accessToken: string) {
+  return request<void>(
+    `/attachments/${attachmentId}`,
+    {
+      method: "DELETE",
+    },
+    accessToken,
+  );
+}
+
+export async function getTaskAttachmentBlob(contentUrl: string, accessToken: string) {
+  const response = await fetch(contentUrl, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return response.blob();
 }

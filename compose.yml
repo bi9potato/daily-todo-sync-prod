@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    volumes:
+      - media_data:/app/media
     healthcheck:
       test:
         [
@@ -42,4 +44,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
-
+  media_data:

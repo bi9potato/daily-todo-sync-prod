@@ -95,9 +95,9 @@ def disconnect_google_calendar_endpoint(request):
 
 
 @router.post("/google-calendar/sync", response=GoogleCalendarSyncOut, auth=bearer_auth)
-def sync_google_calendar(request):
+def sync_google_calendar(request, days: int = 45):
     try:
-        return sync_google_calendar_window(request.auth)
+        return sync_google_calendar_window(request.auth, days=days)
     except GoogleCalendarError as exc:
         raise HttpError(400, str(exc)) from exc
 

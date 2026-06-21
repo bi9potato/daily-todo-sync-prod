@@ -384,6 +384,9 @@ def delete_google_calendar_event_for_occurrence(user, occurrence: TodoOccurrence
 
 
 def sync_google_calendar_window(user, *, start: date | None = None, days: int = 45) -> dict:
+    if days < 1 or days > 180:
+        raise GoogleCalendarError("Google Calendar sync range must be between 1 and 180 days.")
+
     connection = GoogleCalendarConnection.objects.filter(user=user).first()
     if connection is None:
         raise GoogleCalendarError("Bind a Google account before syncing Calendar.")

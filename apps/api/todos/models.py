@@ -1,7 +1,16 @@
+import os
 import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
+
+
+def task_attachment_path(instance, filename: str) -> str:
+    _, extension = os.path.splitext(filename)
+    safe_extension = extension.lower()[:12]
+    return f"task-attachments/{instance.user_id}/{instance.task_id}/{instance.id}{safe_extension}"
 
 
 class Task(models.Model):
@@ -34,9 +43,12 @@ class Task(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["user", "deleted_at"]),
-            models.Index(fields=["user", "root_id"]),
-            models.Index(fields=["user", "recurrence_kind", "recurrence_start_date"]),
+            models.Index(fields=["user", "deleted_at"], name="todos_task_user_id_6b794b_idx"),
+            models.Index(fields=["user", "root_id"], name="todos_task_user_id_650d4e_idx"),
+            models.Index(
+                fields=["user", "recurrence_kind", "recurrence_start_date"],
+                name="todos_task_user_id_29e252_idx",
+            ),
         ]
 
     def save(self, *args, **kwargs):
@@ -97,10 +109,44 @@ class TodoOccurrence(models.Model):
             )
         ]
         indexes = [
-            models.Index(fields=["user", "task_date", "status", "sort_order"]),
-            models.Index(fields=["user", "root_id", "task_date"]),
-            models.Index(fields=["deleted_at"]),
+            models.Index(
+                fields=["user", "task_date", "status", "sort_order"],
+                name="todos_occur_user_id_9159c1_idx",
+            ),
+            models.Index(
+                fields=["user", "root_id", "task_date"],
+                name="todos_occur_user_id_bfc0fa_idx",
+            ),
+            models.Index(fields=["deleted_at"], name="todos_occur_deleted_b8767d_idx"),
         ]
 
     def __str__(self) -> str:
         return f"{self.task_date} {self.task.text}"
+
+
+class TaskAttachment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to=task_attachment_path, max_length=500)
+    original_filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=120)
+    size_bytes = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["user", "task", "created_at"],
+                name="todos_taska_user_id_21e3c9_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.original_filename
+
+
+@receiver(post_delete, sender=TaskAttachment)
+def delete_attachment_file(sender, instance: TaskAttachment, **kwargs) -> None:
+    if instance.file:
+        instance.file.delete(save=False)

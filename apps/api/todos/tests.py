@@ -1,16 +1,27 @@
 from datetime import date
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 
-from .models import TodoOccurrence
+from .models import TaskAttachment, TodoOccurrence
 from .services import (
+    add_task_attachment,
     create_task_for_day,
     ensure_day,
     ensure_range,
     reorder_day,
     update_occurrence,
 )
+
+TEST_STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.InMemoryStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 
 class CarryoverTests(TestCase):
@@ -108,3 +119,19 @@ class CarryoverTests(TestCase):
         occurrence.task.refresh_from_db()
 
         self.assertEqual(occurrence.task.note, "chapter 2")
+
+    def test_image_attachment_can_be_added_to_task(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        image = SimpleUploadedFile(
+            "receipt.png",
+            b"\x89PNG\r\n\x1a\n" + b"0" * 32,
+            content_type="image/png",
+        )
+
+        with override_settings(STORAGES=TEST_STORAGES):
+            attachment = add_task_attachment(self.user, occurrence.id, image)
+
+            self.assertEqual(attachment.task_id, occurrence.task_id)
+            self.assertEqual(attachment.original_filename, "receipt.png")
+            self.assertTrue(TaskAttachment.objects.filter(id=attachment.id).exists())
+            attachment.file.close()

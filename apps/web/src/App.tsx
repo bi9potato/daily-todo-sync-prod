@@ -3,6 +3,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type DragEvent,
   type FormEvent,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -19,23 +21,27 @@ import {
   authorizeGoogleCalendar,
   bindGoogleAccount,
   createTask,
+  deleteTaskAttachment,
   deleteOccurrence,
   disconnectGoogleAccount,
   getGoogleCalendarStatus,
   getMe,
+  getTaskAttachmentBlob,
   getRange,
   login,
   register,
   reorderDay,
   setGoogleCalendarSyncEnabled,
-  syncGoogleCalendar,
+  syncGoogleCalendarForDays,
   updateOccurrence,
+  uploadTaskAttachment,
   type DayTodos,
   type GoogleCalendarStatus,
   type GoogleCalendarSyncResult,
   type RangeTodos,
   type RepeatKind,
   type RepeatRule,
+  type TaskAttachment,
   type TodoOccurrence,
 } from "./api";
 import {
@@ -228,6 +234,20 @@ type ReorderContext = {
   previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
 };
 
+type AttachmentUploadPayload = {
+  file: File;
+  occurrenceId: string;
+};
+
+type AttachmentDeletePayload = {
+  attachmentId: string;
+  occurrenceId: string;
+};
+
+type AttachmentMutationContext = {
+  previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
+};
+
 const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
 const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
 const LONG_PRESS_TO_DRAG_MS = 320;
@@ -235,6 +255,8 @@ const LONG_PRESS_MOVE_CANCEL_PX = 10;
 const CALENDAR_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const CALENDAR_MINUTES_PER_DAY = 24 * 60;
 const CALENDAR_EVENT_HEIGHT = 42;
+const GOOGLE_CALENDAR_SYNC_RANGES = [45, 90, 180] as const;
+type GoogleCalendarSyncDays = (typeof GOOGLE_CALENDAR_SYNC_RANGES)[number];
 
 const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
   { value: "none", label: "不重复" },
@@ -397,6 +419,8 @@ function TodoScreen({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [googleCalendarNotice, setGoogleCalendarNotice] =
     useState<GoogleCalendarNotice | null>(null);
+  const [googleCalendarSyncDays, setGoogleCalendarSyncDays] =
+    useState<GoogleCalendarSyncDays>(45);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [completionOverrides, setCompletionOverrides] = useState<
@@ -514,6 +538,48 @@ function TodoScreen({
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
+  const uploadAttachmentMutation = useMutation<
+    TaskAttachment,
+    Error,
+    AttachmentUploadPayload
+  >({
+    mutationFn: ({ occurrenceId, file }) =>
+      uploadTaskAttachment(occurrenceId, file, accessToken),
+    onSuccess: (attachment, payload) => {
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyAttachmentAdd(data, payload.occurrenceId, attachment),
+      );
+      queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+  });
+
+  const deleteAttachmentMutation = useMutation<
+    void,
+    Error,
+    AttachmentDeletePayload,
+    AttachmentMutationContext
+  >({
+    mutationFn: ({ attachmentId }) => deleteTaskAttachment(attachmentId, accessToken),
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
+      const previousRanges = queryClient.getQueriesData<RangeTodos>({
+        queryKey: ["range"],
+      });
+
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyAttachmentRemove(data, payload.occurrenceId, payload.attachmentId),
+      );
+
+      return { previousRanges };
+    },
+    onError: (_error, _payload, context) => {
+      context?.previousRanges.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
+  });
+
   function updateTaskDone(id: string, done: boolean) {
     const version = completionOverrideVersionRef.current + 1;
     completionOverrideVersionRef.current = version;
@@ -605,7 +671,8 @@ function TodoScreen({
   });
 
   const syncGoogleCalendarMutation = useMutation({
-    mutationFn: () => syncGoogleCalendar(accessToken),
+    mutationFn: (days: GoogleCalendarSyncDays) =>
+      syncGoogleCalendarForDays(days, accessToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
     },
@@ -1196,12 +1263,38 @@ function TodoScreen({
 
       {selectedTask ? (
         <TaskDetailsModal
+          accessToken={accessToken}
+          attachmentError={
+            uploadAttachmentMutation.error ?? deleteAttachmentMutation.error
+          }
+          deletingAttachmentId={
+            deleteAttachmentMutation.isPending &&
+            deleteAttachmentMutation.variables?.occurrenceId === selectedTask.id
+              ? deleteAttachmentMutation.variables.attachmentId
+              : null
+          }
           item={selectedTask}
           isDeleting={deleteMutation.isPending}
           isSaving={updateMutation.isPending}
+          isUploadingAttachment={
+            uploadAttachmentMutation.isPending &&
+            uploadAttachmentMutation.variables?.occurrenceId === selectedTask.id
+          }
           onClose={() => setSelectedTaskId(null)}
           onDelete={() => deleteMutation.mutate(selectedTask.id)}
+          onDeleteAttachment={(attachmentId) =>
+            deleteAttachmentMutation.mutate({
+              attachmentId,
+              occurrenceId: selectedTask.id,
+            })
+          }
           onSave={(changes) => updateMutation.mutate({ id: selectedTask.id, ...changes })}
+          onUploadAttachment={(file) =>
+            uploadAttachmentMutation.mutate({
+              file,
+              occurrenceId: selectedTask.id,
+            })
+          }
         />
       ) : null}
 
@@ -1210,6 +1303,7 @@ function TodoScreen({
           notice={googleCalendarNotice}
           status={googleCalendarStatusQuery.data ?? null}
           syncResult={syncGoogleCalendarMutation.data ?? null}
+          syncDays={googleCalendarSyncDays}
           isAuthorizingCalendar={authorizeGoogleCalendarMutation.isPending}
           isBindingGoogle={bindGoogleAccountMutation.isPending}
           isDisconnecting={disconnectGoogleAccountMutation.isPending}
@@ -1228,7 +1322,8 @@ function TodoScreen({
           onAuthorizeCalendar={() => authorizeGoogleCalendarMutation.mutate()}
           onBindGoogle={() => bindGoogleAccountMutation.mutate()}
           onDisconnect={() => disconnectGoogleAccountMutation.mutate()}
-          onSync={() => syncGoogleCalendarMutation.mutate()}
+          onChangeSyncDays={setGoogleCalendarSyncDays}
+          onSync={() => syncGoogleCalendarMutation.mutate(googleCalendarSyncDays)}
           onToggleSync={(enabled) => toggleGoogleCalendarSyncMutation.mutate(enabled)}
         />
       ) : null}
@@ -2210,11 +2305,13 @@ function SettingsModal({
   notice,
   onAuthorizeCalendar,
   onBindGoogle,
+  onChangeSyncDays,
   onClose,
   onDisconnect,
   onSync,
   onToggleSync,
   status,
+  syncDays,
   syncResult,
 }: {
   error: Error | null;
@@ -2227,11 +2324,13 @@ function SettingsModal({
   notice: GoogleCalendarNotice | null;
   onAuthorizeCalendar: () => void;
   onBindGoogle: () => void;
+  onChangeSyncDays: (days: GoogleCalendarSyncDays) => void;
   onClose: () => void;
   onDisconnect: () => void;
   onSync: () => void;
   onToggleSync: (enabled: boolean) => void;
   status: GoogleCalendarStatus | null;
+  syncDays: GoogleCalendarSyncDays;
   syncResult: GoogleCalendarSyncResult | null;
 }) {
   const isGoogleBound = Boolean(status?.googleBound);
@@ -2240,6 +2339,15 @@ function SettingsModal({
   const syncEnabled = Boolean(status?.syncEnabled);
   const toggleDisabled =
     !isConfigured || !isGoogleBound || isAuthorizingCalendar || isTogglingSync;
+  const busyMessage = isBindingGoogle
+    ? "正在准备 Google 登录..."
+    : isAuthorizingCalendar
+      ? "正在准备 Google Calendar 授权..."
+      : isSyncing
+        ? `正在同步未来 ${syncDays} 天...`
+        : isTogglingSync
+          ? "正在更新同步开关..."
+          : "";
 
   function toggleCalendarSync() {
     if (toggleDisabled) {
@@ -2259,6 +2367,12 @@ function SettingsModal({
           <p className={`settings-callback-notice is-${notice.tone}`}>
             {notice.message}
           </p>
+        ) : null}
+        {busyMessage ? (
+          <div className="settings-busy" role="status" aria-live="polite">
+            <span className="loading-spinner" />
+            <span>{busyMessage}</span>
+          </div>
         ) : null}
 
         <section className="settings-card">
@@ -2398,13 +2512,29 @@ function SettingsModal({
           {error ? <p className="settings-error">{error.message}</p> : null}
 
           <div className="settings-actions">
+            <label className="compact-select">
+              同步范围
+              <select
+                value={syncDays}
+                disabled={!syncEnabled || isSyncing}
+                onChange={(event) =>
+                  onChangeSyncDays(Number(event.target.value) as GoogleCalendarSyncDays)
+                }
+              >
+                {GOOGLE_CALENDAR_SYNC_RANGES.map((days) => (
+                  <option key={days} value={days}>
+                    未来 {days} 天
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               className="primary-button"
               type="button"
               disabled={!syncEnabled || isSyncing}
               onClick={onSync}
             >
-              {isSyncing ? "同步中..." : "同步未来 45 天"}
+              {isSyncing ? "同步中..." : `同步未来 ${syncDays} 天`}
             </button>
             {isAuthorizingCalendar ? (
               <span className="settings-inline-status">正在前往 Google 授权...</span>
@@ -2568,29 +2698,69 @@ function QuickAddTask({
 }
 
 function TaskDetailsModal({
+  accessToken,
+  attachmentError,
+  deletingAttachmentId,
   item,
   isDeleting,
   isSaving,
+  isUploadingAttachment,
   onClose,
   onDelete,
+  onDeleteAttachment,
   onSave,
+  onUploadAttachment,
 }: {
+  accessToken: string;
+  attachmentError: Error | null;
+  deletingAttachmentId: string | null;
   item: TodoOccurrence;
   isDeleting: boolean;
   isSaving: boolean;
+  isUploadingAttachment: boolean;
   onClose: () => void;
   onDelete: () => void;
+  onDeleteAttachment: (attachmentId: string) => void;
   onSave: (changes: {
     text: string;
     note: string;
     reminderTime: string | null;
     repeat: RepeatRule;
   }) => void;
+  onUploadAttachment: (file: File) => void;
 }) {
   const [text, setText] = useState(item.text);
   const [note, setNote] = useState(item.note);
   const [reminderTime, setReminderTime] = useState(item.reminderTime ?? "");
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(item.repeat.kind);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  function uploadFiles(fileList: FileList | File[]) {
+    Array.from(fileList)
+      .filter((file) => file.type.startsWith("image/"))
+      .forEach((file) => onUploadAttachment(file));
+  }
+
+  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    if (event.target.files) {
+      uploadFiles(event.target.files);
+    }
+    event.target.value = "";
+  }
+
+  function handleNoteDragOver(event: DragEvent<HTMLDivElement>) {
+    if ([...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
+      event.preventDefault();
+      setIsDraggingImage(true);
+    }
+  }
+
+  function handleNoteDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDraggingImage(false);
+    uploadFiles(event.dataTransfer.files);
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -2618,15 +2788,50 @@ function TaskDetailsModal({
             required
           />
         </label>
-        <label>
-          备注
+        <div
+          className={`note-drop-zone ${isDraggingImage ? "is-dragging" : ""}`}
+          onDragEnter={handleNoteDragOver}
+          onDragLeave={() => setIsDraggingImage(false)}
+          onDragOver={handleNoteDragOver}
+          onDrop={handleNoteDrop}
+        >
+          <div className="note-label-row">
+            <span>备注</span>
+            <button
+              className="icon-button tiny-icon-button"
+              type="button"
+              aria-label="上传图片"
+              disabled={isUploadingAttachment}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <ImageIcon />
+            </button>
+          </div>
           <textarea
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            placeholder="补充细节、链接、上下文..."
+            placeholder="补充细节、链接、上下文；也可以把图片拖到这里。"
             rows={5}
           />
-        </label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            hidden
+            multiple
+            onChange={handleFileInputChange}
+          />
+        </div>
+        <TaskAttachmentGallery
+          accessToken={accessToken}
+          attachments={item.attachments}
+          deletingAttachmentId={deletingAttachmentId}
+          isUploading={isUploadingAttachment}
+          onDelete={onDeleteAttachment}
+        />
+        {attachmentError ? (
+          <p className="settings-error">{attachmentError.message}</p>
+        ) : null}
         <div className="field-grid">
           <label>
             日期
@@ -2682,6 +2887,116 @@ function TaskDetailsModal({
         </div>
       </form>
     </ModalShell>
+  );
+}
+
+function TaskAttachmentGallery({
+  accessToken,
+  attachments,
+  deletingAttachmentId,
+  isUploading,
+  onDelete,
+}: {
+  accessToken: string;
+  attachments: TaskAttachment[];
+  deletingAttachmentId: string | null;
+  isUploading: boolean;
+  onDelete: (attachmentId: string) => void;
+}) {
+  if (attachments.length === 0 && !isUploading) {
+    return null;
+  }
+
+  return (
+    <div className="attachment-section">
+      <div className="attachment-section-header">
+        <span>图片</span>
+        {isUploading ? <small>上传中...</small> : null}
+      </div>
+      <div className="attachment-grid">
+        {attachments.map((attachment) => (
+          <TaskAttachmentThumb
+            accessToken={accessToken}
+            attachment={attachment}
+            isDeleting={deletingAttachmentId === attachment.id}
+            key={attachment.id}
+            onDelete={() => onDelete(attachment.id)}
+          />
+        ))}
+        {isUploading ? (
+          <div className="attachment-tile attachment-uploading">
+            <span className="loading-spinner" />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TaskAttachmentThumb({
+  accessToken,
+  attachment,
+  isDeleting,
+  onDelete,
+}: {
+  accessToken: string;
+  attachment: TaskAttachment;
+  isDeleting: boolean;
+  onDelete: () => void;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let nextObjectUrl = "";
+
+    setLoadError(false);
+    setObjectUrl(null);
+    getTaskAttachmentBlob(attachment.contentUrl, accessToken)
+      .then((blob) => {
+        if (cancelled) {
+          return;
+        }
+        nextObjectUrl = URL.createObjectURL(blob);
+        setObjectUrl(nextObjectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadError(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (nextObjectUrl) {
+        URL.revokeObjectURL(nextObjectUrl);
+      }
+    };
+  }, [accessToken, attachment.contentUrl]);
+
+  return (
+    <figure className="attachment-tile">
+      {objectUrl ? (
+        <img src={objectUrl} alt={attachment.originalFilename} />
+      ) : (
+        <div className="attachment-placeholder">
+          {loadError ? "加载失败" : <span className="loading-spinner" />}
+        </div>
+      )}
+      <figcaption title={attachment.originalFilename}>
+        {attachment.originalFilename}
+      </figcaption>
+      <button
+        className="icon-button tiny-icon-button attachment-delete"
+        type="button"
+        aria-label="删除图片"
+        disabled={isDeleting}
+        onClick={onDelete}
+      >
+        {isDeleting ? <span className="loading-spinner" /> : <TrashIcon />}
+      </button>
+    </figure>
   );
 }
 
@@ -2846,6 +3161,26 @@ function MicIcon({ active }: { active: boolean }) {
       <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
       <path d="M12 18v3" />
       <path d="M8 21h8" />
+    </svg>
+  );
+}
+
+function ImageIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="8" cy="10" r="1.6" />
+      <path d="m21 15-4.5-4.5L9 18" />
+      <path d="m13 14-2-2-5 5" />
     </svg>
   );
 }
@@ -3031,6 +3366,72 @@ function applyOptimisticOccurrenceUpdate(
       done: nextItems
         .filter((item) => item.status === "done")
         .sort(compareOccurrences),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
+function applyAttachmentAdd(
+  data: RangeTodos | undefined,
+  occurrenceId: string,
+  attachment: TaskAttachment,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const days = data.days.map((day) => {
+    const updateItems = (items: TodoOccurrence[]) =>
+      items.map((item) => {
+        if (item.id !== occurrenceId) {
+          return item;
+        }
+        changed = true;
+        if (item.attachments.some((current) => current.id === attachment.id)) {
+          return item;
+        }
+        return { ...item, attachments: [...item.attachments, attachment] };
+      });
+
+    return {
+      ...day,
+      pending: updateItems(day.pending),
+      done: updateItems(day.done),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
+function applyAttachmentRemove(
+  data: RangeTodos | undefined,
+  occurrenceId: string,
+  attachmentId: string,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const days = data.days.map((day) => {
+    const updateItems = (items: TodoOccurrence[]) =>
+      items.map((item) => {
+        if (item.id !== occurrenceId) {
+          return item;
+        }
+        changed = true;
+        return {
+          ...item,
+          attachments: item.attachments.filter((attachment) => attachment.id !== attachmentId),
+        };
+      });
+
+    return {
+      ...day,
+      pending: updateItems(day.pending),
+      done: updateItems(day.done),
     };
   });
 

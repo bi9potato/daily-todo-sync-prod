@@ -1,10 +1,12 @@
 from datetime import date, datetime
 from uuid import UUID
 
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from ninja import Router, Schema
+from ninja import File, Router, Schema
 from ninja.errors import HttpError
+from ninja.files import UploadedFile
 
 from accounts.authentication import bearer_auth
 from integrations.services import (
@@ -12,10 +14,12 @@ from integrations.services import (
     sync_occurrence_to_google_calendar,
 )
 
-from .models import Task, TodoOccurrence
+from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
+    add_task_attachment,
     clear_completed,
     create_task_for_day,
+    delete_task_attachment,
     delete_occurrence,
     ensure_day,
     ensure_range,
@@ -24,6 +28,15 @@ from .services import (
 )
 
 router = Router(tags=["todos"])
+
+
+class TaskAttachmentOut(Schema):
+    id: str
+    originalFilename: str
+    contentType: str
+    sizeBytes: int
+    createdAt: str
+    contentUrl: str
 
 
 class TodoOccurrenceOut(Schema):
@@ -45,6 +58,7 @@ class TodoOccurrenceOut(Schema):
     reminderAt: str | None
     isRecurring: bool
     repeat: dict
+    attachments: list[TaskAttachmentOut]
 
 
 class DayTodosOut(Schema):
@@ -129,8 +143,23 @@ def reminder_at(occurrence: TodoOccurrence) -> str | None:
     return timezone.make_aware(value, current_timezone).isoformat()
 
 
+def serialize_attachment(attachment: TaskAttachment) -> dict:
+    return {
+        "id": str(attachment.id),
+        "originalFilename": attachment.original_filename,
+        "contentType": attachment.content_type,
+        "sizeBytes": attachment.size_bytes,
+        "createdAt": attachment.created_at.isoformat(),
+        "contentUrl": f"/api/attachments/{attachment.id}/content",
+    }
+
+
 def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
     task = occurrence.task
+    attachments = sorted(
+        task.attachments.all(),
+        key=lambda attachment: attachment.created_at,
+    )
     return {
         "id": str(occurrence.id),
         "taskId": str(occurrence.task_id),
@@ -159,12 +188,14 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
             "daysOfWeek": task.recurrence_days_of_week,
             "until": task.recurrence_until.isoformat() if task.recurrence_until else None,
         },
+        "attachments": [serialize_attachment(attachment) for attachment in attachments],
     }
 
 
 def serialize_day(user, day: date) -> dict:
     occurrences = (
         TodoOccurrence.objects.select_related("task")
+        .prefetch_related("task__attachments")
         .filter(
             user=user,
             task_date=day,
@@ -260,6 +291,42 @@ def remove_occurrence(request, occurrence_id: UUID):
     )
     delete_occurrence(request.auth, occurrence_id)
     delete_google_calendar_event_for_occurrence(request.auth, occurrence)
+    return 204, None
+
+
+@router.post(
+    "/occurrences/{occurrence_id}/attachments",
+    response={201: TaskAttachmentOut},
+    auth=bearer_auth,
+)
+def upload_attachment(
+    request,
+    occurrence_id: UUID,
+    file: UploadedFile = File(...),
+):
+    try:
+        attachment = add_task_attachment(request.auth, occurrence_id, file)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+    return 201, serialize_attachment(attachment)
+
+
+@router.get("/attachments/{attachment_id}/content", auth=bearer_auth)
+def get_attachment_content(request, attachment_id: UUID):
+    attachment = get_object_or_404(TaskAttachment, id=attachment_id, user=request.auth)
+    response = FileResponse(
+        attachment.file.open("rb"),
+        content_type=attachment.content_type,
+        filename=attachment.original_filename,
+        as_attachment=False,
+    )
+    response["Cache-Control"] = "private, max-age=300"
+    return response
+
+
+@router.delete("/attachments/{attachment_id}", response={204: None}, auth=bearer_auth)
+def remove_attachment(request, attachment_id: UUID):
+    delete_task_attachment(request.auth, attachment_id)
     return 204, None
 
 

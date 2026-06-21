@@ -25,11 +25,10 @@ class RefreshToken(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["user", "revoked_at"]),
-            models.Index(fields=["expires_at"]),
+            models.Index(fields=["user", "revoked_at"], name="accounts_re_user_id_18e853_idx"),
+            models.Index(fields=["expires_at"], name="accounts_re_expires_22b988_idx"),
         ]
 
     @staticmethod
     def hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
-

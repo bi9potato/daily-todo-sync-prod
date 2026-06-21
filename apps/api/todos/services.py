@@ -1,11 +1,21 @@
 from datetime import date, timedelta, time
+from pathlib import Path
 from uuid import UUID
 
 from django.db import IntegrityError, transaction
 from django.db.models import Max, Min
+from django.http import Http404
 from django.utils import timezone
 
-from .models import Task, TodoOccurrence
+from .models import Task, TaskAttachment, TodoOccurrence
+
+MAX_ATTACHMENT_SIZE_BYTES = 8 * 1024 * 1024
+ALLOWED_ATTACHMENT_TYPES = {
+    "image/gif": {".gif"},
+    "image/jpeg": {".jpg", ".jpeg"},
+    "image/png": {".png"},
+    "image/webp": {".webp"},
+}
 
 
 def _next_sort_order(user, task_date: date) -> int:
@@ -23,6 +33,41 @@ def _normalized_weekdays(days: list[int] | None) -> list[int]:
     if not days:
         return []
     return sorted({int(day) for day in days if 0 <= int(day) <= 6})
+
+
+def _is_valid_image_signature(content_type: str, header: bytes) -> bool:
+    if content_type == "image/jpeg":
+        return header.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/gif":
+        return header.startswith((b"GIF87a", b"GIF89a"))
+    if content_type == "image/webp":
+        return header.startswith(b"RIFF") and header[8:12] == b"WEBP"
+    return False
+
+
+def _validate_attachment_file(uploaded_file) -> tuple[str, str, int]:
+    original_filename = Path(uploaded_file.name or "image").name[:255] or "image"
+    extension = Path(original_filename).suffix.lower()
+    content_type = (getattr(uploaded_file, "content_type", "") or "").lower()
+    size = int(getattr(uploaded_file, "size", 0) or 0)
+
+    if content_type not in ALLOWED_ATTACHMENT_TYPES:
+        raise ValueError("Only JPEG, PNG, WebP, and GIF images can be uploaded.")
+    if extension not in ALLOWED_ATTACHMENT_TYPES[content_type]:
+        raise ValueError("Image extension does not match the uploaded file type.")
+    if size <= 0:
+        raise ValueError("Uploaded image is empty.")
+    if size > MAX_ATTACHMENT_SIZE_BYTES:
+        raise ValueError("Image is too large. Please upload an image under 8 MB.")
+
+    header = uploaded_file.read(16)
+    uploaded_file.seek(0)
+    if not _is_valid_image_signature(content_type, header):
+        raise ValueError("Uploaded file does not look like a supported image.")
+
+    return original_filename, content_type, size
 
 
 def _months_between(start: date, target: date) -> int:
@@ -372,3 +417,33 @@ def reorder_day(user, task_date: date, ordered_ids: list[UUID]) -> None:
             continue
         occurrence.sort_order = index * 1000
         occurrence.save(update_fields=["sort_order", "updated_at"])
+
+
+@transaction.atomic
+def add_task_attachment(user, occurrence_id: UUID, uploaded_file) -> TaskAttachment:
+    occurrence = TodoOccurrence.objects.select_related("task").get(
+        id=occurrence_id,
+        user=user,
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
+    )
+    original_filename, content_type, size = _validate_attachment_file(uploaded_file)
+    attachment = TaskAttachment(
+        user=user,
+        task=occurrence.task,
+        original_filename=original_filename,
+        content_type=content_type,
+        size_bytes=size,
+    )
+    attachment.file.save(original_filename, uploaded_file, save=True)
+    occurrence.version += 1
+    occurrence.save(update_fields=["version", "updated_at"])
+    return attachment
+
+
+@transaction.atomic
+def delete_task_attachment(user, attachment_id: UUID) -> None:
+    attachment = TaskAttachment.objects.filter(id=attachment_id, user=user).first()
+    if attachment is None:
+        raise Http404("Attachment not found.")
+    attachment.delete()
