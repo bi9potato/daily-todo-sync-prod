@@ -76,7 +76,7 @@ type ReorderContext = {
 
 const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
 const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
-const LONG_PRESS_TO_DRAG_MS = 420;
+const LONG_PRESS_TO_DRAG_MS = 320;
 const LONG_PRESS_MOVE_CANCEL_PX = 10;
 
 const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
@@ -231,9 +231,9 @@ function TodoScreen({
   const today = useMemo(() => toDateKey(new Date()), []);
   const [selectedDate, setSelectedDate] = useState(today);
   const [viewMode, setViewMode] = useState<ViewMode>("day");
-  const [isAddOpen, setIsAddOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarHovered, setIsSidebarHovered] = useState(false);
+  const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -279,6 +279,9 @@ function TodoScreen({
   const draggedTask =
     dragState?.active ? allTasks.find((item) => item.id === dragState.id) ?? null : null;
   const isMyDay = viewMode === "day" && selectedDate === today;
+  const isSidebarExpanded =
+    isSidebarPinned || isSidebarHovered || isMobileSidebarOpen;
+  const isSidebarCollapsed = !isSidebarExpanded;
 
   const createMutation = useMutation({
     mutationFn: (payload: {
@@ -299,7 +302,6 @@ function TodoScreen({
         accessToken,
       ),
     onSuccess: () => {
-      setIsAddOpen(false);
       queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
@@ -617,14 +619,34 @@ function TodoScreen({
         aria-label="关闭侧边栏"
         onClick={() => setIsMobileSidebarOpen(false)}
       />
-      <aside className="sidebar surface-panel">
+      <aside
+        className="sidebar surface-panel"
+        onMouseEnter={() => setIsSidebarHovered(true)}
+        onMouseLeave={() => {
+          setIsSidebarHovered(false);
+          setIsAccountMenuOpen(false);
+        }}
+      >
         <div className="brand-block">
-          <div className="account-menu">
+          <div
+            className="account-menu"
+            onBlur={(event) => {
+              const nextFocus = event.relatedTarget;
+              if (
+                !(nextFocus instanceof Node) ||
+                !event.currentTarget.contains(nextFocus)
+              ) {
+                setIsAccountMenuOpen(false);
+              }
+            }}
+            onFocus={() => setIsAccountMenuOpen(true)}
+            onMouseEnter={() => setIsAccountMenuOpen(true)}
+            onMouseLeave={() => setIsAccountMenuOpen(false)}
+          >
             <button
               className="account-trigger"
               type="button"
               aria-expanded={isAccountMenuOpen}
-              onClick={() => setIsAccountMenuOpen((value) => !value)}
             >
               <span className="brand-mark">D</span>
               <span className="sidebar-label account-copy">
@@ -647,12 +669,15 @@ function TodoScreen({
             ) : null}
           </div>
           <button
-            className="sidebar-icon-button sidebar-collapse-button"
+            className={`sidebar-icon-button sidebar-pin-button ${
+              isSidebarPinned ? "is-pinned" : ""
+            }`}
             type="button"
-            aria-label={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            onClick={() => setIsSidebarCollapsed((value) => !value)}
+            aria-label={isSidebarPinned ? "取消固定侧边栏" : "固定侧边栏"}
+            aria-pressed={isSidebarPinned}
+            onClick={() => setIsSidebarPinned((value) => !value)}
           >
-            <PanelIcon />
+            <PinIcon pinned={isSidebarPinned} />
           </button>
           <button
             className="sidebar-icon-button sidebar-close-button"
@@ -663,11 +688,6 @@ function TodoScreen({
             <CloseIcon />
           </button>
         </div>
-
-        <button className="sidebar-back" type="button" onClick={openMyDay}>
-          <ArrowLeftIcon />
-          <span>返回今天</span>
-        </button>
 
         <nav className="sidebar-nav" aria-label="任务视图">
           <button
@@ -760,14 +780,11 @@ function TodoScreen({
         </header>
 
         <div className="workspace-actions">
-          <button
-            className="add-task-button"
-            type="button"
-            aria-label="新增任务"
-            onClick={() => setIsAddOpen(true)}
-          >
-            +
-          </button>
+          <QuickAddTask
+            date={selectedDate}
+            isSaving={createMutation.isPending}
+            onSubmit={(payload) => createMutation.mutate(payload)}
+          />
         </div>
 
         {rangeQuery.isLoading ? <p className="empty-state is-visible">加载中...</p> : null}
@@ -811,15 +828,6 @@ function TodoScreen({
           <GripIcon />
           <span>{draggedTask.text}</span>
         </div>
-      ) : null}
-
-      {isAddOpen ? (
-        <AddTaskModal
-          date={selectedDate}
-          isSaving={createMutation.isPending}
-          onClose={() => setIsAddOpen(false)}
-          onSubmit={(payload) => createMutation.mutate(payload)}
-        />
       ) : null}
 
       {selectedTask ? (
@@ -1003,15 +1011,13 @@ function TodoCard({
   );
 }
 
-function AddTaskModal({
+function QuickAddTask({
   date,
   isSaving,
-  onClose,
   onSubmit,
 }: {
   date: string;
   isSaving: boolean;
-  onClose: () => void;
   onSubmit: (payload: {
     date: string;
     text: string;
@@ -1020,89 +1026,44 @@ function AddTaskModal({
     repeat: RepeatRule;
   }) => void;
 }) {
-  const [taskDate, setTaskDate] = useState(date);
   const [text, setText] = useState("");
-  const [note, setNote] = useState("");
-  const [reminderTime, setReminderTime] = useState("");
-  const [repeatKind, setRepeatKind] = useState<RepeatKind>("none");
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!text.trim()) {
+    const trimmedText = text.trim();
+    if (!trimmedText || isSaving) {
       return;
     }
     onSubmit({
-      date: taskDate,
-      text,
-      note,
-      reminderTime: reminderTime || null,
-      repeat: repeatRuleForDate(repeatKind, taskDate),
+      date,
+      text: trimmedText,
+      note: "",
+      reminderTime: null,
+      repeat: repeatRuleForDate("none", date),
     });
+    setText("");
   }
 
   return (
-    <ModalShell title="新增任务" onClose={onClose}>
-      <form className="modal-form" onSubmit={submit}>
-        <label>
-          任务内容
-          <input
-            autoFocus
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            maxLength={280}
-            required
-          />
-        </label>
-        <label>
-          备注
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="补充细节、链接、上下文..."
-            rows={4}
-          />
-        </label>
-        <div className="field-grid">
-          <label>
-            日期
-            <input
-              type="date"
-              value={taskDate}
-              onChange={(event) => setTaskDate(event.target.value)}
-            />
-          </label>
-          <label>
-            提醒
-            <input
-              type="time"
-              value={reminderTime}
-              onChange={(event) => setReminderTime(event.target.value)}
-            />
-          </label>
-          <label>
-            重复
-            <select
-              value={repeatKind}
-              onChange={(event) => setRepeatKind(event.target.value as RepeatKind)}
-            >
-              {REPEAT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>
-            取消
-          </button>
-          <button className="primary-button" disabled={isSaving} type="submit">
-            {isSaving ? "保存中..." : "保存"}
-          </button>
-        </div>
-      </form>
-    </ModalShell>
+    <form className="quick-add-form surface-panel" onSubmit={submit}>
+      <span className="quick-add-title">添加任务</span>
+      <input
+        aria-label="添加任务"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder="输入任务，按 Enter 添加"
+        maxLength={280}
+        disabled={isSaving}
+      />
+      <button
+        className="quick-add-submit"
+        type="submit"
+        aria-label="提交任务"
+        disabled={isSaving || !text.trim()}
+      >
+        +
+      </button>
+    </form>
   );
 }
 
@@ -1275,10 +1236,10 @@ function TrashIcon() {
   );
 }
 
-function ArrowLeftIcon() {
+function PinIcon({ pinned }: { pinned: boolean }) {
   return (
     <svg
-      className="mini-icon"
+      className={`mini-icon pin-icon ${pinned ? "is-pinned" : ""}`}
       aria-hidden="true"
       viewBox="0 0 24 24"
       fill="none"
@@ -1287,26 +1248,9 @@ function ArrowLeftIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M19 12H5" />
-      <path d="M12 19l-7-7 7-7" />
-    </svg>
-  );
-}
-
-function PanelIcon() {
-  return (
-    <svg
-      className="mini-icon"
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="4" y="5" width="16" height="14" rx="2" />
-      <path d="M9 5v14" />
+      <path d="M12 17v5" />
+      <path d="M5 17h14" />
+      <path d="M8 3h8l-1 8 3 3v3H6v-3l3-3Z" />
     </svg>
   );
 }
