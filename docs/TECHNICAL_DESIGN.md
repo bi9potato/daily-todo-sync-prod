@@ -617,13 +617,14 @@ Daily Todo Sync -> Google Calendar
 
 暂时不做双向同步。Google Calendar 中的修改、删除、拖动时间，不会反向修改 Todo 数据。
 
-单向同步阶段建议实现：
+当前单向同步实现：
 
 - 用户在 Settings 中连接 Google 账号。
 - 后端保存 OAuth token 和 refresh token。
-- 任务有提醒时间时，可创建或更新 Google Calendar event。
-- 本地数据库保存 `google_calendar_id`、`google_event_id`、`last_synced_at`、`sync_status`。
-- 删除 Todo 时，第一版建议取消或删除对应 Google event，但不处理 Google 端主动变化。
-- 重复任务后续映射为 Google Calendar RRULE。
+- 任务有提醒时间时，创建或更新 Google Calendar event。
+- 本地数据库保存 Google Calendar 连接和 event link。
+- 删除 Todo 或移除提醒时间时，删除对应 Google event。
+- 重复任务会映射为 Google Calendar RRULE。
+- 支持 Settings 中手动同步未来 45 天内有提醒时间的任务。
 
 这个阶段不需要 Google Calendar push notification，也不需要增量拉取 `syncToken`。这些能力留到未来双向同步或日历导入时再做。

@@ -24,7 +24,16 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["daily_todo", "daily_todo.*", "accounts", "accounts.*", "todos", "todos.*"]
+include = [
+    "daily_todo",
+    "daily_todo.*",
+    "accounts",
+    "accounts.*",
+    "integrations",
+    "integrations.*",
+    "todos",
+    "todos.*",
+]
 
 [tool.ruff]
 line-length = 100

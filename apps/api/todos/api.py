@@ -7,6 +7,10 @@ from ninja import Router, Schema
 from ninja.errors import HttpError
 
 from accounts.authentication import bearer_auth
+from integrations.services import (
+    delete_google_calendar_event_for_occurrence,
+    sync_occurrence_to_google_calendar,
+)
 
 from .models import Task, TodoOccurrence
 from .services import (
@@ -217,6 +221,7 @@ def create_task(request, day: date, payload: TaskCreateIn):
         reminder_time=parse_reminder_time(payload.reminderTime),
         **recurrence_payload(payload.repeat),
     )
+    sync_occurrence_to_google_calendar(request.auth, occurrence)
     return 201, serialize_occurrence(occurrence)
 
 
@@ -240,12 +245,13 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
         set_reminder_time="reminderTime" in data,
         **(recurrence_payload(payload.repeat) if payload.repeat is not None else {}),
     )
+    sync_occurrence_to_google_calendar(request.auth, occurrence)
     return serialize_occurrence(occurrence)
 
 
 @router.delete("/occurrences/{occurrence_id}", response={204: None}, auth=bearer_auth)
 def remove_occurrence(request, occurrence_id: UUID):
-    get_object_or_404(
+    occurrence = get_object_or_404(
         TodoOccurrence,
         id=occurrence_id,
         user=request.auth,
@@ -253,6 +259,7 @@ def remove_occurrence(request, occurrence_id: UUID):
         task__deleted_at__isnull=True,
     )
     delete_occurrence(request.auth, occurrence_id)
+    delete_google_calendar_event_for_occurrence(request.auth, occurrence)
     return 204, None
 
 

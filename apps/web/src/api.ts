@@ -59,6 +59,28 @@ export type TaskCreatePayload = {
   repeat?: RepeatRule;
 };
 
+export type GoogleCalendarStatus = {
+  configured: boolean;
+  connected: boolean;
+  syncEnabled: boolean;
+  calendarId: string;
+  connectedAt: string | null;
+  lastSyncAt: string | null;
+  lastError: string;
+  syncedCount: number;
+  failedCount: number;
+};
+
+export type GoogleCalendarAuthUrl = {
+  authorizationUrl: string;
+};
+
+export type GoogleCalendarSyncResult = {
+  start: string;
+  end: string;
+  synced: number;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 function formatErrorDetail(detail: unknown): string | null {
@@ -207,6 +229,44 @@ export function deleteOccurrence(id: string, accessToken: string) {
     `/occurrences/${id}`,
     {
       method: "DELETE",
+    },
+    accessToken,
+  );
+}
+
+export function getGoogleCalendarStatus(accessToken: string) {
+  return request<GoogleCalendarStatus>(
+    "/integrations/google-calendar/status",
+    {},
+    accessToken,
+  );
+}
+
+export function connectGoogleCalendar(accessToken: string) {
+  return request<GoogleCalendarAuthUrl>(
+    "/integrations/google-calendar/connect",
+    {
+      method: "POST",
+    },
+    accessToken,
+  );
+}
+
+export function disconnectGoogleCalendar(accessToken: string) {
+  return request<void>(
+    "/integrations/google-calendar/disconnect",
+    {
+      method: "POST",
+    },
+    accessToken,
+  );
+}
+
+export function syncGoogleCalendar(accessToken: string) {
+  return request<GoogleCalendarSyncResult>(
+    "/integrations/google-calendar/sync",
+    {
+      method: "POST",
     },
     accessToken,
   );

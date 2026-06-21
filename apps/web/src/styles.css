@@ -1372,6 +1372,95 @@ h2 {
   flex: 1;
 }
 
+.settings-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.settings-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.58);
+  padding: 14px;
+}
+
+.settings-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.settings-card h3 {
+  margin: 0;
+}
+
+.integration-status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.integration-status.is-connected {
+  border-color: rgba(44, 87, 69, 0.3);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.integration-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.integration-stats span {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--muted);
+  min-width: 0;
+  padding: 10px;
+}
+
+.integration-stats strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-note,
+.settings-error {
+  border-radius: var(--radius);
+  padding: 10px 11px;
+}
+
+.settings-note {
+  background: rgba(232, 240, 235, 0.68);
+  color: var(--muted);
+}
+
+.settings-error {
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 @keyframes liftIn {
   from {
     opacity: 0;
@@ -1654,6 +1743,10 @@ h2 {
   }
 
   .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .integration-stats {
     grid-template-columns: 1fr;
   }
 

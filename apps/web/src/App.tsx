@@ -17,13 +17,19 @@ import {
 import {
   createTask,
   deleteOccurrence,
+  disconnectGoogleCalendar,
+  getGoogleCalendarStatus,
   getMe,
   getRange,
   login,
   register,
   reorderDay,
+  connectGoogleCalendar,
+  syncGoogleCalendar,
   updateOccurrence,
   type DayTodos,
+  type GoogleCalendarStatus,
+  type GoogleCalendarSyncResult,
   type RangeTodos,
   type RepeatKind,
   type RepeatRule,
@@ -336,6 +342,7 @@ function TodoScreen({
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const pendingDragRef = useRef<PendingDrag | null>(null);
@@ -370,6 +377,12 @@ function TodoScreen({
   const rangeQuery = useQuery({
     queryKey: ["range", visibleRange.start, visibleRange.end],
     queryFn: () => getRange(visibleRange.start, visibleRange.end, accessToken),
+  });
+
+  const googleCalendarStatusQuery = useQuery({
+    queryKey: ["google-calendar-status"],
+    queryFn: () => getGoogleCalendarStatus(accessToken),
+    enabled: isSettingsOpen,
   });
 
   const daysByDate = useMemo(() => {
@@ -455,6 +468,27 @@ function TodoScreen({
       });
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
+  });
+
+  const connectGoogleCalendarMutation = useMutation({
+    mutationFn: () => connectGoogleCalendar(accessToken),
+    onSuccess: (payload) => {
+      window.location.href = payload.authorizationUrl;
+    },
+  });
+
+  const disconnectGoogleCalendarMutation = useMutation({
+    mutationFn: () => disconnectGoogleCalendar(accessToken),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
+    },
+  });
+
+  const syncGoogleCalendarMutation = useMutation({
+    mutationFn: () => syncGoogleCalendar(accessToken),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
+    },
   });
 
   function openMyDay() {
@@ -766,9 +800,16 @@ function TodoScreen({
 
             {isAccountMenuOpen ? (
               <div className="account-dropdown">
-                <button className="account-menu-item is-placeholder" type="button">
+                <button
+                  className="account-menu-item"
+                  type="button"
+                  onClick={() => {
+                    setIsSettingsOpen(true);
+                    setIsAccountMenuOpen(false);
+                  }}
+                >
                   <span>Settings</span>
-                  <small>占位，稍后接入</small>
+                  <small>连接日历与同步设置</small>
                 </button>
                 <button className="account-menu-item danger-menu-item" type="button" onClick={onLogout}>
                   登出账户
@@ -977,6 +1018,27 @@ function TodoScreen({
           onClose={() => setSelectedTaskId(null)}
           onDelete={() => deleteMutation.mutate(selectedTask.id)}
           onSave={(changes) => updateMutation.mutate({ id: selectedTask.id, ...changes })}
+        />
+      ) : null}
+
+      {isSettingsOpen ? (
+        <SettingsModal
+          status={googleCalendarStatusQuery.data ?? null}
+          syncResult={syncGoogleCalendarMutation.data ?? null}
+          isConnecting={connectGoogleCalendarMutation.isPending}
+          isDisconnecting={disconnectGoogleCalendarMutation.isPending}
+          isLoading={googleCalendarStatusQuery.isLoading}
+          isSyncing={syncGoogleCalendarMutation.isPending}
+          error={
+            googleCalendarStatusQuery.error ??
+            connectGoogleCalendarMutation.error ??
+            disconnectGoogleCalendarMutation.error ??
+            syncGoogleCalendarMutation.error
+          }
+          onClose={() => setIsSettingsOpen(false)}
+          onConnect={() => connectGoogleCalendarMutation.mutate()}
+          onDisconnect={() => disconnectGoogleCalendarMutation.mutate()}
+          onSync={() => syncGoogleCalendarMutation.mutate()}
         />
       ) : null}
     </main>
@@ -1334,6 +1396,142 @@ function QualityMeter({
         />
       </div>
     </div>
+  );
+}
+
+function SettingsModal({
+  error,
+  isConnecting,
+  isDisconnecting,
+  isLoading,
+  isSyncing,
+  onClose,
+  onConnect,
+  onDisconnect,
+  onSync,
+  status,
+  syncResult,
+}: {
+  error: Error | null;
+  isConnecting: boolean;
+  isDisconnecting: boolean;
+  isLoading: boolean;
+  isSyncing: boolean;
+  onClose: () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onSync: () => void;
+  status: GoogleCalendarStatus | null;
+  syncResult: GoogleCalendarSyncResult | null;
+}) {
+  const isConnected = Boolean(status?.connected);
+  const isConfigured = Boolean(status?.configured);
+
+  return (
+    <ModalShell title="Settings" onClose={onClose}>
+      <div className="settings-body">
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="eyebrow">Google Calendar</p>
+              <h3>单向同步</h3>
+            </div>
+            <span
+              className={`integration-status ${
+                isConnected ? "is-connected" : "is-muted"
+              }`}
+            >
+              {isLoading
+                ? "检查中"
+                : isConnected
+                  ? "已连接"
+                  : isConfigured
+                    ? "未连接"
+                    : "未配置"}
+            </span>
+          </div>
+
+          <p className="muted">
+            连接后，有提醒时间的任务会写入 Google Calendar。Google Calendar
+            里的修改不会反向覆盖 Todo。
+          </p>
+
+          {status ? (
+            <div className="integration-stats">
+              <span>
+                日历
+                <strong>{status.calendarId}</strong>
+              </span>
+              <span>
+                已同步
+                <strong>{status.syncedCount}</strong>
+              </span>
+              <span>
+                失败
+                <strong>{status.failedCount}</strong>
+              </span>
+            </div>
+          ) : null}
+
+          {!isConfigured ? (
+            <p className="settings-note">
+              服务器还缺少 Google OAuth 环境变量：
+              `GOOGLE_CALENDAR_CLIENT_ID`、`GOOGLE_CALENDAR_CLIENT_SECRET`。
+            </p>
+          ) : null}
+
+          {status?.lastSyncAt ? (
+            <p className="settings-note">
+              上次同步：{new Date(status.lastSyncAt).toLocaleString()}
+            </p>
+          ) : null}
+
+          {syncResult ? (
+            <p className="settings-note">
+              刚刚同步 {syncResult.synced} 个任务，范围 {syncResult.start} -{" "}
+              {syncResult.end}。
+            </p>
+          ) : null}
+
+          {status?.lastError ? (
+            <p className="settings-error">{status.lastError}</p>
+          ) : null}
+          {error ? <p className="settings-error">{error.message}</p> : null}
+
+          <div className="settings-actions">
+            {!isConnected ? (
+              <button
+                className="primary-button"
+                type="button"
+                disabled={!isConfigured || isConnecting}
+                onClick={onConnect}
+              >
+                {isConnecting ? "跳转中..." : "连接 Google Calendar"}
+              </button>
+            ) : (
+              <>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={isSyncing}
+                  onClick={onSync}
+                >
+                  {isSyncing ? "同步中..." : "同步未来 45 天"}
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={isDisconnecting}
+                  onClick={onDisconnect}
+                >
+                  {isDisconnecting ? "断开中..." : "断开连接"}
+                </button>
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+    </ModalShell>
   );
 }
 

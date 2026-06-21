@@ -45,7 +45,27 @@ CSRF_TRUSTED_ORIGINS=https://68.183.180.19.sslip.io
 TZ=Asia/Shanghai
 APP_HOST=68.183.180.19.sslip.io
 APP_IP=68.183.180.19
+FRONTEND_URL=https://68.183.180.19.sslip.io
+GOOGLE_CALENDAR_CLIENT_ID=
+GOOGLE_CALENDAR_CLIENT_SECRET=
+GOOGLE_CALENDAR_REDIRECT_URI=https://68.183.180.19.sslip.io/api/integrations/google-calendar/callback
+GOOGLE_CALENDAR_DEFAULT_ID=primary
+GOOGLE_CALENDAR_EVENT_DURATION_MINUTES=30
 ```
+
+Google Calendar 同步需要先在 Google Cloud Console 中：
+
+1. 启用 Google Calendar API。
+2. 配置 OAuth consent screen。
+3. 创建 OAuth Client，类型选择 Web application。
+4. Authorized redirect URI 填：
+
+```text
+https://68.183.180.19.sslip.io/api/integrations/google-calendar/callback
+```
+
+然后把 Client ID 和 Client Secret 写入服务器 `/opt/daily-todo-sync/.env`。
+这两个值不要提交到 GitHub。
 
 ## 4. GitHub Secrets
 
@@ -86,4 +106,3 @@ docker compose -f compose.yml logs caddy --tail=100
 https://68.183.180.19.sslip.io
 https://68.183.180.19.sslip.io/api/health
 ```
-
