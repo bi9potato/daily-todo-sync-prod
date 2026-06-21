@@ -313,6 +313,8 @@ def upload_attachment(
         attachment = add_task_attachment(request.auth, occurrence_id, file)
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
+    if attachment.occurrence_id:
+        sync_occurrence_to_google_calendar(request.auth, attachment.occurrence)
     return 201, serialize_attachment(attachment)
 
 
@@ -331,13 +333,27 @@ def get_attachment_content(request, attachment_id: UUID):
 
 @router.delete("/attachments/{attachment_id}", response={204: None}, auth=bearer_auth)
 def remove_attachment(request, attachment_id: UUID):
+    attachment = get_object_or_404(
+        TaskAttachment.objects.select_related("occurrence"),
+        id=attachment_id,
+        user=request.auth,
+    )
+    occurrence = attachment.occurrence
     delete_task_attachment(request.auth, attachment_id)
+    if occurrence is not None:
+        sync_occurrence_to_google_calendar(request.auth, occurrence)
     return 204, None
 
 
-@router.patch("/occurrences/{occurrence_id}/attachments/reorder", response={204: None}, auth=bearer_auth)
+@router.patch(
+    "/occurrences/{occurrence_id}/attachments/reorder",
+    response={204: None},
+    auth=bearer_auth,
+)
 def reorder_attachments(request, occurrence_id: UUID, payload: ReorderIn):
     reorder_task_attachments(request.auth, occurrence_id, payload.orderedIds)
+    occurrence = get_object_or_404(TodoOccurrence, id=occurrence_id, user=request.auth)
+    sync_occurrence_to_google_calendar(request.auth, occurrence)
     return 204, None
 
 
