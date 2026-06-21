@@ -222,6 +222,7 @@ type UpdateOccurrencePayload = {
   text?: string;
   note?: string;
   pinned?: boolean;
+  isLongTerm?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
 };
@@ -725,6 +726,7 @@ function TodoScreen({
       queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
         applyAttachmentAdd(data, payload.occurrenceId, attachment),
       );
+      queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
 
@@ -734,7 +736,8 @@ function TodoScreen({
     AttachmentDeletePayload,
     AttachmentMutationContext
   >({
-    mutationFn: ({ attachmentId }) => deleteTaskAttachment(attachmentId, accessToken),
+    mutationFn: ({ attachmentId, occurrenceId }) =>
+      deleteTaskAttachment(attachmentId, accessToken, occurrenceId),
     onMutate: (payload) => {
       void queryClient.cancelQueries({ queryKey: ["range"] });
       const previousRanges = queryClient.getQueriesData<RangeTodos>({
@@ -752,6 +755,7 @@ function TodoScreen({
         queryClient.setQueryData(queryKey, data);
       });
     },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
   const reorderAttachmentsMutation = useMutation<
@@ -779,6 +783,7 @@ function TodoScreen({
         queryClient.setQueryData(queryKey, data);
       });
     },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
   function updateTaskDone(id: string, done: boolean) {
@@ -3160,6 +3165,7 @@ function TaskDetailsModal({
   onSave: (changes: {
     text: string;
     note: string;
+    isLongTerm: boolean;
     reminderTime: string | null;
     repeat: RepeatRule;
   }) => Promise<void>;
@@ -3167,6 +3173,7 @@ function TaskDetailsModal({
 }) {
   const [text, setText] = useState(item.text);
   const [note, setNote] = useState(item.note);
+  const [isLongTerm, setIsLongTerm] = useState(item.isLongTerm);
   const [reminderTime, setReminderTime] = useState(item.reminderTime ?? "");
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(item.repeat.kind);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
@@ -3175,6 +3182,16 @@ function TaskDetailsModal({
   const [localSaving, setLocalSaving] = useState(false);
   const [localUploading, setLocalUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setText(item.text);
+    setNote(item.note);
+    setIsLongTerm(item.isLongTerm);
+    setReminderTime(item.reminderTime ?? "");
+    setRepeatKind(item.repeat.kind);
+    setSaveMessage("");
+    setUploadMessage("");
+  }, [item.id, item.isLongTerm, item.note, item.reminderTime, item.repeat.kind, item.text]);
 
   async function uploadFiles(fileList: FileList | File[]) {
     const imageFiles = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
@@ -3231,6 +3248,7 @@ function TaskDetailsModal({
       await onSave({
         text,
         note,
+        isLongTerm,
         reminderTime: reminderTime || null,
         repeat: repeatRuleForDate(repeatKind, item.taskDate),
       });
@@ -3314,6 +3332,17 @@ function TaskDetailsModal({
           <label>
             状态
             <input value={item.status === "done" ? "已完成" : "待处理"} disabled />
+          </label>
+          <label className="checkbox-field">
+            长期任务
+            <span>
+              <input
+                type="checkbox"
+                checked={isLongTerm}
+                onChange={(event) => setIsLongTerm(event.target.checked)}
+              />
+              内容从当前日期开始同步到之后的任务
+            </span>
           </label>
           <label>
             提醒
@@ -4017,6 +4046,9 @@ function applyOptimisticOccurrenceUpdate(
       if ("pinned" in payload && payload.pinned !== undefined) {
         nextItem.isPinned = payload.pinned;
         nextItem.sortOrder = Date.now();
+      }
+      if ("isLongTerm" in payload && payload.isLongTerm !== undefined) {
+        nextItem.isLongTerm = payload.isLongTerm;
       }
       if ("reminderTime" in payload) {
         nextItem.reminderTime = payload.reminderTime ?? null;

@@ -9,12 +9,13 @@ class TaskAdmin(admin.ModelAdmin):
         "id",
         "user",
         "text",
+        "content_mode",
         "recurrence_kind",
         "reminder_time",
         "created_at",
         "deleted_at",
     )
-    list_filter = ("recurrence_kind", "deleted_at")
+    list_filter = ("content_mode", "recurrence_kind", "deleted_at")
     search_fields = ("text", "user__username", "user__email")
     readonly_fields = ("id", "root_id", "created_at", "updated_at")
 

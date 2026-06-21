@@ -1990,6 +1990,24 @@ h2 {
   gap: 12px;
 }
 
+.checkbox-field span {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(251, 253, 252, 0.92);
+  color: var(--ink);
+  padding: 0 12px;
+}
+
+.checkbox-field input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent);
+}
+
 .modal-actions {
   display: flex;
   align-items: center;

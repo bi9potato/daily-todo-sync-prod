@@ -40,6 +40,148 @@ def _next_attachment_sort_order(user, occurrence: TodoOccurrence) -> int:
     return (current_max or 0) + 1000
 
 
+def _next_task_attachment_sort_order(user, task: Task) -> int:
+    current_max = (
+        TaskAttachment.objects.filter(
+            user=user,
+            task=task,
+            occurrence__isnull=True,
+        ).aggregate(Max("sort_order"))["sort_order__max"]
+    )
+    return (current_max or 0) + 1000
+
+
+def _uses_future_content(task: Task) -> bool:
+    return task.content_mode == Task.ContentMode.FUTURE
+
+
+def _copy_task_level_attachments(user, source_task: Task, target_task: Task) -> dict[UUID, UUID]:
+    attachment_id_map: dict[UUID, UUID] = {}
+    for attachment in TaskAttachment.objects.filter(
+        user=user,
+        task=source_task,
+        occurrence__isnull=True,
+    ).order_by("sort_order", "created_at"):
+        copied = TaskAttachment.objects.create(
+            user=user,
+            task=target_task,
+            occurrence=None,
+            file=attachment.file.name,
+            original_filename=attachment.original_filename,
+            content_type=attachment.content_type,
+            size_bytes=attachment.size_bytes,
+            sort_order=attachment.sort_order,
+        )
+        attachment_id_map[attachment.id] = copied.id
+    return attachment_id_map
+
+
+def _copy_occurrence_attachments_to_task(user, occurrence: TodoOccurrence, task: Task) -> None:
+    existing_files = set(
+        TaskAttachment.objects.filter(
+            user=user,
+            task=task,
+            occurrence__isnull=True,
+        ).values_list("file", flat=True)
+    )
+    next_sort_order = _next_task_attachment_sort_order(user, task)
+    for attachment in TaskAttachment.objects.filter(
+        user=user,
+        occurrence=occurrence,
+    ).order_by("sort_order", "created_at"):
+        if attachment.file.name in existing_files:
+            continue
+        TaskAttachment.objects.create(
+            user=user,
+            task=task,
+            occurrence=None,
+            file=attachment.file.name,
+            original_filename=attachment.original_filename,
+            content_type=attachment.content_type,
+            size_bytes=attachment.size_bytes,
+            sort_order=next_sort_order,
+        )
+        next_sort_order += 1000
+
+
+def _copy_task_attachments_to_occurrence(user, task: Task, occurrence: TodoOccurrence) -> None:
+    existing_files = set(
+        TaskAttachment.objects.filter(
+            user=user,
+            occurrence=occurrence,
+        ).values_list("file", flat=True)
+    )
+    next_sort_order = _next_attachment_sort_order(user, occurrence)
+    for attachment in TaskAttachment.objects.filter(
+        user=user,
+        task=task,
+        occurrence__isnull=True,
+    ).order_by("sort_order", "created_at"):
+        if attachment.file.name in existing_files:
+            continue
+        TaskAttachment.objects.create(
+            user=user,
+            task=task,
+            occurrence=occurrence,
+            file=attachment.file.name,
+            original_filename=attachment.original_filename,
+            content_type=attachment.content_type,
+            size_bytes=attachment.size_bytes,
+            sort_order=next_sort_order,
+        )
+        next_sort_order += 1000
+
+
+def _split_task_for_future(user, occurrence: TodoOccurrence) -> tuple[Task, dict[UUID, UUID]]:
+    task = occurrence.task
+    if task.recurrence_kind == Task.RecurrenceKind.NONE:
+        return task, {}
+    if task.recurrence_start_date is None or occurrence.task_date <= task.recurrence_start_date:
+        return task, {}
+
+    previous_until = task.recurrence_until
+    new_task = Task.objects.create(
+        user=user,
+        root_id=task.root_id,
+        text=task.text,
+        note=task.note,
+        content_mode=task.content_mode,
+        reminder_time=task.reminder_time,
+        recurrence_kind=task.recurrence_kind,
+        recurrence_interval=task.recurrence_interval,
+        recurrence_days_of_week=task.recurrence_days_of_week,
+        recurrence_until=previous_until,
+        recurrence_start_date=occurrence.task_date,
+    )
+    attachment_id_map = _copy_task_level_attachments(user, task, new_task)
+
+    cutoff = occurrence.task_date - timedelta(days=1)
+    if previous_until is None or previous_until >= occurrence.task_date:
+        task.recurrence_until = cutoff
+        task.save(update_fields=["recurrence_until", "updated_at"])
+
+    TodoOccurrence.objects.filter(
+        user=user,
+        root_id=task.root_id,
+        task=task,
+        task_date__gte=occurrence.task_date,
+        deleted_at__isnull=True,
+    ).update(task=new_task, updated_at=timezone.now())
+    occurrence.task = new_task
+    occurrence.task_id = new_task.id
+    return new_task, attachment_id_map
+
+
+def _ensure_future_content_task(user, occurrence: TodoOccurrence) -> tuple[Task, dict[UUID, UUID]]:
+    task, attachment_id_map = _split_task_for_future(user, occurrence)
+    if task.content_mode != Task.ContentMode.FUTURE:
+        task.content_mode = Task.ContentMode.FUTURE
+        task.note = occurrence.note
+        task.save(update_fields=["content_mode", "note", "updated_at"])
+        _copy_occurrence_attachments_to_task(user, occurrence, task)
+    return task, attachment_id_map
+
+
 def _normalized_weekdays(days: list[int] | None) -> list[int]:
     if not days:
         return []
@@ -133,6 +275,7 @@ def create_task_for_day(
     text: str,
     *,
     note: str = "",
+    content_mode: str = Task.ContentMode.OCCURRENCE,
     reminder_time: time | None = None,
     recurrence_kind: str = Task.RecurrenceKind.NONE,
     recurrence_interval: int = 1,
@@ -140,9 +283,16 @@ def create_task_for_day(
     recurrence_until: date | None = None,
 ) -> TodoOccurrence:
     normalized_kind = recurrence_kind or Task.RecurrenceKind.NONE
+    normalized_content_mode = (
+        Task.ContentMode.FUTURE
+        if content_mode == Task.ContentMode.FUTURE
+        else Task.ContentMode.OCCURRENCE
+    )
     task = Task.objects.create(
         user=user,
         text=text.strip(),
+        note=note.strip() if normalized_content_mode == Task.ContentMode.FUTURE else "",
+        content_mode=normalized_content_mode,
         reminder_time=reminder_time,
         recurrence_kind=normalized_kind,
         recurrence_interval=max(recurrence_interval or 1, 1),
@@ -155,7 +305,7 @@ def create_task_for_day(
         task=task,
         root_id=task.root_id,
         task_date=task_date,
-        note=note.strip(),
+        note="" if normalized_content_mode == Task.ContentMode.FUTURE else note.strip(),
         source=TodoOccurrence.Source.MANUAL,
         sort_order=_next_sort_order(user, task_date),
     )
@@ -282,6 +432,7 @@ def update_occurrence(
     text: str | None = None,
     note: str | None = None,
     pinned: bool | None = None,
+    is_long_term: bool | None = None,
     reminder_time: time | None = None,
     set_reminder_time: bool = False,
     recurrence_kind: str | None = None,
@@ -296,13 +447,43 @@ def update_occurrence(
         task__deleted_at__isnull=True,
     )
 
+    content_changed = (
+        text is not None
+        or note is not None
+        or set_reminder_time
+        or recurrence_kind is not None
+        or recurrence_interval is not None
+        or recurrence_days_of_week is not None
+        or recurrence_until is not None
+    )
+    converted_to_occurrence_content = False
+    if is_long_term is True or (_uses_future_content(occurrence.task) and content_changed):
+        _ensure_future_content_task(user, occurrence)
+    elif is_long_term is False and _uses_future_content(occurrence.task):
+        task, _ = _split_task_for_future(user, occurrence)
+        occurrence.note = task.note
+        converted_to_occurrence_content = True
+        _copy_task_attachments_to_occurrence(user, task, occurrence)
+        task.note = ""
+        task.content_mode = Task.ContentMode.OCCURRENCE
+        task.save(update_fields=["note", "content_mode", "updated_at"])
+
+    use_future_content = _uses_future_content(occurrence.task)
+    occurrence_changed_fields = []
+    if converted_to_occurrence_content:
+        occurrence_changed_fields.append("note")
+
     if text is not None:
         stripped = text.strip()
         if stripped:
             occurrence.task.text = stripped
 
     if note is not None:
-        occurrence.note = note.strip()
+        if use_future_content:
+            occurrence.task.note = note.strip()
+        else:
+            occurrence.note = note.strip()
+            occurrence_changed_fields.append("note")
 
     if set_reminder_time:
         occurrence.task.reminder_time = reminder_time
@@ -317,21 +498,29 @@ def update_occurrence(
             occurrence.task_date if normalized_kind != Task.RecurrenceKind.NONE else None
         )
 
-    task_changed = any(
-        value is not None
-        for value in [
-            text,
-            reminder_time,
-            recurrence_kind,
-            recurrence_interval,
-            recurrence_until,
-        ]
-    ) or recurrence_days_of_week is not None or set_reminder_time
+    task_changed = (
+        is_long_term is not None
+        or (use_future_content and note is not None)
+        or any(
+            value is not None
+            for value in [
+                text,
+                reminder_time,
+                recurrence_kind,
+                recurrence_interval,
+                recurrence_until,
+            ]
+        )
+        or recurrence_days_of_week is not None
+        or set_reminder_time
+    )
 
     if task_changed:
         occurrence.task.save(
             update_fields=[
                 "text",
+                "note",
+                "content_mode",
                 "reminder_time",
                 "recurrence_kind",
                 "recurrence_interval",
@@ -376,9 +565,6 @@ def update_occurrence(
         occurrence.version += 1
         occurrence.save(update_fields=["version", "updated_at"])
 
-    occurrence_changed_fields = []
-    if note is not None:
-        occurrence_changed_fields.append("note")
     if pinned is not None:
         next_pinned = bool(pinned)
         if occurrence.is_pinned != next_pinned:
@@ -527,6 +713,28 @@ def add_task_attachment(user, occurrence_id: UUID, uploaded_file) -> TaskAttachm
         deleted_at__isnull=True,
         task__deleted_at__isnull=True,
     )
+    if _uses_future_content(occurrence.task):
+        task, _ = _ensure_future_content_task(user, occurrence)
+        original_filename, content_type, size = _validate_attachment_file(uploaded_file)
+        attachment = TaskAttachment(
+            user=user,
+            task=task,
+            occurrence=None,
+            original_filename=original_filename,
+            content_type=content_type,
+            size_bytes=size,
+            sort_order=_next_task_attachment_sort_order(user, task),
+        )
+        attachment.file.save(original_filename, uploaded_file, save=True)
+        TodoOccurrence.objects.filter(
+            user=user,
+            root_id=occurrence.root_id,
+            task=task,
+            task_date__gte=occurrence.task_date,
+            deleted_at__isnull=True,
+        ).update(updated_at=timezone.now())
+        return attachment
+
     original_filename, content_type, size = _validate_attachment_file(uploaded_file)
     attachment = TaskAttachment(
         user=user,
@@ -544,10 +752,33 @@ def add_task_attachment(user, occurrence_id: UUID, uploaded_file) -> TaskAttachm
 
 
 @transaction.atomic
-def delete_task_attachment(user, attachment_id: UUID) -> None:
+def delete_task_attachment(
+    user,
+    attachment_id: UUID,
+    *,
+    occurrence_id: UUID | None = None,
+) -> None:
     attachment = TaskAttachment.objects.filter(id=attachment_id, user=user).first()
     if attachment is None:
         raise Http404("Attachment not found.")
+    if attachment.occurrence_id is None and occurrence_id is not None:
+        occurrence = TodoOccurrence.objects.select_related("task").get(
+            id=occurrence_id,
+            user=user,
+            deleted_at__isnull=True,
+            task__deleted_at__isnull=True,
+        )
+        if _uses_future_content(occurrence.task):
+            task, attachment_id_map = _ensure_future_content_task(user, occurrence)
+            target_attachment_id = attachment_id_map.get(attachment.id, attachment.id)
+            attachment = TaskAttachment.objects.filter(
+                id=target_attachment_id,
+                user=user,
+                task=task,
+                occurrence__isnull=True,
+            ).first()
+            if attachment is None:
+                raise Http404("Attachment not found.")
     attachment.delete()
 
 
@@ -559,6 +790,29 @@ def reorder_task_attachments(user, occurrence_id: UUID, ordered_ids: list[UUID])
         deleted_at__isnull=True,
         task__deleted_at__isnull=True,
     )
+    if _uses_future_content(occurrence.task):
+        task, attachment_id_map = _ensure_future_content_task(user, occurrence)
+        mapped_ordered_ids = [
+            attachment_id_map.get(attachment_id, attachment_id)
+            for attachment_id in ordered_ids
+        ]
+        attachments = {
+            attachment.id: attachment
+            for attachment in TaskAttachment.objects.filter(
+                user=user,
+                task=task,
+                occurrence__isnull=True,
+                id__in=mapped_ordered_ids,
+            )
+        }
+        for index, attachment_id in enumerate(mapped_ordered_ids, start=1):
+            attachment = attachments.get(attachment_id)
+            if attachment is None:
+                continue
+            attachment.sort_order = index * 1000
+            attachment.save(update_fields=["sort_order"])
+        return
+
     attachments = {
         attachment.id: attachment
         for attachment in TaskAttachment.objects.filter(

@@ -242,12 +242,17 @@ def combine_date_and_time(task_date, reminder_time):
 def event_description(occurrence: TodoOccurrence) -> str:
     task = occurrence.task
     lines = []
-    if occurrence.note:
-        lines.append(occurrence.note)
+    is_long_term = task.content_mode == Task.ContentMode.FUTURE
+    note = task.note if is_long_term else occurrence.note
+    if note:
+        lines.append(note)
         lines.append("")
-    attachments = list(getattr(occurrence, "_prefetched_objects_cache", {}).get("attachments", []))
-    if not attachments and occurrence.id:
-        attachments = list(occurrence.attachments.all())
+    if is_long_term:
+        attachments = list(task.attachments.filter(occurrence__isnull=True))
+    else:
+        attachments = list(getattr(occurrence, "_prefetched_objects_cache", {}).get("attachments", []))
+        if not attachments and occurrence.id:
+            attachments = list(occurrence.attachments.all())
     if attachments:
         lines.append("Images attached in Daily Todo Sync:")
         for attachment in attachments:

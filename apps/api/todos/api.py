@@ -61,6 +61,7 @@ class TodoOccurrenceOut(Schema):
     reminderTime: str | None
     reminderAt: str | None
     isRecurring: bool
+    isLongTerm: bool
     repeat: dict
     attachments: list[TaskAttachmentOut]
 
@@ -91,6 +92,7 @@ class RepeatRuleIn(Schema):
 class TaskCreateIn(Schema):
     text: str
     note: str = ""
+    isLongTerm: bool = False
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
 
@@ -100,6 +102,7 @@ class OccurrencePatchIn(Schema):
     text: str | None = None
     note: str | None = None
     pinned: bool | None = None
+    isLongTerm: bool | None = None
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
 
@@ -165,17 +168,30 @@ def serialize_attachment(attachment: TaskAttachment) -> dict:
 
 def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
     task = occurrence.task
-    attachments = sorted(
-        occurrence.attachments.all(),
-        key=lambda attachment: (attachment.sort_order, attachment.created_at),
-    )
+    is_long_term = task.content_mode == Task.ContentMode.FUTURE
+    if is_long_term:
+        attachments = sorted(
+            [
+                attachment
+                for attachment in task.attachments.all()
+                if attachment.occurrence_id is None
+            ],
+            key=lambda attachment: (attachment.sort_order, attachment.created_at),
+        )
+        note = task.note
+    else:
+        attachments = sorted(
+            occurrence.attachments.all(),
+            key=lambda attachment: (attachment.sort_order, attachment.created_at),
+        )
+        note = occurrence.note
     return {
         "id": str(occurrence.id),
         "taskId": str(occurrence.task_id),
         "rootId": str(occurrence.root_id),
         "taskDate": occurrence.task_date.isoformat(),
         "text": task.text,
-        "note": occurrence.note,
+        "note": note,
         "status": occurrence.status,
         "source": occurrence.source,
         "sortOrder": occurrence.sort_order,
@@ -192,6 +208,7 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
         "reminderTime": task.reminder_time.strftime("%H:%M") if task.reminder_time else None,
         "reminderAt": reminder_at(occurrence),
         "isRecurring": task.recurrence_kind != Task.RecurrenceKind.NONE,
+        "isLongTerm": is_long_term,
         "repeat": {
             "kind": task.recurrence_kind,
             "interval": task.recurrence_interval,
@@ -266,6 +283,11 @@ def create_task(request, day: date, payload: TaskCreateIn):
         day,
         text,
         note=payload.note,
+        content_mode=(
+            Task.ContentMode.FUTURE
+            if payload.isLongTerm
+            else Task.ContentMode.OCCURRENCE
+        ),
         reminder_time=parse_reminder_time(payload.reminderTime),
         **recurrence_payload(payload.repeat),
     )
@@ -290,6 +312,7 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
         text=payload.text,
         note=payload.note,
         pinned=payload.pinned,
+        is_long_term=payload.isLongTerm,
         reminder_time=parse_reminder_time(payload.reminderTime),
         set_reminder_time="reminderTime" in data,
         **(recurrence_payload(payload.repeat) if payload.repeat is not None else {}),
@@ -345,8 +368,8 @@ def upload_attachment(
         attachment = add_task_attachment(request.auth, occurrence_id, file)
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
-    if attachment.occurrence_id:
-        sync_occurrence_to_google_calendar(request.auth, attachment.occurrence)
+    occurrence = get_object_or_404(TodoOccurrence, id=occurrence_id, user=request.auth)
+    sync_occurrence_to_google_calendar(request.auth, occurrence)
     return 201, serialize_attachment(attachment)
 
 
@@ -364,14 +387,16 @@ def get_attachment_content(request, attachment_id: UUID):
 
 
 @router.delete("/attachments/{attachment_id}", response={204: None}, auth=bearer_auth)
-def remove_attachment(request, attachment_id: UUID):
+def remove_attachment(request, attachment_id: UUID, occurrenceId: UUID | None = None):
     attachment = get_object_or_404(
         TaskAttachment.objects.select_related("occurrence"),
         id=attachment_id,
         user=request.auth,
     )
     occurrence = attachment.occurrence
-    delete_task_attachment(request.auth, attachment_id)
+    delete_task_attachment(request.auth, attachment_id, occurrence_id=occurrenceId)
+    if occurrence is None and occurrenceId is not None:
+        occurrence = get_object_or_404(TodoOccurrence, id=occurrenceId, user=request.auth)
     if occurrence is not None:
         sync_occurrence_to_google_calendar(request.auth, occurrence)
     return 204, None

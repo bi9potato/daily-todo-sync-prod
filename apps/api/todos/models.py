@@ -23,11 +23,20 @@ class Task(models.Model):
         MONTHLY = "monthly", "Monthly"
         YEARLY = "yearly", "Yearly"
 
+    class ContentMode(models.TextChoices):
+        OCCURRENCE = "occurrence", "Occurrence"
+        FUTURE = "future", "Future"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     root_id = models.UUIDField(db_index=True, editable=False)
     text = models.CharField(max_length=280)
     note = models.TextField(blank=True, default="")
+    content_mode = models.CharField(
+        max_length=16,
+        choices=ContentMode.choices,
+        default=ContentMode.OCCURRENCE,
+    )
     reminder_time = models.TimeField(null=True, blank=True)
     recurrence_kind = models.CharField(
         max_length=16,
@@ -159,5 +168,5 @@ class TaskAttachment(models.Model):
 
 @receiver(post_delete, sender=TaskAttachment)
 def delete_attachment_file(sender, instance: TaskAttachment, **kwargs) -> None:
-    if instance.file:
+    if instance.file and not TaskAttachment.objects.filter(file=instance.file.name).exists():
         instance.file.delete(save=False)

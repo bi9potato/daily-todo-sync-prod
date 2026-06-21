@@ -6,7 +6,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 
 from accounts.tokens import issue_access_token
-from .models import TaskAttachment, TodoOccurrence
+from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
     create_task_for_day,
@@ -153,6 +153,58 @@ class CarryoverTests(TestCase):
             self.assertTrue(TaskAttachment.objects.filter(id=attachment.id).exists())
             attachment.file.close()
 
+    def test_future_content_task_update_does_not_change_past_occurrence(self):
+        start = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Glasses",
+            note="old note",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        ensure_range(self.user, date(2026, 6, 21), date(2026, 6, 22), today=date(2026, 6, 20))
+        middle = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 21))
+
+        update_occurrence(self.user, middle.id, text="New glasses", note="new note")
+
+        start.refresh_from_db()
+        middle.refresh_from_db()
+        future = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 22))
+        self.assertEqual(start.task.text, "Glasses")
+        self.assertEqual(start.task.note, "old note")
+        self.assertEqual(middle.task.text, "New glasses")
+        self.assertEqual(middle.task.note, "new note")
+        self.assertEqual(future.task_id, middle.task_id)
+
+    def test_future_content_attachment_is_task_level_after_split(self):
+        start = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Outfit",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        ensure_range(self.user, date(2026, 6, 21), date(2026, 6, 22), today=date(2026, 6, 20))
+        middle = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 21))
+        image = SimpleUploadedFile(
+            "outfit.png",
+            b"\x89PNG\r\n\x1a\n" + b"0" * 32,
+            content_type="image/png",
+        )
+
+        with override_settings(STORAGES=TEST_STORAGES):
+            attachment = add_task_attachment(self.user, middle.id, image)
+
+            start.refresh_from_db()
+            middle.refresh_from_db()
+            future = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 22))
+            self.assertIsNone(attachment.occurrence_id)
+            self.assertNotEqual(start.task_id, middle.task_id)
+            self.assertEqual(future.task_id, middle.task_id)
+            self.assertFalse(TaskAttachment.objects.filter(task=start.task, occurrence__isnull=True).exists())
+            self.assertTrue(TaskAttachment.objects.filter(task=middle.task, occurrence__isnull=True).exists())
+            attachment.file.close()
+
     def test_deleted_task_can_be_listed_and_restored(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
 
@@ -204,6 +256,26 @@ class TodoApiTests(TestCase):
         self.assertTrue(response.json()["isPinned"])
         occurrence.refresh_from_db()
         self.assertTrue(occurrence.is_pinned)
+
+    def test_create_long_term_task_returns_future_content(self):
+        response = self.client.post(
+            "/api/days/2026-06-20/tasks",
+            data=json.dumps(
+                {
+                    "text": "Outfit",
+                    "note": "keep this",
+                    "isLongTerm": True,
+                    "repeat": {"kind": "daily", "interval": 1},
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertTrue(body["isLongTerm"])
+        self.assertEqual(body["note"], "keep this")
 
     def test_trash_endpoint_can_restore_deleted_task(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")

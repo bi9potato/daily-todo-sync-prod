@@ -29,6 +29,7 @@ export type TodoOccurrence = {
   reminderTime: string | null;
   reminderAt: string | null;
   isRecurring: boolean;
+  isLongTerm: boolean;
   repeat: RepeatRule;
   attachments: TaskAttachment[];
 };
@@ -70,6 +71,7 @@ export type RepeatRule = {
 export type TaskCreatePayload = {
   text: string;
   note?: string;
+  isLongTerm?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
 };
@@ -287,6 +289,7 @@ export function updateOccurrence(
     text?: string;
     note?: string;
     pinned?: boolean;
+    isLongTerm?: boolean;
     reminderTime?: string | null;
     repeat?: RepeatRule;
   },
@@ -432,9 +435,14 @@ export function uploadTaskAttachment(
   );
 }
 
-export function deleteTaskAttachment(attachmentId: string, accessToken: string) {
+export function deleteTaskAttachment(
+  attachmentId: string,
+  accessToken: string,
+  occurrenceId?: string,
+) {
+  const query = occurrenceId ? `?occurrenceId=${encodeURIComponent(occurrenceId)}` : "";
   return request<void>(
-    `/attachments/${attachmentId}`,
+    `/attachments/${attachmentId}${query}`,
     {
       method: "DELETE",
     },
