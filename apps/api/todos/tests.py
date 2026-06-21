@@ -335,6 +335,46 @@ class CarryoverTests(TestCase):
             self.assertTrue(TaskAttachment.objects.filter(occurrence=future).exists())
             attachment.file.close()
 
+    def test_regular_task_changed_to_long_term_carries_content_forward(self):
+        source = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Develop",
+            note="keep context",
+        )
+        image = SimpleUploadedFile(
+            "develop.png",
+            b"\x89PNG\r\n\x1a\n" + b"0" * 32,
+            content_type="image/png",
+        )
+
+        with override_settings(STORAGES=TEST_STORAGES):
+            attachment = add_task_attachment(self.user, source.id, image)
+
+            update_occurrence(self.user, source.id, is_long_term=True)
+            ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+            source.refresh_from_db()
+            source.task.refresh_from_db()
+            carried = TodoOccurrence.objects.get(
+                user=self.user,
+                root_id=source.root_id,
+                task_date=date(2026, 6, 21),
+                deleted_at__isnull=True,
+            )
+            carried.task.refresh_from_db()
+            self.assertEqual(source.task.content_mode, Task.ContentMode.FUTURE)
+            self.assertEqual(carried.task_id, source.task_id)
+            self.assertEqual(carried.task.note, "keep context")
+            self.assertTrue(
+                TaskAttachment.objects.filter(
+                    task=source.task,
+                    occurrence__isnull=True,
+                    original_filename="develop.png",
+                ).exists()
+            )
+            attachment.file.close()
+
     def test_deleted_task_can_be_listed_and_restored(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
 

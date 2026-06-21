@@ -2107,6 +2107,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  min-width: 0;
   min-height: 58px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -2115,6 +2116,7 @@ h2 {
 }
 
 .toggle-field > span {
+  flex: 1 1 auto;
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -2259,8 +2261,11 @@ h2 {
 
 .toggle-switch {
   position: relative;
+  flex: 0 0 54px;
   width: 54px;
+  min-width: 54px;
   height: 30px;
+  box-sizing: border-box;
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   background:
@@ -2977,6 +2982,15 @@ h2 {
 }
 
 @media (max-width: 520px) {
+  .toggle-field {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .toggle-field .toggle-switch {
+    align-self: flex-end;
+  }
+
   h1 {
     font-size: 1.65rem;
   }

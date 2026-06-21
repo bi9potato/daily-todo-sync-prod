@@ -1144,13 +1144,38 @@ function TodoScreen({
     return ids[index + 1] ?? null;
   }
 
+  function sectionLongTermTargetFromPointer(
+    date: string,
+    clientX: number,
+    clientY: number,
+  ) {
+    const sections = document.querySelectorAll<HTMLElement>(
+      `[data-day-date="${date}"][data-task-section]`,
+    );
+    let matchedSection: HTMLElement | null = null;
+    sections.forEach((section) => {
+      const rect = section.getBoundingClientRect();
+      if (
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom
+      ) {
+        matchedSection = section;
+      }
+    });
+
+    if (!matchedSection) {
+      return null;
+    }
+    return matchedSection.dataset.taskSection === "long-term";
+  }
+
   function targetFromPointer(current: DragState, clientX: number, clientY: number) {
     const element = document.elementFromPoint(clientX, clientY);
-    const hoveredSection = element?.closest<HTMLElement>("[data-task-section]");
     const targetLongTerm =
-      hoveredSection?.dataset.dayDate === current.date
-        ? hoveredSection.dataset.taskSection === "long-term"
-        : current.targetLongTerm;
+      sectionLongTermTargetFromPointer(current.date, clientX, clientY) ??
+      current.targetLongTerm;
     const hoveredCard = element?.closest<HTMLElement>('[data-task-sortable="true"]');
     if (hoveredCard?.dataset.taskDate === current.date) {
       const hoveredId = hoveredCard.dataset.taskId;
@@ -1247,6 +1272,9 @@ function TodoScreen({
     }
 
     const target = targetFromPointer(dragState, event.clientX, event.clientY);
+    if (target.targetLongTerm === true && !isLongTermSectionOpen) {
+      setIsLongTermSectionOpen(true);
+    }
     const nextState = {
       ...dragState,
       active: true,
