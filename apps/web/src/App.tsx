@@ -1513,7 +1513,7 @@ function SettingsModal({
 
           {!isConfigured ? (
             <p className="settings-note">
-              Google Calendar 同步暂未开启。开启后，用户只需要登录 Google 账号并授权，
+              Google 登录暂未开启。等应用侧开启后，你只需要登录 Google 账号并授权，
               不需要自己获取任何 token 或密钥。
             </p>
           ) : null}
@@ -1526,7 +1526,11 @@ function SettingsModal({
                 disabled={!isConfigured || isBindingGoogle}
                 onClick={onBindGoogle}
               >
-                {isBindingGoogle ? "正在跳转..." : "绑定 Google 账户"}
+                {isBindingGoogle
+                  ? "正在跳转..."
+                  : isConfigured
+                    ? "绑定 Google 账户"
+                    : "Google 登录暂未开启"}
               </button>
             ) : (
               <button

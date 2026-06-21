@@ -1632,10 +1632,18 @@ h2 {
 }
 
 @media (max-width: 920px) {
-  .app-layout {
-    grid-template-columns: 1fr;
+  .app-layout,
+  .app-layout.sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr);
     width: 100%;
     padding: 12px;
+  }
+
+  .is-my-day .workspace-header,
+  .is-my-day .workspace-actions,
+  .is-my-day .calendar-grid.view-day {
+    justify-self: stretch;
+    width: 100%;
   }
 
   .sidebar {
@@ -1826,6 +1834,11 @@ h2 {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
     min-height: 56px;
     padding: 10px;
+    width: 100%;
+  }
+
+  .calendar-grid.view-day {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .field-grid {
