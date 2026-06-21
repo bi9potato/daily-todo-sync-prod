@@ -511,27 +511,31 @@ function TodoScreen({
     const version = completionOverrideVersionRef.current + 1;
     completionOverrideVersionRef.current = version;
 
-    setCompletionOverrides((current) => ({
-      ...current,
-      [id]: { done, version },
-    }));
+    flushSync(() => {
+      setCompletionOverrides((current) => ({
+        ...current,
+        [id]: { done, version },
+      }));
+    });
 
-    updateMutation.mutate(
-      { id, done },
-      {
-        onSettled: () => {
-          setCompletionOverrides((current) => {
-            if (current[id]?.version !== version) {
-              return current;
-            }
+    window.setTimeout(() => {
+      updateMutation.mutate(
+        { id, done },
+        {
+          onSettled: () => {
+            setCompletionOverrides((current) => {
+              if (current[id]?.version !== version) {
+                return current;
+              }
 
-            const next = { ...current };
-            delete next[id];
-            return next;
-          });
+              const next = { ...current };
+              delete next[id];
+              return next;
+            });
+          },
         },
-      },
-    );
+      );
+    }, 0);
   }
 
   const deleteMutation = useMutation({
@@ -1598,10 +1602,14 @@ function CalendarTaskChip({
         className="mini-checkbox"
         type="checkbox"
         checked={done}
-        onClick={(event) => {
+        onPointerDown={(event) => {
           event.preventDefault();
           event.stopPropagation();
           onDone(item.id, !done);
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
         }}
         onChange={() => undefined}
       />
@@ -1770,10 +1778,14 @@ function TodoCard({
         className="round-checkbox"
         type="checkbox"
         checked={done}
-        onClick={(event) => {
+        onPointerDown={(event) => {
           event.preventDefault();
           event.stopPropagation();
           onDone(item.id, !done);
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
         }}
         onChange={() => undefined}
       />
