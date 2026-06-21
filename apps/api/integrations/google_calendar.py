@@ -17,7 +17,8 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 GOOGLE_ACCOUNT_SCOPE = "openid email profile"
-GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_CALENDAR_APP_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
+GOOGLE_CALENDAR_SCOPE = f"{GOOGLE_ACCOUNT_SCOPE} {GOOGLE_CALENDAR_APP_SCOPE}"
 
 
 class GoogleCalendarError(Exception):
@@ -30,19 +31,26 @@ def is_google_calendar_configured() -> bool:
     return bool(settings.GOOGLE_CALENDAR_CLIENT_ID and settings.GOOGLE_CALENDAR_CLIENT_SECRET)
 
 
-def authorization_url(*, state: str, redirect_uri: str, scope: str) -> str:
-    query = urlencode(
-        {
-            "access_type": "offline",
-            "client_id": settings.GOOGLE_CALENDAR_CLIENT_ID,
-            "include_granted_scopes": "true",
-            "prompt": "consent",
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": scope,
-            "state": state,
-        }
-    )
+def authorization_url(
+    *,
+    state: str,
+    redirect_uri: str,
+    scope: str,
+    login_hint: str = "",
+) -> str:
+    params = {
+        "access_type": "offline",
+        "client_id": settings.GOOGLE_CALENDAR_CLIENT_ID,
+        "include_granted_scopes": "true",
+        "prompt": "consent",
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": scope,
+        "state": state,
+    }
+    if login_hint:
+        params["login_hint"] = login_hint
+    query = urlencode(params)
     return f"{GOOGLE_AUTH_URL}?{query}"
 
 
@@ -108,7 +116,38 @@ def save_token_response(connection: GoogleCalendarConnection, body: dict[str, An
     )
 
 
+def has_calendar_app_scope(connection: GoogleCalendarConnection) -> bool:
+    scopes = set((connection.scope or "").split())
+    return (
+        GOOGLE_CALENDAR_APP_SCOPE in scopes
+        or "https://www.googleapis.com/auth/calendar" in scopes
+    )
+
+
+def ensure_app_calendar(connection: GoogleCalendarConnection) -> None:
+    if connection.calendar_id and connection.calendar_id != "primary":
+        return
+
+    token = access_token_for(connection)
+    calendar = _calendar_request(
+        "POST",
+        "/calendars",
+        token=token,
+        payload={
+            "summary": settings.GOOGLE_CALENDAR_NAME,
+            "timeZone": settings.TIME_ZONE,
+        },
+    )
+    calendar_id = str(calendar.get("id") or "")
+    if not calendar_id:
+        raise GoogleCalendarError("Google Calendar did not return a calendar id.")
+
+    connection.calendar_id = calendar_id
+    connection.save(update_fields=["calendar_id", "updated_at"])
+
+
 def insert_event(connection: GoogleCalendarConnection, payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_app_calendar(connection)
     token = access_token_for(connection)
     calendar_id = connection.calendar_id or "primary"
     path = f"/calendars/{calendar_id}/events?{urlencode({'sendUpdates': 'none'})}"
@@ -120,15 +159,21 @@ def patch_event(
     event_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    ensure_app_calendar(connection)
     token = access_token_for(connection)
     calendar_id = connection.calendar_id or "primary"
     path = f"/calendars/{calendar_id}/events/{event_id}?{urlencode({'sendUpdates': 'none'})}"
     return _calendar_request("PATCH", path, token=token, payload=payload)
 
 
-def delete_event(connection: GoogleCalendarConnection, event_id: str) -> None:
+def delete_event(
+    connection: GoogleCalendarConnection,
+    event_id: str,
+    *,
+    calendar_id: str = "",
+) -> None:
     token = access_token_for(connection)
-    calendar_id = connection.calendar_id or "primary"
+    calendar_id = calendar_id or connection.calendar_id or "primary"
     path = f"/calendars/{calendar_id}/events/{event_id}?{urlencode({'sendUpdates': 'none'})}"
     try:
         _calendar_request("DELETE", path, token=token)
@@ -149,29 +194,36 @@ def fetch_google_userinfo(access_token: str) -> dict[str, Any]:
 def build_google_calendar_event(occurrence: TodoOccurrence) -> dict[str, Any]:
     task = occurrence.task
     start_date = task.recurrence_start_date if is_recurring(task) else occurrence.task_date
-    start_at = combine_date_and_time(start_date or occurrence.task_date, task.reminder_time)
-    end_at = start_at + timedelta(minutes=settings.GOOGLE_CALENDAR_EVENT_DURATION_MINUTES)
     summary = f"{'[Done] ' if occurrence.status == TodoOccurrence.Status.DONE else ''}{task.text}"
+    event_date = start_date or occurrence.task_date
 
     payload: dict[str, Any] = {
         "summary": summary,
         "description": event_description(task),
-        "start": {
-            "dateTime": start_at.isoformat(),
-            "timeZone": settings.TIME_ZONE,
-        },
-        "end": {
-            "dateTime": end_at.isoformat(),
-            "timeZone": settings.TIME_ZONE,
-        },
         "extendedProperties": {
             "private": {
                 "dailyTodoRootId": str(occurrence.root_id),
                 "dailyTodoTaskId": str(task.id),
             }
         },
-        "reminders": {"useDefault": True},
     }
+
+    if task.reminder_time is None:
+        payload["start"] = {"date": event_date.isoformat()}
+        payload["end"] = {"date": (event_date + timedelta(days=1)).isoformat()}
+        payload["reminders"] = {"useDefault": False}
+    else:
+        start_at = combine_date_and_time(event_date, task.reminder_time)
+        end_at = start_at + timedelta(minutes=settings.GOOGLE_CALENDAR_EVENT_DURATION_MINUTES)
+        payload["start"] = {
+            "dateTime": start_at.isoformat(),
+            "timeZone": settings.TIME_ZONE,
+        }
+        payload["end"] = {
+            "dateTime": end_at.isoformat(),
+            "timeZone": settings.TIME_ZONE,
+        }
+        payload["reminders"] = {"useDefault": True}
 
     recurrence = recurrence_rule(task)
     if recurrence:
@@ -182,7 +234,7 @@ def build_google_calendar_event(occurrence: TodoOccurrence) -> dict[str, Any]:
 
 def combine_date_and_time(task_date, reminder_time):
     if reminder_time is None:
-        raise GoogleCalendarError("Only tasks with a reminder time can sync to Google Calendar.")
+        raise GoogleCalendarError("Cannot build a timed Google Calendar event without a reminder time.")
     naive = datetime.combine(task_date, reminder_time)
     return timezone.make_aware(naive, timezone.get_current_timezone())
 

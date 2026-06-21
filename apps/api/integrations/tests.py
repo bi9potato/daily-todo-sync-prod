@@ -3,11 +3,10 @@ from datetime import date, time
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
-from todos.models import Task
+from todos.models import Task, TodoOccurrence
 from todos.services import create_task_for_day
 
 from .google_calendar import (
-    GoogleCalendarError,
     build_google_calendar_event,
     recurrence_rule,
 )
@@ -42,11 +41,24 @@ class GoogleCalendarPayloadTests(TestCase):
             str(occurrence.root_id),
         )
 
-    def test_task_without_reminder_is_not_calendar_eligible(self):
+    def test_builds_all_day_event_for_task_without_reminder(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 21), "Read")
 
-        with self.assertRaises(GoogleCalendarError):
-            build_google_calendar_event(occurrence)
+        payload = build_google_calendar_event(occurrence)
+
+        self.assertEqual(payload["summary"], "Read")
+        self.assertEqual(payload["start"], {"date": "2026-06-21"})
+        self.assertEqual(payload["end"], {"date": "2026-06-22"})
+        self.assertEqual(payload["reminders"], {"useDefault": False})
+
+    def test_completed_task_is_marked_in_calendar_summary(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 21), "Read")
+        occurrence.status = TodoOccurrence.Status.DONE
+        occurrence.save(update_fields=["status"])
+
+        payload = build_google_calendar_event(occurrence)
+
+        self.assertEqual(payload["summary"], "[Done] Read")
 
     def test_weekly_repeat_maps_to_rrule(self):
         occurrence = create_task_for_day(

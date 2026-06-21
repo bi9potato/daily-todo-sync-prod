@@ -2350,8 +2350,8 @@ function SettingsModal({
           </div>
 
           <p className="muted">
-            开启后，有提醒时间的任务会写入 Google Calendar。Google Calendar
-            里的修改不会反向覆盖 Todo。
+            开启后，所有任务会写入专用 Google Calendar。没有提醒时间的任务会作为全天事件，
+            Google Calendar 里的修改不会反向覆盖 Todo。
           </p>
 
           {!isGoogleBound ? (
@@ -2366,7 +2366,7 @@ function SettingsModal({
             <div className="integration-stats">
               <span>
                 日历
-                <strong>{status.calendarId}</strong>
+                <strong>{status.calendarName || status.calendarId}</strong>
               </span>
               <span>
                 已同步

@@ -31,6 +31,7 @@ class GoogleCalendarStatusOut(Schema):
     canUseCalendarSync: bool
     syncEnabled: bool
     calendarId: str
+    calendarName: str
     connectedAt: str | None
     lastSyncAt: str | None
     lastError: str

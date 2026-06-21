@@ -17,8 +17,10 @@ from .google_calendar import (
     authorization_url,
     build_google_calendar_event,
     delete_event,
+    ensure_app_calendar,
     exchange_code_for_tokens,
     fetch_google_userinfo,
+    has_calendar_app_scope,
     insert_event,
     is_google_calendar_configured,
     patch_event,
@@ -67,7 +69,8 @@ def build_google_account_bind_url(user, request) -> str:
 def build_google_calendar_auth_url(user, request) -> str:
     if not is_google_calendar_configured():
         raise GoogleCalendarError("Google Calendar OAuth is not configured.")
-    if not GoogleCalendarConnection.objects.filter(user=user).exists():
+    connection = GoogleCalendarConnection.objects.filter(user=user).first()
+    if connection is None:
         raise GoogleCalendarError("Bind a Google account before enabling Calendar sync.")
     state = signing.dumps(
         {
@@ -81,6 +84,7 @@ def build_google_calendar_auth_url(user, request) -> str:
         state=state,
         redirect_uri=redirect_uri(request),
         scope=GOOGLE_CALENDAR_SCOPE,
+        login_hint=connection.google_email,
     )
 
 
@@ -138,7 +142,51 @@ def authorize_google_calendar(user, token_body: dict) -> GoogleCalendarConnectio
     connection = GoogleCalendarConnection.objects.filter(user=user).first()
     if connection is None:
         raise GoogleCalendarError("Bind a Google account before enabling Calendar sync.")
+
+    previous_token_state = {
+        "access_token": connection.access_token,
+        "refresh_token": connection.refresh_token,
+        "token_expires_at": connection.token_expires_at,
+        "scope": connection.scope,
+    }
     save_token_response(connection, token_body)
+    try:
+        userinfo = fetch_google_userinfo(connection.access_token)
+        google_subject = str(userinfo.get("sub") or "")
+        google_email = str(userinfo.get("email") or "")
+        if connection.google_subject and google_subject != connection.google_subject:
+            raise GoogleCalendarError(
+                "Please authorize with the Google account that is already bound."
+            )
+        if connection.google_email and google_email.lower() != connection.google_email.lower():
+            raise GoogleCalendarError(
+                "Please authorize with the Google email that is already bound."
+            )
+        if not has_calendar_app_scope(connection):
+            raise GoogleCalendarError("Google Calendar app calendar permission was not granted.")
+        ensure_app_calendar(connection)
+    except GoogleCalendarError as exc:
+        connection.access_token = previous_token_state["access_token"]
+        connection.refresh_token = previous_token_state["refresh_token"]
+        connection.token_expires_at = previous_token_state["token_expires_at"]
+        connection.scope = previous_token_state["scope"]
+        connection.calendar_authorized = False
+        connection.sync_enabled = False
+        connection.last_error = str(exc)
+        connection.save(
+            update_fields=[
+                "access_token",
+                "refresh_token",
+                "token_expires_at",
+                "scope",
+                "calendar_authorized",
+                "sync_enabled",
+                "last_error",
+                "updated_at",
+            ]
+        )
+        raise
+
     connection.calendar_authorized = True
     connection.sync_enabled = True
     connection.last_error = ""
@@ -155,6 +203,11 @@ def authorize_google_calendar(user, token_body: dict) -> GoogleCalendarConnectio
 
 def google_calendar_status(user) -> dict:
     connection = GoogleCalendarConnection.objects.filter(user=user).first()
+    calendar_authorized = bool(
+        connection
+        and connection.calendar_authorized
+        and has_calendar_app_scope(connection)
+    )
     failed_count = GoogleCalendarEventLink.objects.filter(
         user=user,
         status=GoogleCalendarEventLink.Status.ERROR,
@@ -174,10 +227,11 @@ def google_calendar_status(user) -> dict:
         "googleBound": bool(connection),
         "googleEmail": connection.google_email if connection else "",
         "googleName": connection.google_name if connection else "",
-        "calendarAuthorized": bool(connection and connection.calendar_authorized),
+        "calendarAuthorized": calendar_authorized,
         "canUseCalendarSync": bool(connection and is_google_calendar_configured()),
-        "syncEnabled": bool(connection and connection.sync_enabled),
+        "syncEnabled": bool(connection and connection.sync_enabled and calendar_authorized),
         "calendarId": connection.calendar_id if connection else settings.GOOGLE_CALENDAR_DEFAULT_ID,
+        "calendarName": settings.GOOGLE_CALENDAR_NAME,
         "connectedAt": connection.connected_at.isoformat() if connection else None,
         "lastSyncAt": last_sync_at,
         "lastError": connection.last_error if connection else "",
@@ -196,8 +250,10 @@ def set_google_calendar_sync_enabled(user, enabled: bool) -> dict:
     connection = GoogleCalendarConnection.objects.filter(user=user).first()
     if connection is None:
         raise GoogleCalendarError("Bind a Google account before enabling Calendar sync.")
-    if enabled and not connection.calendar_authorized:
-        raise GoogleCalendarError("Authorize Google Calendar before enabling sync.")
+    if enabled:
+        if not connection.calendar_authorized or not has_calendar_app_scope(connection):
+            raise GoogleCalendarError("Authorize Google Calendar before enabling sync.")
+        ensure_app_calendar(connection)
     connection.sync_enabled = enabled
     connection.save(update_fields=["sync_enabled", "updated_at"])
     return google_calendar_status(user)
@@ -220,8 +276,21 @@ def sync_occurrence_to_google_calendar(user, occurrence: TodoOccurrence) -> None
     if occurrence is None:
         return
 
-    if occurrence.task.reminder_time is None or occurrence.task.deleted_at or occurrence.deleted_at:
+    if occurrence.task.deleted_at or occurrence.deleted_at:
         delete_google_calendar_event_for_occurrence(user, occurrence)
+        return
+
+    if not has_calendar_app_scope(connection):
+        connection.sync_enabled = False
+        connection.last_error = "Authorize Google Calendar before syncing."
+        connection.save(update_fields=["sync_enabled", "last_error", "updated_at"])
+        return
+
+    try:
+        ensure_app_calendar(connection)
+    except GoogleCalendarError as exc:
+        connection.last_error = str(exc)
+        connection.save(update_fields=["last_error", "updated_at"])
         return
 
     link, _ = GoogleCalendarEventLink.objects.get_or_create(
@@ -234,6 +303,18 @@ def sync_occurrence_to_google_calendar(user, occurrence: TodoOccurrence) -> None
         },
     )
     link.task = occurrence.task
+    if (
+        link.google_event_id
+        and link.calendar_id
+        and link.calendar_id != connection.calendar_id
+        and link.status != GoogleCalendarEventLink.Status.DELETED
+    ):
+        try:
+            delete_event(connection, link.google_event_id, calendar_id=link.calendar_id)
+        except GoogleCalendarError:
+            pass
+        link.google_event_id = ""
+        link.google_event_html_link = ""
     link.calendar_id = connection.calendar_id
     link.last_synced_occurrence = occurrence
 
@@ -286,7 +367,7 @@ def delete_google_calendar_event_for_occurrence(user, occurrence: TodoOccurrence
         return
 
     try:
-        delete_event(connection, link.google_event_id)
+        delete_event(connection, link.google_event_id, calendar_id=link.calendar_id)
         link.status = GoogleCalendarEventLink.Status.DELETED
         link.last_error = ""
         link.last_synced_at = timezone.now()
@@ -306,10 +387,11 @@ def sync_google_calendar_window(user, *, start: date | None = None, days: int = 
     connection = GoogleCalendarConnection.objects.filter(user=user).first()
     if connection is None:
         raise GoogleCalendarError("Bind a Google account before syncing Calendar.")
-    if not connection.calendar_authorized:
+    if not connection.calendar_authorized or not has_calendar_app_scope(connection):
         raise GoogleCalendarError("Authorize Google Calendar before syncing.")
     if not connection.sync_enabled:
         raise GoogleCalendarError("Turn on Google Calendar sync before syncing.")
+    ensure_app_calendar(connection)
 
     start = start or timezone.localdate()
     end = start + timedelta(days=days - 1)
@@ -322,17 +404,19 @@ def sync_google_calendar_window(user, *, start: date | None = None, days: int = 
             task_date__range=(start, end),
             deleted_at__isnull=True,
             task__deleted_at__isnull=True,
-            task__reminder_time__isnull=False,
         )
-        .order_by("task_date", "sort_order", "created_at")
+        .order_by("root_id", "-task_date", "-updated_at")
     )
 
-    seen_roots = set()
-    synced = 0
+    latest_by_root = {}
     for occurrence in occurrences:
-        if occurrence.root_id in seen_roots:
-            continue
-        seen_roots.add(occurrence.root_id)
+        latest_by_root.setdefault(occurrence.root_id, occurrence)
+
+    synced = 0
+    for occurrence in sorted(
+        latest_by_root.values(),
+        key=lambda item: (item.task_date, item.sort_order, item.created_at),
+    ):
         before = GoogleCalendarEventLink.objects.filter(
             user=user,
             root_id=occurrence.root_id,

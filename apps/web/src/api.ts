@@ -69,6 +69,7 @@ export type GoogleCalendarStatus = {
   canUseCalendarSync: boolean;
   syncEnabled: boolean;
   calendarId: string;
+  calendarName: string;
   connectedAt: string | null;
   lastSyncAt: string | null;
   lastError: string;
