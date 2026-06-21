@@ -133,6 +133,11 @@ type CalendarTaskBuckets = {
   timed: CalendarTimedItem[];
 };
 
+type GoogleCalendarNotice = {
+  tone: "error" | "success";
+  message: string;
+};
+
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 type SpeechRecognitionLike = {
@@ -390,6 +395,8 @@ function TodoScreen({
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [googleCalendarNotice, setGoogleCalendarNotice] =
+    useState<GoogleCalendarNotice | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [completionOverrides, setCompletionOverrides] = useState<
@@ -603,6 +610,51 @@ function TodoScreen({
       queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
     },
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const googleCalendarStatus = params.get("googleCalendar");
+    if (!googleCalendarStatus) {
+      return;
+    }
+
+    const googleCalendarMessage = params.get("googleCalendarMessage");
+    const notice = googleCalendarCallbackNotice(
+      googleCalendarStatus,
+      googleCalendarMessage,
+    );
+
+    setGoogleCalendarNotice(notice);
+    openSettingsPanel({ preserveNotice: true });
+    queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
+
+    params.delete("googleCalendar");
+    params.delete("googleCalendarMessage");
+    const nextSearch = params.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${
+      window.location.hash
+    }`;
+    window.history.replaceState(null, "", nextUrl);
+  }, [queryClient]);
+
+  function openSettingsPanel({
+    preserveNotice = false,
+  }: {
+    preserveNotice?: boolean;
+  } = {}) {
+    if (!preserveNotice) {
+      setGoogleCalendarNotice(null);
+    }
+    setIsSettingsOpen(true);
+    setIsAccountMenuOpen(false);
+    setIsMobileSidebarOpen(false);
+    setIsSidebarHovered(false);
+  }
+
+  function closeSettingsPanel() {
+    setIsSettingsOpen(false);
+    setGoogleCalendarNotice(null);
+  }
 
   function openMyDay() {
     setSelectedDate(today);
@@ -876,7 +928,11 @@ function TodoScreen({
       />
       <aside
         className="sidebar surface-panel"
-        onMouseEnter={() => setIsSidebarHovered(true)}
+        onMouseEnter={() => {
+          if (!isSettingsOpen) {
+            setIsSidebarHovered(true);
+          }
+        }}
         onMouseLeave={() => {
           setIsSidebarHovered(false);
           setIsAccountMenuOpen(false);
@@ -916,10 +972,7 @@ function TodoScreen({
                 <button
                   className="account-menu-item"
                   type="button"
-                  onClick={() => {
-                    setIsSettingsOpen(true);
-                    setIsAccountMenuOpen(false);
-                  }}
+                  onClick={() => openSettingsPanel()}
                 >
                   <span>Settings</span>
                   <small>连接日历与同步设置</small>
@@ -1154,6 +1207,7 @@ function TodoScreen({
 
       {isSettingsOpen ? (
         <SettingsModal
+          notice={googleCalendarNotice}
           status={googleCalendarStatusQuery.data ?? null}
           syncResult={syncGoogleCalendarMutation.data ?? null}
           isAuthorizingCalendar={authorizeGoogleCalendarMutation.isPending}
@@ -1170,7 +1224,7 @@ function TodoScreen({
             toggleGoogleCalendarSyncMutation.error ??
             syncGoogleCalendarMutation.error
           }
-          onClose={() => setIsSettingsOpen(false)}
+          onClose={closeSettingsPanel}
           onAuthorizeCalendar={() => authorizeGoogleCalendarMutation.mutate()}
           onBindGoogle={() => bindGoogleAccountMutation.mutate()}
           onDisconnect={() => disconnectGoogleAccountMutation.mutate()}
@@ -2153,6 +2207,7 @@ function SettingsModal({
   isLoading,
   isSyncing,
   isTogglingSync,
+  notice,
   onAuthorizeCalendar,
   onBindGoogle,
   onClose,
@@ -2169,6 +2224,7 @@ function SettingsModal({
   isLoading: boolean;
   isSyncing: boolean;
   isTogglingSync: boolean;
+  notice: GoogleCalendarNotice | null;
   onAuthorizeCalendar: () => void;
   onBindGoogle: () => void;
   onClose: () => void;
@@ -2199,6 +2255,12 @@ function SettingsModal({
   return (
     <ModalShell title="Settings" onClose={onClose}>
       <div className="settings-body">
+        {notice ? (
+          <p className={`settings-callback-notice is-${notice.tone}`}>
+            {notice.message}
+          </p>
+        ) : null}
+
         <section className="settings-card">
           <div className="settings-card-header">
             <div>
@@ -2888,6 +2950,30 @@ function parseReminderMinutes(reminderTime: string | null) {
 
 function formatHourLabel(hour: number) {
   return `${String(hour).padStart(2, "0")}:00`;
+}
+
+function googleCalendarCallbackNotice(
+  status: string,
+  message: string | null,
+): GoogleCalendarNotice {
+  if (status === "bound") {
+    return {
+      tone: "success",
+      message: "Google 账户绑定成功。你现在可以开启 Calendar 单向同步。",
+    };
+  }
+
+  if (status === "authorized") {
+    return {
+      tone: "success",
+      message: "Google Calendar 授权成功，单向同步已开启。",
+    };
+  }
+
+  return {
+    tone: "error",
+    message: message || "Google 授权失败，请确认账号已加入测试用户后再试。",
+  };
 }
 
 function applyOptimisticOccurrenceUpdate(

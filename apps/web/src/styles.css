@@ -2031,6 +2031,22 @@ h2 {
   padding: 10px 11px;
 }
 
+.settings-callback-notice {
+  margin: 0;
+  border: 1px solid rgba(213, 221, 211, 0.92);
+  border-radius: var(--radius);
+  background: rgba(232, 240, 235, 0.86);
+  color: var(--accent);
+  font-weight: 800;
+  padding: 11px 12px;
+}
+
+.settings-callback-notice.is-error {
+  border-color: rgba(180, 35, 24, 0.18);
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
 .settings-note {
   background: rgba(232, 240, 235, 0.68);
   color: var(--muted);
