@@ -196,6 +196,19 @@ type PendingDrag = {
   timeoutId: number;
 };
 
+type UpdateOccurrencePayload = {
+  id: string;
+  done?: boolean;
+  text?: string;
+  note?: string;
+  reminderTime?: string | null;
+  repeat?: RepeatRule;
+};
+
+type UpdateOccurrenceContext = {
+  previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
+};
+
 type ReorderPayload = {
   date: string;
   orderedIds: string[];
@@ -455,19 +468,34 @@ function TodoScreen({
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: (payload: {
-      id: string;
-      done?: boolean;
-      text?: string;
-      note?: string;
-      reminderTime?: string | null;
-      repeat?: RepeatRule;
-    }) => {
+  const updateMutation = useMutation<
+    TodoOccurrence,
+    Error,
+    UpdateOccurrencePayload,
+    UpdateOccurrenceContext
+  >({
+    mutationFn: (payload) => {
       const { id, ...changes } = payload;
       return updateOccurrence(id, changes, accessToken);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
+      const previousRanges = queryClient.getQueriesData<RangeTodos>({
+        queryKey: ["range"],
+      });
+
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOptimisticOccurrenceUpdate(data, payload),
+      );
+
+      return { previousRanges };
+    },
+    onError: (_error, _payload, context) => {
+      context?.previousRanges.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
   const deleteMutation = useMutation({
@@ -2789,6 +2817,67 @@ function parseReminderMinutes(reminderTime: string | null) {
 
 function formatHourLabel(hour: number) {
   return `${String(hour).padStart(2, "0")}:00`;
+}
+
+function applyOptimisticOccurrenceUpdate(
+  data: RangeTodos | undefined,
+  payload: UpdateOccurrencePayload,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+
+  const days = data.days.map((day) => {
+    const items = [...day.pending, ...day.done];
+    if (!items.some((item) => item.id === payload.id)) {
+      return day;
+    }
+
+    changed = true;
+    const nextItems = items.map((item) => {
+      if (item.id !== payload.id) {
+        return item;
+      }
+
+      const nextItem = { ...item };
+      const now = new Date().toISOString();
+
+      if ("done" in payload && payload.done !== undefined) {
+        nextItem.status = payload.done ? "done" : "pending";
+        nextItem.completedAt = payload.done ? now : null;
+      }
+      if ("text" in payload && payload.text !== undefined) {
+        nextItem.text = payload.text;
+      }
+      if ("note" in payload && payload.note !== undefined) {
+        nextItem.note = payload.note;
+      }
+      if ("reminderTime" in payload) {
+        nextItem.reminderTime = payload.reminderTime ?? null;
+      }
+      if ("repeat" in payload && payload.repeat !== undefined) {
+        nextItem.repeat = payload.repeat;
+        nextItem.isRecurring = payload.repeat.kind !== "none";
+      }
+
+      nextItem.updatedAt = now;
+      return nextItem;
+    });
+
+    return {
+      ...day,
+      pending: nextItems
+        .filter((item) => item.status === "pending")
+        .sort(compareOccurrences),
+      done: nextItems
+        .filter((item) => item.status === "done")
+        .sort(compareOccurrences),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
 }
 
 function applyOptimisticDayOrder(
