@@ -62,6 +62,11 @@ export type TaskCreatePayload = {
 export type GoogleCalendarStatus = {
   configured: boolean;
   connected: boolean;
+  googleBound: boolean;
+  googleEmail: string;
+  googleName: string;
+  calendarAuthorized: boolean;
+  canUseCalendarSync: boolean;
   syncEnabled: boolean;
   calendarId: string;
   connectedAt: string | null;
@@ -242,9 +247,9 @@ export function getGoogleCalendarStatus(accessToken: string) {
   );
 }
 
-export function connectGoogleCalendar(accessToken: string) {
+export function bindGoogleAccount(accessToken: string) {
   return request<GoogleCalendarAuthUrl>(
-    "/integrations/google-calendar/connect",
+    "/integrations/google-account/bind",
     {
       method: "POST",
     },
@@ -252,11 +257,32 @@ export function connectGoogleCalendar(accessToken: string) {
   );
 }
 
-export function disconnectGoogleCalendar(accessToken: string) {
+export function disconnectGoogleAccount(accessToken: string) {
   return request<void>(
-    "/integrations/google-calendar/disconnect",
+    "/integrations/google-account/disconnect",
     {
       method: "POST",
+    },
+    accessToken,
+  );
+}
+
+export function authorizeGoogleCalendar(accessToken: string) {
+  return request<GoogleCalendarAuthUrl>(
+    "/integrations/google-calendar/authorize",
+    {
+      method: "POST",
+    },
+    accessToken,
+  );
+}
+
+export function setGoogleCalendarSyncEnabled(enabled: boolean, accessToken: string) {
+  return request<GoogleCalendarStatus>(
+    "/integrations/google-calendar/sync-enabled",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
     },
     accessToken,
   );

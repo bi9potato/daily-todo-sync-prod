@@ -8,11 +8,15 @@ class GoogleCalendarConnection(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     calendar_id = models.CharField(max_length=255, default="primary")
+    google_subject = models.CharField(max_length=255, blank=True, default="")
+    google_email = models.EmailField(blank=True, default="")
+    google_name = models.CharField(max_length=255, blank=True, default="")
     access_token = models.TextField()
     refresh_token = models.TextField(blank=True, default="")
     token_expires_at = models.DateTimeField(null=True, blank=True)
     scope = models.TextField(blank=True, default="")
-    sync_enabled = models.BooleanField(default=True)
+    calendar_authorized = models.BooleanField(default=False)
+    sync_enabled = models.BooleanField(default=False)
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True, default="")
     connected_at = models.DateTimeField(auto_now_add=True)
@@ -21,6 +25,7 @@ class GoogleCalendarConnection(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["user", "sync_enabled"]),
+            models.Index(fields=["google_email"]),
         ]
 
     def __str__(self) -> str:

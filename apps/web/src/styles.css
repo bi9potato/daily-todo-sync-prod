@@ -1387,6 +1387,39 @@ h2 {
   padding: 14px;
 }
 
+.bound-account {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.62);
+  padding: 10px;
+}
+
+.bound-account div {
+  display: grid;
+  min-width: 0;
+}
+
+.bound-account strong,
+.bound-account small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bound-account small {
+  color: var(--muted);
+}
+
+.google-mark {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--accent);
+}
+
 .settings-card-header {
   display: flex;
   align-items: flex-start;
@@ -1413,6 +1446,53 @@ h2 {
   border-color: rgba(44, 87, 69, 0.3);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.toggle-switch {
+  position: relative;
+  width: 54px;
+  height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 248, 243, 0.92)),
+    var(--card-soft);
+  padding: 3px;
+  transition:
+    background 0.24s ease,
+    border-color 0.24s ease,
+    box-shadow 0.24s ease,
+    opacity 0.2s ease;
+}
+
+.toggle-switch span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.78) inset,
+    0 7px 14px rgba(22, 27, 24, 0.16);
+  transform: translateX(0);
+  transition:
+    transform 0.28s var(--ease-out),
+    box-shadow 0.24s ease;
+}
+
+.toggle-switch.is-on {
+  border-color: rgba(44, 87, 69, 0.48);
+  background: var(--accent);
+  box-shadow: 0 8px 20px rgba(44, 87, 69, 0.18);
+}
+
+.toggle-switch.is-on span {
+  transform: translateX(24px);
+}
+
+.toggle-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .integration-stats {
@@ -1457,8 +1537,14 @@ h2 {
 
 .settings-actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.settings-inline-status {
+  color: var(--muted);
+  font-size: 0.88rem;
 }
 
 @keyframes liftIn {

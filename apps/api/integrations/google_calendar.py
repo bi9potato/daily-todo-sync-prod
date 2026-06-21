@@ -14,7 +14,9 @@ from .models import GoogleCalendarConnection
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
+GOOGLE_ACCOUNT_SCOPE = "openid email profile"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 
 
@@ -28,7 +30,7 @@ def is_google_calendar_configured() -> bool:
     return bool(settings.GOOGLE_CALENDAR_CLIENT_ID and settings.GOOGLE_CALENDAR_CLIENT_SECRET)
 
 
-def authorization_url(*, state: str, redirect_uri: str) -> str:
+def authorization_url(*, state: str, redirect_uri: str, scope: str) -> str:
     query = urlencode(
         {
             "access_type": "offline",
@@ -37,7 +39,7 @@ def authorization_url(*, state: str, redirect_uri: str) -> str:
             "prompt": "consent",
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": GOOGLE_CALENDAR_SCOPE,
+            "scope": scope,
             "state": state,
         }
     )
@@ -133,6 +135,15 @@ def delete_event(connection: GoogleCalendarConnection, event_id: str) -> None:
     except GoogleCalendarError as exc:
         if exc.status != 404:
             raise
+
+
+def fetch_google_userinfo(access_token: str) -> dict[str, Any]:
+    request = Request(
+        GOOGLE_USERINFO_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    return _send_json_request(request)
 
 
 def build_google_calendar_event(occurrence: TodoOccurrence) -> dict[str, Any]:

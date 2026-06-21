@@ -622,6 +622,10 @@ Daily Todo Sync -> Google Calendar
 - 用户在 Settings 中连接 Google 账号。
 - 普通用户只需要登录 Google 并授权，不需要自己获取 token、Client ID 或 Client Secret。
 - Google OAuth Client ID / Secret 是应用开发者在服务器上配置的一次性应用凭据。
+- Calendar 同步开关只有在 Google 账户已绑定后才可使用。
+- 第一次打开 Calendar 同步开关时，如果还没有 Calendar 权限，会跳转 Google 完成授权。
+- 关闭 Calendar 同步开关后，Todo 变化不再写入 Google Calendar。
+- 取消绑定 Google 账户后，本应用删除本地 Google 授权连接，但不会自动删除已经写入 Google Calendar 的历史事件。
 - 后端保存 OAuth token 和 refresh token。
 - 任务有提醒时间时，创建或更新 Google Calendar event。
 - 本地数据库保存 Google Calendar 连接和 event link。

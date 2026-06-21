@@ -15,16 +15,18 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import {
+  authorizeGoogleCalendar,
+  bindGoogleAccount,
   createTask,
   deleteOccurrence,
-  disconnectGoogleCalendar,
+  disconnectGoogleAccount,
   getGoogleCalendarStatus,
   getMe,
   getRange,
   login,
   register,
   reorderDay,
-  connectGoogleCalendar,
+  setGoogleCalendarSyncEnabled,
   syncGoogleCalendar,
   updateOccurrence,
   type DayTodos,
@@ -470,15 +472,29 @@ function TodoScreen({
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
-  const connectGoogleCalendarMutation = useMutation({
-    mutationFn: () => connectGoogleCalendar(accessToken),
+  const bindGoogleAccountMutation = useMutation({
+    mutationFn: () => bindGoogleAccount(accessToken),
     onSuccess: (payload) => {
       window.location.href = payload.authorizationUrl;
     },
   });
 
-  const disconnectGoogleCalendarMutation = useMutation({
-    mutationFn: () => disconnectGoogleCalendar(accessToken),
+  const authorizeGoogleCalendarMutation = useMutation({
+    mutationFn: () => authorizeGoogleCalendar(accessToken),
+    onSuccess: (payload) => {
+      window.location.href = payload.authorizationUrl;
+    },
+  });
+
+  const disconnectGoogleAccountMutation = useMutation({
+    mutationFn: () => disconnectGoogleAccount(accessToken),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
+    },
+  });
+
+  const toggleGoogleCalendarSyncMutation = useMutation({
+    mutationFn: (enabled: boolean) => setGoogleCalendarSyncEnabled(enabled, accessToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
     },
@@ -1025,20 +1041,26 @@ function TodoScreen({
         <SettingsModal
           status={googleCalendarStatusQuery.data ?? null}
           syncResult={syncGoogleCalendarMutation.data ?? null}
-          isConnecting={connectGoogleCalendarMutation.isPending}
-          isDisconnecting={disconnectGoogleCalendarMutation.isPending}
+          isAuthorizingCalendar={authorizeGoogleCalendarMutation.isPending}
+          isBindingGoogle={bindGoogleAccountMutation.isPending}
+          isDisconnecting={disconnectGoogleAccountMutation.isPending}
           isLoading={googleCalendarStatusQuery.isLoading}
           isSyncing={syncGoogleCalendarMutation.isPending}
+          isTogglingSync={toggleGoogleCalendarSyncMutation.isPending}
           error={
             googleCalendarStatusQuery.error ??
-            connectGoogleCalendarMutation.error ??
-            disconnectGoogleCalendarMutation.error ??
+            bindGoogleAccountMutation.error ??
+            authorizeGoogleCalendarMutation.error ??
+            disconnectGoogleAccountMutation.error ??
+            toggleGoogleCalendarSyncMutation.error ??
             syncGoogleCalendarMutation.error
           }
           onClose={() => setIsSettingsOpen(false)}
-          onConnect={() => connectGoogleCalendarMutation.mutate()}
-          onDisconnect={() => disconnectGoogleCalendarMutation.mutate()}
+          onAuthorizeCalendar={() => authorizeGoogleCalendarMutation.mutate()}
+          onBindGoogle={() => bindGoogleAccountMutation.mutate()}
+          onDisconnect={() => disconnectGoogleAccountMutation.mutate()}
           onSync={() => syncGoogleCalendarMutation.mutate()}
+          onToggleSync={(enabled) => toggleGoogleCalendarSyncMutation.mutate(enabled)}
         />
       ) : null}
     </main>
@@ -1401,31 +1423,54 @@ function QualityMeter({
 
 function SettingsModal({
   error,
-  isConnecting,
+  isAuthorizingCalendar,
+  isBindingGoogle,
   isDisconnecting,
   isLoading,
   isSyncing,
+  isTogglingSync,
+  onAuthorizeCalendar,
+  onBindGoogle,
   onClose,
-  onConnect,
   onDisconnect,
   onSync,
+  onToggleSync,
   status,
   syncResult,
 }: {
   error: Error | null;
-  isConnecting: boolean;
+  isAuthorizingCalendar: boolean;
+  isBindingGoogle: boolean;
   isDisconnecting: boolean;
   isLoading: boolean;
   isSyncing: boolean;
+  isTogglingSync: boolean;
+  onAuthorizeCalendar: () => void;
+  onBindGoogle: () => void;
   onClose: () => void;
-  onConnect: () => void;
   onDisconnect: () => void;
   onSync: () => void;
+  onToggleSync: (enabled: boolean) => void;
   status: GoogleCalendarStatus | null;
   syncResult: GoogleCalendarSyncResult | null;
 }) {
-  const isConnected = Boolean(status?.connected);
+  const isGoogleBound = Boolean(status?.googleBound);
+  const isCalendarAuthorized = Boolean(status?.calendarAuthorized);
   const isConfigured = Boolean(status?.configured);
+  const syncEnabled = Boolean(status?.syncEnabled);
+  const toggleDisabled =
+    !isConfigured || !isGoogleBound || isAuthorizingCalendar || isTogglingSync;
+
+  function toggleCalendarSync() {
+    if (toggleDisabled) {
+      return;
+    }
+    if (!syncEnabled && !isCalendarAuthorized) {
+      onAuthorizeCalendar();
+      return;
+    }
+    onToggleSync(!syncEnabled);
+  }
 
   return (
     <ModalShell title="Settings" onClose={onClose}>
@@ -1433,28 +1478,99 @@ function SettingsModal({
         <section className="settings-card">
           <div className="settings-card-header">
             <div>
-              <p className="eyebrow">Google Calendar</p>
-              <h3>单向同步</h3>
+              <p className="eyebrow">Google Account</p>
+              <h3>绑定 Google 账户</h3>
             </div>
             <span
               className={`integration-status ${
-                isConnected ? "is-connected" : "is-muted"
+                isGoogleBound ? "is-connected" : "is-muted"
               }`}
             >
               {isLoading
                 ? "检查中"
-                : isConnected
-                  ? "已连接"
+                : isGoogleBound
+                  ? "已绑定"
                   : isConfigured
-                    ? "未连接"
+                    ? "未绑定"
                     : "暂未开启"}
             </span>
           </div>
 
           <p className="muted">
-            连接后，有提醒时间的任务会写入 Google Calendar。Google Calendar
+            先绑定 Google 账户，再开启 Calendar 单向同步。普通用户只需要登录 Google
+            并授权，不需要自己获取 token 或密钥。
+          </p>
+
+          {isGoogleBound ? (
+            <div className="bound-account">
+              <span className="brand-mark google-mark">G</span>
+              <div>
+                <strong>{status?.googleName || "Google 账户"}</strong>
+                <small>{status?.googleEmail || "已绑定"}</small>
+              </div>
+            </div>
+          ) : null}
+
+          {!isConfigured ? (
+            <p className="settings-note">
+              Google Calendar 同步暂未开启。开启后，用户只需要登录 Google 账号并授权，
+              不需要自己获取任何 token 或密钥。
+            </p>
+          ) : null}
+
+          <div className="settings-actions">
+            {!isGoogleBound ? (
+              <button
+                className="primary-button"
+                type="button"
+                disabled={!isConfigured || isBindingGoogle}
+                onClick={onBindGoogle}
+              >
+                {isBindingGoogle ? "正在跳转..." : "绑定 Google 账户"}
+              </button>
+            ) : (
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={isDisconnecting}
+                onClick={onDisconnect}
+              >
+                {isDisconnecting ? "取消绑定中..." : "取消绑定 Google 账户"}
+              </button>
+            )}
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="eyebrow">Google Calendar</p>
+              <h3>单向同步</h3>
+            </div>
+            <button
+              className={`toggle-switch ${syncEnabled ? "is-on" : ""}`}
+              type="button"
+              aria-label={syncEnabled ? "关闭 Google Calendar 同步" : "开启 Google Calendar 同步"}
+              aria-pressed={syncEnabled}
+              disabled={toggleDisabled}
+              onClick={toggleCalendarSync}
+            >
+              <span />
+            </button>
+          </div>
+
+          <p className="muted">
+            开启后，有提醒时间的任务会写入 Google Calendar。Google Calendar
             里的修改不会反向覆盖 Todo。
           </p>
+
+          {!isGoogleBound ? (
+            <p className="settings-note">请先绑定 Google 账户，之后才能开启 Calendar 同步。</p>
+          ) : !isCalendarAuthorized ? (
+            <p className="settings-note">
+              开启同步时会跳转到 Google 授权 Calendar 权限。授权后开关会自动打开。
+            </p>
+          ) : null}
 
           {status ? (
             <div className="integration-stats">
@@ -1471,13 +1587,6 @@ function SettingsModal({
                 <strong>{status.failedCount}</strong>
               </span>
             </div>
-          ) : null}
-
-          {!isConfigured ? (
-            <p className="settings-note">
-              Google Calendar 同步暂未开启。开启后，用户只需要登录 Google 账号并授权，
-              不需要自己获取任何 token 或密钥。
-            </p>
           ) : null}
 
           {status?.lastSyncAt ? (
@@ -1499,35 +1608,17 @@ function SettingsModal({
           {error ? <p className="settings-error">{error.message}</p> : null}
 
           <div className="settings-actions">
-            {!isConnected ? (
-              <button
-                className="primary-button"
-                type="button"
-                disabled={!isConfigured || isConnecting}
-                onClick={onConnect}
-              >
-                {isConnecting ? "正在跳转..." : "登录 Google 并授权"}
-              </button>
-            ) : (
-              <>
-                <button
-                  className="primary-button"
-                  type="button"
-                  disabled={isSyncing}
-                  onClick={onSync}
-                >
-                  {isSyncing ? "同步中..." : "同步未来 45 天"}
-                </button>
-                <button
-                  className="ghost-button"
-                  type="button"
-                  disabled={isDisconnecting}
-                  onClick={onDisconnect}
-                >
-                  {isDisconnecting ? "断开中..." : "断开连接"}
-                </button>
-              </>
-            )}
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!syncEnabled || isSyncing}
+              onClick={onSync}
+            >
+              {isSyncing ? "同步中..." : "同步未来 45 天"}
+            </button>
+            {isAuthorizingCalendar ? (
+              <span className="settings-inline-status">正在前往 Google 授权...</span>
+            ) : null}
           </div>
         </section>
       </div>
