@@ -19,6 +19,8 @@ import {
 } from "@tanstack/react-query";
 import {
   authorizeGoogleCalendar,
+  ACCESS_TOKEN_KEY,
+  AUTH_TOKENS_UPDATED_EVENT,
   bindGoogleAccount,
   createTask,
   deleteTaskAttachment,
@@ -30,8 +32,12 @@ import {
   getRange,
   login,
   register,
+  REFRESH_TOKEN_KEY,
   reorderDay,
+  reorderTaskAttachments,
+  SESSION_EXPIRED_EVENT,
   setGoogleCalendarSyncEnabled,
+  startGoogleAuth,
   syncGoogleCalendarForDays,
   updateOccurrence,
   uploadTaskAttachment,
@@ -212,6 +218,7 @@ type UpdateOccurrencePayload = {
   done?: boolean;
   text?: string;
   note?: string;
+  pinned?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
 };
@@ -244,19 +251,22 @@ type AttachmentDeletePayload = {
   occurrenceId: string;
 };
 
+type AttachmentReorderPayload = {
+  occurrenceId: string;
+  orderedIds: string[];
+};
+
 type AttachmentMutationContext = {
   previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
 };
 
-const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
-const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
 const LONG_PRESS_TO_DRAG_MS = 320;
 const LONG_PRESS_MOVE_CANCEL_PX = 10;
 const CALENDAR_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const CALENDAR_MINUTES_PER_DAY = 24 * 60;
 const CALENDAR_EVENT_HEIGHT = 42;
-const GOOGLE_CALENDAR_SYNC_RANGES = [45, 90, 180] as const;
-type GoogleCalendarSyncDays = (typeof GOOGLE_CALENDAR_SYNC_RANGES)[number];
+const MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024;
+type GoogleCalendarSyncDays = number;
 
 const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
   { value: "none", label: "不重复" },
@@ -276,12 +286,14 @@ export function App() {
   const [refreshToken, setRefreshToken] = useState(() =>
     localStorage.getItem(REFRESH_TOKEN_KEY),
   );
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
 
   function saveTokens(tokens: { accessToken: string; refreshToken: string }) {
     localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
     localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
     setAccessToken(tokens.accessToken);
     setRefreshToken(tokens.refreshToken);
+    setAuthNotice(null);
   }
 
   function logout() {
@@ -291,16 +303,72 @@ export function App() {
     setRefreshToken(null);
   }
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const googleAuth = params.get("googleAuth");
+    if (googleAuth) {
+      if (googleAuth === "success") {
+        const nextAccessToken = params.get("accessToken");
+        const nextRefreshToken = params.get("refreshToken");
+        if (nextAccessToken && nextRefreshToken) {
+          saveTokens({
+            accessToken: nextAccessToken,
+            refreshToken: nextRefreshToken,
+          });
+        }
+      } else {
+        setAuthNotice(params.get("message") || "Google 登录失败，请重试。");
+      }
+      params.delete("googleAuth");
+      params.delete("accessToken");
+      params.delete("refreshToken");
+      params.delete("message");
+      const nextSearch = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${
+          window.location.hash
+        }`,
+      );
+    }
+
+    function handleTokensUpdated(event: Event) {
+      const tokens = (event as CustomEvent<{ accessToken: string; refreshToken: string }>).detail;
+      if (!tokens) {
+        return;
+      }
+      setAccessToken(tokens.accessToken);
+      setRefreshToken(tokens.refreshToken);
+      setAuthNotice(null);
+    }
+
+    function handleSessionExpired() {
+      setAccessToken(null);
+      setRefreshToken(null);
+      setAuthNotice("登录已过期，请重新登录。");
+    }
+
+    window.addEventListener(AUTH_TOKENS_UPDATED_EVENT, handleTokensUpdated);
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => {
+      window.removeEventListener(AUTH_TOKENS_UPDATED_EVENT, handleTokensUpdated);
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    };
+  }, []);
+
   if (!accessToken || !refreshToken) {
-    return <AuthScreen onAuthed={saveTokens} />;
+    return <AuthScreen notice={authNotice} onAuthed={saveTokens} />;
   }
 
   return <TodoScreen accessToken={accessToken} onLogout={logout} />;
 }
 
 function AuthScreen({
+  notice,
   onAuthed,
 }: {
+  notice: string | null;
   onAuthed: (tokens: { accessToken: string; refreshToken: string }) => void;
 }) {
   const [mode, setMode] = useState<AuthMode>("login");
@@ -319,6 +387,14 @@ function AuthScreen({
     },
     onSuccess: onAuthed,
     onError: (err) => setError(err instanceof Error ? err.message : "认证失败"),
+  });
+
+  const googleAuthMutation = useMutation({
+    mutationFn: () => startGoogleAuth(),
+    onSuccess: (payload) => {
+      window.location.href = payload.authorizationUrl;
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "Google 登录失败"),
   });
 
   function submit(event: FormEvent) {
@@ -350,6 +426,7 @@ function AuthScreen({
         </div>
 
         <form onSubmit={submit} className="stack">
+          {notice ? <p className="settings-note">{notice}</p> : null}
           {mode === "register" ? (
             <>
               <label>
@@ -396,6 +473,15 @@ function AuthScreen({
           <button className="primary-button" disabled={authMutation.isPending}>
             {authMutation.isPending ? "处理中..." : mode === "login" ? "登录" : "注册"}
           </button>
+          <button
+            className="google-auth-button"
+            disabled={googleAuthMutation.isPending}
+            type="button"
+            onClick={() => googleAuthMutation.mutate()}
+          >
+            <span className="brand-mark google-mark">G</span>
+            {googleAuthMutation.isPending ? "正在前往 Google..." : "使用 Google 继续"}
+          </button>
         </form>
       </section>
     </main>
@@ -417,6 +503,7 @@ function TodoScreen({
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [appUpdateNotice, setAppUpdateNotice] = useState("");
   const [googleCalendarNotice, setGoogleCalendarNotice] =
     useState<GoogleCalendarNotice | null>(null);
   const [googleCalendarSyncDays, setGoogleCalendarSyncDays] =
@@ -430,6 +517,7 @@ function TodoScreen({
   const suppressOpenTaskIdRef = useRef<string | null>(null);
   const reorderAnimationFrameRef = useRef<number | null>(null);
   const completionOverrideVersionRef = useRef(0);
+  const hasScheduledReloadRef = useRef(false);
   const queryClient = useQueryClient();
   const isAnalytics = viewMode === "analytics";
 
@@ -461,6 +549,9 @@ function TodoScreen({
   const rangeQuery = useQuery({
     queryKey: ["range", visibleRange.start, visibleRange.end],
     queryFn: () => getRange(visibleRange.start, visibleRange.end, accessToken),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
   });
 
   const googleCalendarStatusQuery = useQuery({
@@ -484,6 +575,41 @@ function TodoScreen({
   const isSidebarExpanded =
     isSidebarPinned || isSidebarHovered || isMobileSidebarOpen;
   const isSidebarCollapsed = !isSidebarExpanded;
+
+  useEffect(() => {
+    const currentAssetSignature = [...document.querySelectorAll("script[src], link[href]")]
+      .map((element) => element.getAttribute("src") || element.getAttribute("href") || "")
+      .filter((value) => value.includes("/assets/"))
+      .sort()
+      .join("|");
+
+    async function checkForUpdate() {
+      if (hasScheduledReloadRef.current || !currentAssetSignature) {
+        return;
+      }
+      try {
+        const response = await fetch(`/?update-check=${Date.now()}`, {
+          cache: "no-store",
+        });
+        const html = await response.text();
+        const nextAssetSignature = [...html.matchAll(/(?:src|href)="([^"]*\/assets\/[^"]+)"/g)]
+          .map((match) => match[1])
+          .sort()
+          .join("|");
+        if (nextAssetSignature && nextAssetSignature !== currentAssetSignature) {
+          hasScheduledReloadRef.current = true;
+          setAppUpdateNotice("发现新版本，正在更新界面...");
+          window.setTimeout(() => window.location.reload(), 1200);
+        }
+      } catch {
+        // The app can keep running on the current bundle if the update check fails.
+      }
+    }
+
+    const intervalId = window.setInterval(checkForUpdate, 60_000);
+    void checkForUpdate();
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const createMutation = useMutation({
     mutationFn: (payload: {
@@ -549,7 +675,6 @@ function TodoScreen({
       queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
         applyAttachmentAdd(data, payload.occurrenceId, attachment),
       );
-      queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
 
@@ -577,7 +702,33 @@ function TodoScreen({
         queryClient.setQueryData(queryKey, data);
       });
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
+  });
+
+  const reorderAttachmentsMutation = useMutation<
+    void,
+    Error,
+    AttachmentReorderPayload,
+    AttachmentMutationContext
+  >({
+    mutationFn: ({ occurrenceId, orderedIds }) =>
+      reorderTaskAttachments(occurrenceId, orderedIds, accessToken),
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
+      const previousRanges = queryClient.getQueriesData<RangeTodos>({
+        queryKey: ["range"],
+      });
+
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyAttachmentOrder(data, payload.occurrenceId, payload.orderedIds),
+      );
+
+      return { previousRanges };
+    },
+    onError: (_error, _payload, context) => {
+      context?.previousRanges.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+    },
   });
 
   function updateTaskDone(id: string, done: boolean) {
@@ -609,6 +760,10 @@ function TodoScreen({
         },
       );
     }, 0);
+  }
+
+  function updateTaskPinned(id: string, pinned: boolean) {
+    updateMutation.mutate({ id, pinned });
   }
 
   const deleteMutation = useMutation({
@@ -808,10 +963,15 @@ function TodoScreen({
   }
 
   function nextTargetIdAfter(date: string, hoveredId: string, draggedId: string) {
-    const ids =
-      orderedDayItems(daysByDate.get(date) ?? emptyDay(date))
-        .map((item) => item.id)
-        .filter((id) => id !== draggedId);
+    const items = orderedDayItems(daysByDate.get(date) ?? emptyDay(date));
+    const draggedItem = items.find((item) => item.id === draggedId);
+    if (!draggedItem) {
+      return null;
+    }
+    const ids = items
+      .filter((item) => item.isPinned === draggedItem.isPinned)
+      .map((item) => item.id)
+      .filter((id) => id !== draggedId);
     const index = ids.indexOf(hoveredId);
     if (index === -1) {
       return null;
@@ -825,6 +985,12 @@ function TodoScreen({
     if (hoveredCard?.dataset.taskDate === current.date) {
       const hoveredId = hoveredCard.dataset.taskId;
       if (!hoveredId || hoveredId === current.id) {
+        return current.targetId;
+      }
+      const items = orderedDayItems(daysByDate.get(current.date) ?? emptyDay(current.date));
+      const draggedItem = items.find((item) => item.id === current.id);
+      const hoveredItem = items.find((item) => item.id === hoveredId);
+      if (!draggedItem || !hoveredItem || draggedItem.isPinned !== hoveredItem.isPinned) {
         return current.targetId;
       }
       const rect = hoveredCard.getBoundingClientRect();
@@ -931,8 +1097,13 @@ function TodoScreen({
     if (dragState.active) {
       suppressOpenTaskIdRef.current = dragState.id;
       const day = daysByDate.get(dragState.date) ?? emptyDay(dragState.date);
-      const currentIds = orderedDayItems(day).map((item) => item.id);
-      const orderedIds = reorderIds(currentIds, dragState.id, dragState.targetId);
+      const currentItems = orderedDayItems(day);
+      const currentIds = currentItems.map((item) => item.id);
+      const orderedIds = reorderOccurrenceItems(
+        currentItems,
+        dragState.id,
+        dragState.targetId,
+      ).map((item) => item.id);
       if (orderedIds.join("|") !== currentIds.join("|")) {
         reorderMutation.mutate({ date: dragState.date, orderedIds });
       }
@@ -987,6 +1158,12 @@ function TodoScreen({
         .filter(Boolean)
         .join(" ")}
     >
+      {appUpdateNotice ? (
+        <div className="app-update-toast" role="status" aria-live="polite">
+          <span className="loading-spinner" />
+          <span>{appUpdateNotice}</span>
+        </div>
+      ) : null}
       <button
         className="sidebar-scrim"
         type="button"
@@ -1215,6 +1392,7 @@ function TodoScreen({
                   key={date}
                   onDelete={(id) => deleteMutation.mutate(id)}
                   onDone={updateTaskDone}
+                  onPin={updateTaskPinned}
                   onCancelDrag={cancelTaskDrag}
                   onEndDrag={finishTaskDrag}
                   onMoveDrag={moveTaskDrag}
@@ -1236,6 +1414,7 @@ function TodoScreen({
               onCancelDrag={cancelTaskDrag}
               onDelete={(id) => deleteMutation.mutate(id)}
               onDone={updateTaskDone}
+              onPin={updateTaskPinned}
               onEndDrag={finishTaskDrag}
               onMoveDrag={moveTaskDrag}
               onOpenTask={openTaskDetails}
@@ -1288,9 +1467,17 @@ function TodoScreen({
               occurrenceId: selectedTask.id,
             })
           }
-          onSave={(changes) => updateMutation.mutate({ id: selectedTask.id, ...changes })}
+          onReorderAttachments={(orderedIds) =>
+            reorderAttachmentsMutation.mutate({
+              occurrenceId: selectedTask.id,
+              orderedIds,
+            })
+          }
+          onSave={async (changes) => {
+            await updateMutation.mutateAsync({ id: selectedTask.id, ...changes });
+          }}
           onUploadAttachment={(file) =>
-            uploadAttachmentMutation.mutate({
+            uploadAttachmentMutation.mutateAsync({
               file,
               occurrenceId: selectedTask.id,
             })
@@ -1342,6 +1529,7 @@ function CalendarBoard({
   onCancelDrag,
   onDelete,
   onDone,
+  onPin,
   onEndDrag,
   onMoveDrag,
   onOpenTask,
@@ -1358,6 +1546,7 @@ function CalendarBoard({
   onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
   onEndDrag: () => void;
   onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpenTask: (id: string) => void;
@@ -1380,6 +1569,7 @@ function CalendarBoard({
         onCancelDrag={onCancelDrag}
         onDelete={onDelete}
         onDone={onDone}
+        onPin={onPin}
         onEndDrag={onEndDrag}
         onMoveDrag={onMoveDrag}
         onOpenTask={onOpenTask}
@@ -1400,6 +1590,7 @@ function CalendarBoard({
       onCancelDrag={onCancelDrag}
       onDelete={onDelete}
       onDone={onDone}
+      onPin={onPin}
       onEndDrag={onEndDrag}
       onMoveDrag={onMoveDrag}
       onOpenTask={onOpenTask}
@@ -1419,6 +1610,7 @@ function TimeCalendar({
   onCancelDrag,
   onDelete,
   onDone,
+  onPin,
   onEndDrag,
   onMoveDrag,
   onOpenTask,
@@ -1434,6 +1626,7 @@ function TimeCalendar({
   onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
   onEndDrag: () => void;
   onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpenTask: (id: string) => void;
@@ -1493,6 +1686,7 @@ function TimeCalendar({
                     onCancelDrag={onCancelDrag}
                     onDelete={onDelete}
                     onDone={onDone}
+                    onPin={onPin}
                     onEndDrag={onEndDrag}
                     onMoveDrag={onMoveDrag}
                     onOpen={() => onOpenTask(item.id)}
@@ -1554,6 +1748,7 @@ function TimeCalendar({
                       onCancelDrag={onCancelDrag}
                       onDelete={onDelete}
                       onDone={onDone}
+                      onPin={onPin}
                       onEndDrag={onEndDrag}
                       onMoveDrag={onMoveDrag}
                       onOpen={() => onOpenTask(item.id)}
@@ -1580,6 +1775,7 @@ function MonthCalendar({
   onCancelDrag,
   onDelete,
   onDone,
+  onPin,
   onEndDrag,
   onMoveDrag,
   onOpenTask,
@@ -1595,6 +1791,7 @@ function MonthCalendar({
   onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
   onEndDrag: () => void;
   onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpenTask: (id: string) => void;
@@ -1657,6 +1854,7 @@ function MonthCalendar({
                     onCancelDrag={onCancelDrag}
                     onDelete={onDelete}
                     onDone={onDone}
+                    onPin={onPin}
                     onEndDrag={onEndDrag}
                     onMoveDrag={onMoveDrag}
                     onOpen={() => onOpenTask(item.id)}
@@ -1691,6 +1889,7 @@ function CalendarTaskChip({
   onCancelDrag,
   onDelete,
   onDone,
+  onPin,
   onEndDrag,
   onMoveDrag,
   onOpen,
@@ -1705,6 +1904,7 @@ function CalendarTaskChip({
   onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
   onEndDrag: () => void;
   onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpen: () => void;
@@ -1736,7 +1936,7 @@ function CalendarTaskChip({
     <div
       className={`calendar-task-chip is-${variant} ${done ? "is-done" : ""} ${
         dragged ? "is-dragging" : ""
-      }`}
+      } ${item.isPinned ? "is-pinned" : ""}`}
       data-task-date={date}
       data-task-id={item.id}
       data-task-sortable="true"
@@ -1765,6 +1965,17 @@ function CalendarTaskChip({
       <span className="calendar-chip-title">{item.text}</span>
       {item.reminderTime ? <time>{item.reminderTime}</time> : null}
       <button
+        className={`calendar-chip-delete pin-task-button ${item.isPinned ? "is-pinned" : ""}`}
+        type="button"
+        aria-label={item.isPinned ? "取消置顶任务" : "置顶任务"}
+        onClick={(event) => {
+          event.stopPropagation();
+          onPin(item.id, !item.isPinned);
+        }}
+      >
+        <PinIcon pinned={item.isPinned} />
+      </button>
+      <button
         className="calendar-chip-delete"
         type="button"
         aria-label="删除任务"
@@ -1790,6 +2001,7 @@ function DayColumn({
   onCancelDrag,
   onDelete,
   onDone,
+  onPin,
   onEndDrag,
   onMoveDrag,
   onOpenTask,
@@ -1806,6 +2018,7 @@ function DayColumn({
   onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
   onEndDrag: () => void;
   onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpenTask: (id: string) => void;
@@ -1846,6 +2059,7 @@ function DayColumn({
             onCancelDrag={onCancelDrag}
             onDelete={onDelete}
             onDone={onDone}
+            onPin={onPin}
             onEndDrag={onEndDrag}
             onMoveDrag={onMoveDrag}
             onOpen={() => onOpenTask(item.id)}
@@ -1865,6 +2079,7 @@ function TodoCard({
   onCancelDrag,
   onDelete,
   onDone,
+  onPin,
   onEndDrag,
   onMoveDrag,
   onOpen,
@@ -1877,6 +2092,7 @@ function TodoCard({
   onCancelDrag: () => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
   onEndDrag: () => void;
   onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
   onOpen: () => void;
@@ -1906,7 +2122,9 @@ function TodoCard({
 
   return (
     <li
-      className={`todo-item task-card ${done ? "is-done" : ""} ${dragged ? "is-dragging" : ""}`}
+      className={`todo-item task-card ${done ? "is-done" : ""} ${
+        dragged ? "is-dragging" : ""
+      } ${item.isPinned ? "is-pinned" : ""}`}
       data-task-date={date}
       data-task-id={item.id}
       data-task-sortable="true"
@@ -1941,6 +2159,17 @@ function TodoCard({
       <div className="task-body">
         <p>{item.text}</p>
       </div>
+      <button
+        className={`icon-button pin-task-button ${item.isPinned ? "is-pinned" : ""}`}
+        type="button"
+        aria-label={item.isPinned ? "取消置顶任务" : "置顶任务"}
+        onClick={(event) => {
+          event.stopPropagation();
+          onPin(item.id, !item.isPinned);
+        }}
+      >
+        <PinIcon pinned={item.isPinned} />
+      </button>
       <button
         className="icon-button"
         type="button"
@@ -2514,19 +2743,16 @@ function SettingsModal({
           <div className="settings-actions">
             <label className="compact-select">
               同步范围
-              <select
+              <input
+                type="number"
+                min={1}
+                max={180}
                 value={syncDays}
                 disabled={!syncEnabled || isSyncing}
                 onChange={(event) =>
-                  onChangeSyncDays(Number(event.target.value) as GoogleCalendarSyncDays)
+                  onChangeSyncDays(clampSyncDays(Number(event.target.value)))
                 }
-              >
-                {GOOGLE_CALENDAR_SYNC_RANGES.map((days) => (
-                  <option key={days} value={days}>
-                    未来 {days} 天
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             <button
               className="primary-button"
@@ -2708,6 +2934,7 @@ function TaskDetailsModal({
   onClose,
   onDelete,
   onDeleteAttachment,
+  onReorderAttachments,
   onSave,
   onUploadAttachment,
 }: {
@@ -2721,25 +2948,48 @@ function TaskDetailsModal({
   onClose: () => void;
   onDelete: () => void;
   onDeleteAttachment: (attachmentId: string) => void;
+  onReorderAttachments: (orderedIds: string[]) => void;
   onSave: (changes: {
     text: string;
     note: string;
     reminderTime: string | null;
     repeat: RepeatRule;
-  }) => void;
-  onUploadAttachment: (file: File) => void;
+  }) => Promise<void>;
+  onUploadAttachment: (file: File) => Promise<unknown>;
 }) {
   const [text, setText] = useState(item.text);
   const [note, setNote] = useState(item.note);
   const [reminderTime, setReminderTime] = useState(item.reminderTime ?? "");
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(item.repeat.kind);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [localSaving, setLocalSaving] = useState(false);
+  const [localUploading, setLocalUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  function uploadFiles(fileList: FileList | File[]) {
-    Array.from(fileList)
-      .filter((file) => file.type.startsWith("image/"))
-      .forEach((file) => onUploadAttachment(file));
+  async function uploadFiles(fileList: FileList | File[]) {
+    const imageFiles = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    setUploadMessage(imageFiles.length > 1 ? "正在顺序上传图片..." : "正在上传图片...");
+    setLocalUploading(true);
+    try {
+      for (const file of imageFiles) {
+        const prepared = await prepareImageForUpload(file);
+        if (prepared.wasCompressed) {
+          setUploadMessage("图片超过 8MB，已压缩后上传。");
+        }
+        await onUploadAttachment(prepared.file);
+      }
+      setUploadMessage("图片已上传。");
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "图片上传失败。");
+    } finally {
+      setLocalUploading(false);
+    }
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
@@ -2762,17 +3012,26 @@ function TaskDetailsModal({
     uploadFiles(event.dataTransfer.files);
   }
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     if (!text.trim()) {
       return;
     }
-    onSave({
-      text,
-      note,
-      reminderTime: reminderTime || null,
-      repeat: repeatRuleForDate(repeatKind, item.taskDate),
-    });
+    setSaveMessage("保存中，关闭后仍会继续保存。");
+    setLocalSaving(true);
+    try {
+      await onSave({
+        text,
+        note,
+        reminderTime: reminderTime || null,
+        repeat: repeatRuleForDate(repeatKind, item.taskDate),
+      });
+      setSaveMessage("已保存。");
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : "保存失败。");
+    } finally {
+      setLocalSaving(false);
+    }
   }
 
   return (
@@ -2795,18 +3054,7 @@ function TaskDetailsModal({
           onDragOver={handleNoteDragOver}
           onDrop={handleNoteDrop}
         >
-          <div className="note-label-row">
-            <span>备注</span>
-            <button
-              className="icon-button tiny-icon-button"
-              type="button"
-              aria-label="上传图片"
-              disabled={isUploadingAttachment}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <ImageIcon />
-            </button>
-          </div>
+          <span>备注</span>
           <textarea
             value={note}
             onChange={(event) => setNote(event.target.value)}
@@ -2821,17 +3069,31 @@ function TaskDetailsModal({
             multiple
             onChange={handleFileInputChange}
           />
+          <div className="note-upload-row">
+            <button
+              className="icon-button tiny-icon-button"
+              type="button"
+              aria-label="上传图片"
+              disabled={isUploadingAttachment || localUploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <ImageIcon />
+            </button>
+            <small>{uploadMessage || "图片可拖到备注里，也可以点图标上传。"}</small>
+          </div>
         </div>
         <TaskAttachmentGallery
           accessToken={accessToken}
           attachments={item.attachments}
           deletingAttachmentId={deletingAttachmentId}
-          isUploading={isUploadingAttachment}
+          isUploading={isUploadingAttachment || localUploading}
           onDelete={onDeleteAttachment}
+          onReorder={onReorderAttachments}
         />
         {attachmentError ? (
           <p className="settings-error">{attachmentError.message}</p>
         ) : null}
+        {saveMessage ? <p className="settings-note">{saveMessage}</p> : null}
         <div className="field-grid">
           <label>
             日期
@@ -2881,8 +3143,8 @@ function TaskDetailsModal({
           <button className="ghost-button" type="button" onClick={onClose}>
             关闭
           </button>
-          <button className="primary-button" disabled={isSaving} type="submit">
-            {isSaving ? "保存中..." : "保存"}
+          <button className="primary-button" disabled={isSaving || localSaving} type="submit">
+            {isSaving || localSaving ? "保存中..." : "保存"}
           </button>
         </div>
       </form>
@@ -2896,15 +3158,29 @@ function TaskAttachmentGallery({
   deletingAttachmentId,
   isUploading,
   onDelete,
+  onReorder,
 }: {
   accessToken: string;
   attachments: TaskAttachment[];
   deletingAttachmentId: string | null;
   isUploading: boolean;
   onDelete: (attachmentId: string) => void;
+  onReorder: (orderedIds: string[]) => void;
 }) {
+  const [draggedAttachmentId, setDraggedAttachmentId] = useState<string | null>(null);
+
   if (attachments.length === 0 && !isUploading) {
     return null;
+  }
+
+  function reorderAttachmentBefore(targetId: string) {
+    if (!draggedAttachmentId || draggedAttachmentId === targetId) {
+      setDraggedAttachmentId(null);
+      return;
+    }
+    const ids = attachments.map((attachment) => attachment.id);
+    onReorder(reorderIds(ids, draggedAttachmentId, targetId));
+    setDraggedAttachmentId(null);
   }
 
   return (
@@ -2918,9 +3194,13 @@ function TaskAttachmentGallery({
           <TaskAttachmentThumb
             accessToken={accessToken}
             attachment={attachment}
+            dragged={draggedAttachmentId === attachment.id}
             isDeleting={deletingAttachmentId === attachment.id}
             key={attachment.id}
             onDelete={() => onDelete(attachment.id)}
+            onDragEnd={() => setDraggedAttachmentId(null)}
+            onDragOver={() => reorderAttachmentBefore(attachment.id)}
+            onDragStart={() => setDraggedAttachmentId(attachment.id)}
           />
         ))}
         {isUploading ? (
@@ -2936,13 +3216,21 @@ function TaskAttachmentGallery({
 function TaskAttachmentThumb({
   accessToken,
   attachment,
+  dragged,
   isDeleting,
   onDelete,
+  onDragEnd,
+  onDragOver,
+  onDragStart,
 }: {
   accessToken: string;
   attachment: TaskAttachment;
+  dragged: boolean;
   isDeleting: boolean;
   onDelete: () => void;
+  onDragEnd: () => void;
+  onDragOver: () => void;
+  onDragStart: () => void;
 }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -2976,7 +3264,16 @@ function TaskAttachmentThumb({
   }, [accessToken, attachment.contentUrl]);
 
   return (
-    <figure className="attachment-tile">
+    <figure
+      className={`attachment-tile ${dragged ? "is-dragging" : ""}`}
+      draggable
+      onDragEnd={onDragEnd}
+      onDragOver={(event) => {
+        event.preventDefault();
+        onDragOver();
+      }}
+      onDragStart={onDragStart}
+    >
       {objectUrl ? (
         <img src={objectUrl} alt={attachment.originalFilename} />
       ) : (
@@ -3311,6 +3608,77 @@ function googleCalendarCallbackNotice(
   };
 }
 
+function clampSyncDays(value: number) {
+  if (!Number.isFinite(value)) {
+    return 45;
+  }
+  return Math.min(180, Math.max(1, Math.round(value)));
+}
+
+async function prepareImageForUpload(file: File) {
+  if (file.size <= MAX_IMAGE_UPLOAD_BYTES) {
+    return { file, wasCompressed: false };
+  }
+  if (file.type === "image/gif") {
+    throw new Error("GIF 超过 8MB 暂不支持自动压缩，请换一张更小的图片。");
+  }
+
+  const compressed = await compressImageFile(file);
+  if (compressed.size > MAX_IMAGE_UPLOAD_BYTES) {
+    throw new Error("图片压缩后仍超过 8MB，请换一张更小的图片。");
+  }
+  return { file: compressed, wasCompressed: true };
+}
+
+async function compressImageFile(file: File) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const maxSide = 1920;
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("当前浏览器无法压缩图片。");
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    const outputType = file.type === "image/png" ? "image/jpeg" : file.type || "image/jpeg";
+    let quality = 0.86;
+    let blob = await canvasToBlob(canvas, outputType, quality);
+    while (blob.size > MAX_IMAGE_UPLOAD_BYTES && quality > 0.46) {
+      quality -= 0.1;
+      blob = await canvasToBlob(canvas, outputType, quality);
+    }
+
+    const extension = outputType === "image/webp" ? "webp" : "jpg";
+    const baseName = file.name.replace(/\.[^.]+$/, "") || "image";
+    return new File([blob], `${baseName}-compressed.${extension}`, {
+      type: outputType,
+      lastModified: Date.now(),
+    });
+  } finally {
+    bitmap.close();
+  }
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("当前浏览器无法压缩图片。"));
+        }
+      },
+      type,
+      quality,
+    );
+  });
+}
+
 function applyOptimisticOccurrenceUpdate(
   data: RangeTodos | undefined,
   payload: UpdateOccurrencePayload,
@@ -3345,6 +3713,10 @@ function applyOptimisticOccurrenceUpdate(
       }
       if ("note" in payload && payload.note !== undefined) {
         nextItem.note = payload.note;
+      }
+      if ("pinned" in payload && payload.pinned !== undefined) {
+        nextItem.isPinned = payload.pinned;
+        nextItem.sortOrder = Date.now();
       }
       if ("reminderTime" in payload) {
         nextItem.reminderTime = payload.reminderTime ?? null;
@@ -3438,6 +3810,43 @@ function applyAttachmentRemove(
   return changed ? { ...data, days } : data;
 }
 
+function applyAttachmentOrder(
+  data: RangeTodos | undefined,
+  occurrenceId: string,
+  orderedIds: string[],
+) {
+  if (!data) {
+    return data;
+  }
+
+  const orderById = new Map(orderedIds.map((id, index) => [id, index]));
+  let changed = false;
+  const days = data.days.map((day) => {
+    const updateItems = (items: TodoOccurrence[]) =>
+      items.map((item) => {
+        if (item.id !== occurrenceId) {
+          return item;
+        }
+        changed = true;
+        return {
+          ...item,
+          attachments: [...item.attachments].sort(
+            (left, right) =>
+              (orderById.get(left.id) ?? 10_000) - (orderById.get(right.id) ?? 10_000),
+          ),
+        };
+      });
+
+    return {
+      ...day,
+      pending: updateItems(day.pending),
+      done: updateItems(day.done),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
 function applyOptimisticDayOrder(
   data: RangeTodos | undefined,
   payload: ReorderPayload,
@@ -3472,6 +3881,9 @@ function applyOptimisticDayOrder(
 }
 
 function compareOccurrences(left: TodoOccurrence, right: TodoOccurrence) {
+  if (left.isPinned !== right.isPinned) {
+    return left.isPinned ? -1 : 1;
+  }
   if (left.sortOrder !== right.sortOrder) {
     return left.sortOrder - right.sortOrder;
   }
@@ -3487,18 +3899,11 @@ function previewDayItems(
     return items;
   }
 
-  const byId = new Map(items.map((item) => [item.id, item]));
-  if (!byId.has(dragState.id)) {
+  if (!items.some((item) => item.id === dragState.id)) {
     return items;
   }
 
-  return reorderIds(
-    items.map((item) => item.id),
-    dragState.id,
-    dragState.targetId,
-  )
-    .map((id) => byId.get(id))
-    .filter((item): item is TodoOccurrence => Boolean(item));
+  return reorderOccurrenceItems(items, dragState.id, dragState.targetId);
 }
 
 function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
@@ -3515,6 +3920,33 @@ function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
     draggedId,
     ...withoutDragged.slice(targetIndex),
   ];
+}
+
+function reorderOccurrenceItems(
+  items: TodoOccurrence[],
+  draggedId: string,
+  targetId: string | null,
+) {
+  const draggedItem = items.find((item) => item.id === draggedId);
+  if (!draggedItem) {
+    return items;
+  }
+
+  const pinnedItems = items.filter((item) => item.isPinned);
+  const unpinnedItems = items.filter((item) => !item.isPinned);
+  const group = draggedItem.isPinned ? pinnedItems : unpinnedItems;
+  const groupById = new Map(group.map((item) => [item.id, item]));
+  const orderedGroup = reorderIds(
+    group.map((item) => item.id),
+    draggedId,
+    targetId,
+  )
+    .map((id) => groupById.get(id))
+    .filter((item): item is TodoOccurrence => Boolean(item));
+
+  return draggedItem.isPinned
+    ? [...orderedGroup, ...unpinnedItems]
+    : [...pinnedItems, ...orderedGroup];
 }
 
 function buildTodayAnalyticsSnapshot(

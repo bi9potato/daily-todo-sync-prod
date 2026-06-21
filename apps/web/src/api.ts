@@ -20,6 +20,7 @@ export type TodoOccurrence = {
   status: "pending" | "done";
   source: "manual" | "carryover" | "recurring";
   sortOrder: number;
+  isPinned: boolean;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -91,6 +92,10 @@ export type GoogleCalendarAuthUrl = {
   authorizationUrl: string;
 };
 
+export type GoogleAuthUrl = {
+  authorizationUrl: string;
+};
+
 export type GoogleCalendarSyncResult = {
   start: string;
   end: string;
@@ -98,6 +103,12 @@ export type GoogleCalendarSyncResult = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+export const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
+export const REFRESH_TOKEN_KEY = "daily-todo-sync.refresh-token";
+export const AUTH_TOKENS_UPDATED_EVENT = "daily-todo-sync:tokens-updated";
+export const SESSION_EXPIRED_EVENT = "daily-todo-sync:session-expired";
+
+let refreshPromise: Promise<string> | null = null;
 
 function formatErrorDetail(detail: unknown): string | null {
   if (typeof detail === "string") {
@@ -146,6 +157,7 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
   accessToken?: string,
+  retryOnUnauthorized = true,
 ): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -160,6 +172,11 @@ async function request<T>(
     headers,
   });
 
+  if (response.status === 401 && accessToken && retryOnUnauthorized) {
+    const refreshedAccessToken = await refreshStoredToken();
+    return request<T>(path, options, refreshedAccessToken, false);
+  }
+
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
@@ -169,6 +186,47 @@ async function request<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+async function refreshStoredToken() {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+  if (!refreshToken) {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    throw new Error("登录已过期，请重新登录。");
+  }
+
+  refreshPromise = request<TokenPair>(
+    "/auth/refresh",
+    {
+      method: "POST",
+      body: JSON.stringify({ refreshToken }),
+    },
+    undefined,
+    false,
+  )
+    .then((tokens) => {
+      localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
+      localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
+      window.dispatchEvent(
+        new CustomEvent<TokenPair>(AUTH_TOKENS_UPDATED_EVENT, { detail: tokens }),
+      );
+      return tokens.accessToken;
+    })
+    .catch((error) => {
+      localStorage.removeItem(ACCESS_TOKEN_KEY);
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+      throw error;
+    })
+    .finally(() => {
+      refreshPromise = null;
+    });
+
+  return refreshPromise;
 }
 
 export function register(payload: {
@@ -186,6 +244,12 @@ export function login(payload: { identifier: string; password: string }) {
   return request<TokenPair>("/auth/login", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function startGoogleAuth() {
+  return request<GoogleAuthUrl>("/auth/google", {
+    method: "POST",
   });
 }
 
@@ -218,6 +282,7 @@ export function updateOccurrence(
     done?: boolean;
     text?: string;
     note?: string;
+    pinned?: boolean;
     reminderTime?: string | null;
     repeat?: RepeatRule;
   },
@@ -236,6 +301,21 @@ export function updateOccurrence(
 export function reorderDay(date: string, orderedIds: string[], accessToken: string) {
   return request<void>(
     `/days/${date}/reorder`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ orderedIds }),
+    },
+    accessToken,
+  );
+}
+
+export function reorderTaskAttachments(
+  occurrenceId: string,
+  orderedIds: string[],
+  accessToken: string,
+) {
+  return request<void>(
+    `/occurrences/${occurrenceId}/attachments/reorder`,
     {
       method: "PATCH",
       body: JSON.stringify({ orderedIds }),
@@ -345,11 +425,17 @@ export function deleteTaskAttachment(attachmentId: string, accessToken: string) 
 }
 
 export async function getTaskAttachmentBlob(contentUrl: string, accessToken: string) {
-  const response = await fetch(contentUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
+  let token = accessToken;
+  let response = await fetch(contentUrl, {
+    headers: { Authorization: `Bearer ${token}` },
   });
+
+  if (response.status === 401) {
+    token = await refreshStoredToken();
+    response = await fetch(contentUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));

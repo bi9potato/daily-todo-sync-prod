@@ -112,13 +112,24 @@ class CarryoverTests(TestCase):
             note="  chapter 1  ",
         )
 
-        self.assertEqual(occurrence.task.note, "chapter 1")
+        self.assertEqual(occurrence.note, "chapter 1")
 
         update_occurrence(self.user, occurrence.id, note="  chapter 2  ")
         occurrence.refresh_from_db()
-        occurrence.task.refresh_from_db()
 
-        self.assertEqual(occurrence.task.note, "chapter 2")
+        self.assertEqual(occurrence.note, "chapter 2")
+
+    def test_pin_moves_item_into_pinned_group(self):
+        first = create_task_for_day(self.user, date(2026, 6, 20), "First")
+        second = create_task_for_day(self.user, date(2026, 6, 20), "Second")
+
+        update_occurrence(self.user, second.id, pinned=True)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertFalse(first.is_pinned)
+        self.assertTrue(second.is_pinned)
+        self.assertLess(second.sort_order, 2000)
 
     def test_image_attachment_can_be_added_to_task(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
@@ -132,6 +143,7 @@ class CarryoverTests(TestCase):
             attachment = add_task_attachment(self.user, occurrence.id, image)
 
             self.assertEqual(attachment.task_id, occurrence.task_id)
+            self.assertEqual(attachment.occurrence_id, occurrence.id)
             self.assertEqual(attachment.original_filename, "receipt.png")
             self.assertTrue(TaskAttachment.objects.filter(id=attachment.id).exists())
             attachment.file.close()

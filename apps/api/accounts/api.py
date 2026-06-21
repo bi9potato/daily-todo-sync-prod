@@ -1,9 +1,21 @@
+from urllib.parse import quote
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import Q
+from django.http import HttpResponseRedirect
 from django.utils import timezone
+from integrations.google_calendar import (
+    GOOGLE_ACCOUNT_SCOPE,
+    GoogleCalendarError,
+    authorization_url,
+    exchange_code_for_tokens,
+    fetch_google_userinfo,
+)
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
@@ -12,6 +24,8 @@ from .models import RefreshToken
 from .tokens import issue_token_pair
 
 router = Router(tags=["auth"])
+GOOGLE_AUTH_STATE_SALT = "daily-todo-sync.google-auth"
+GOOGLE_AUTH_STATE_MAX_AGE_SECONDS = 10 * 60
 
 
 class RegisterIn(Schema):
@@ -43,6 +57,28 @@ class UserOut(Schema):
     id: str
     username: str
     email: str
+
+
+class GoogleAuthUrlOut(Schema):
+    authorizationUrl: str
+
+
+def frontend_url(request) -> str:
+    if settings.FRONTEND_URL:
+        return settings.FRONTEND_URL.rstrip("/")
+    return request.build_absolute_uri("/").rstrip("/")
+
+
+def google_auth_redirect_uri(request) -> str:
+    if settings.GOOGLE_AUTH_REDIRECT_URI:
+        return settings.GOOGLE_AUTH_REDIRECT_URI
+    return request.build_absolute_uri("/api/auth/google/callback")
+
+
+def callback_redirect_url(base_url: str, **params: str) -> str:
+    separator = "&" if "?" in base_url else "?"
+    query = "&".join(f"{key}={quote(value)}" for key, value in params.items())
+    return f"{base_url}{separator}{query}"
 
 
 @router.post("/register", response={201: TokenOut})
@@ -83,6 +119,105 @@ def login(request, payload: LoginIn):
     return issue_token_pair(request, user)
 
 
+@router.post("/google", response=GoogleAuthUrlOut)
+def google_auth_url(request):
+    if not settings.GOOGLE_CALENDAR_CLIENT_ID or not settings.GOOGLE_CALENDAR_CLIENT_SECRET:
+        raise HttpError(400, "Google login is not configured.")
+    state = signing.dumps(
+        {"return_url": frontend_url(request)},
+        salt=GOOGLE_AUTH_STATE_SALT,
+    )
+    return {
+        "authorizationUrl": authorization_url(
+            state=state,
+            redirect_uri=google_auth_redirect_uri(request),
+            scope=GOOGLE_ACCOUNT_SCOPE,
+        )
+    }
+
+
+@router.get("/google/callback")
+def google_auth_callback(
+    request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    return_url = frontend_url(request)
+    if error:
+        return HttpResponseRedirect(
+            callback_redirect_url(return_url, googleAuth="error", message=error)
+        )
+    if not code or not state:
+        return HttpResponseRedirect(
+            callback_redirect_url(
+                return_url,
+                googleAuth="error",
+                message="Missing Google callback data.",
+            )
+        )
+
+    try:
+        payload = signing.loads(
+            state,
+            salt=GOOGLE_AUTH_STATE_SALT,
+            max_age=GOOGLE_AUTH_STATE_MAX_AGE_SECONDS,
+        )
+        return_url = payload.get("return_url") or return_url
+        token_body = exchange_code_for_tokens(
+            code=code,
+            redirect_uri=google_auth_redirect_uri(request),
+        )
+        access_token = str(token_body.get("access_token") or "")
+        userinfo = fetch_google_userinfo(access_token)
+    except (GoogleCalendarError, signing.BadSignature, signing.SignatureExpired, KeyError) as exc:
+        return HttpResponseRedirect(
+            callback_redirect_url(return_url, googleAuth="error", message=str(exc))
+        )
+
+    email = str(userinfo.get("email") or "").strip().lower()
+    name = str(userinfo.get("name") or "").strip()
+    if not email:
+        return HttpResponseRedirect(
+            callback_redirect_url(
+                return_url,
+                googleAuth="error",
+                message="Google account did not return an email.",
+            )
+        )
+
+    User = get_user_model()
+    user = User.objects.filter(email__iexact=email).first()
+    if user is None:
+        base_username = (email.split("@")[0] or "google").replace(".", "-")[:140]
+        username = base_username
+        suffix = 1
+        while User.objects.filter(username=username).exists():
+            suffix += 1
+            username = f"{base_username}-{suffix}"[:150]
+        user = User(username=username, email=email, first_name=name[:150])
+        user.set_unusable_password()
+        user.save()
+    if not user.is_active:
+        return HttpResponseRedirect(
+            callback_redirect_url(
+                return_url,
+                googleAuth="error",
+                message="This account is disabled.",
+            )
+        )
+
+    tokens = issue_token_pair(request, user)
+    return HttpResponseRedirect(
+        callback_redirect_url(
+            return_url,
+            googleAuth="success",
+            accessToken=tokens["accessToken"],
+            refreshToken=tokens["refreshToken"],
+        )
+    )
+
+
 @router.post("/refresh", response=TokenOut)
 def refresh(request, payload: RefreshIn):
     now = timezone.now()
@@ -119,4 +254,3 @@ def logout(request, payload: LogoutIn):
 def me(request):
     user = request.auth
     return {"id": str(user.id), "username": user.username, "email": user.email}
-

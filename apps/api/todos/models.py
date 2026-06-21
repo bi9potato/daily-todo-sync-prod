@@ -10,7 +10,8 @@ from django.dispatch import receiver
 def task_attachment_path(instance, filename: str) -> str:
     _, extension = os.path.splitext(filename)
     safe_extension = extension.lower()[:12]
-    return f"task-attachments/{instance.user_id}/{instance.task_id}/{instance.id}{safe_extension}"
+    owner_id = instance.occurrence_id or instance.task_id
+    return f"task-attachments/{instance.user_id}/{owner_id}/{instance.id}{safe_extension}"
 
 
 class Task(models.Model):
@@ -75,6 +76,7 @@ class TodoOccurrence(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="occurrences")
     root_id = models.UUIDField(db_index=True)
     task_date = models.DateField()
+    note = models.TextField(blank=True, default="")
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -86,6 +88,7 @@ class TodoOccurrence(models.Model):
         choices=Source.choices,
         default=Source.MANUAL,
     )
+    is_pinned = models.BooleanField(default=False)
     sort_order = models.PositiveIntegerField(default=0)
     carryover_from_occurrence = models.ForeignKey(
         "self",
@@ -128,16 +131,24 @@ class TaskAttachment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="attachments")
+    occurrence = models.ForeignKey(
+        TodoOccurrence,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
     file = models.FileField(upload_to=task_attachment_path, max_length=500)
     original_filename = models.CharField(max_length=255)
     content_type = models.CharField(max_length=120)
     size_bytes = models.PositiveIntegerField()
+    sort_order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [
             models.Index(
-                fields=["user", "task", "created_at"],
+                fields=["user", "occurrence", "sort_order"],
                 name="todos_taska_user_id_21e3c9_idx",
             ),
         ]

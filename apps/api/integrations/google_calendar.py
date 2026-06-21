@@ -199,7 +199,7 @@ def build_google_calendar_event(occurrence: TodoOccurrence) -> dict[str, Any]:
 
     payload: dict[str, Any] = {
         "summary": summary,
-        "description": event_description(task),
+        "description": event_description(occurrence),
         "extendedProperties": {
             "private": {
                 "dailyTodoRootId": str(occurrence.root_id),
@@ -239,10 +239,19 @@ def combine_date_and_time(task_date, reminder_time):
     return timezone.make_aware(naive, timezone.get_current_timezone())
 
 
-def event_description(task: Task) -> str:
+def event_description(occurrence: TodoOccurrence) -> str:
+    task = occurrence.task
     lines = []
-    if task.note:
-        lines.append(task.note)
+    if occurrence.note:
+        lines.append(occurrence.note)
+        lines.append("")
+    attachments = list(getattr(occurrence, "_prefetched_objects_cache", {}).get("attachments", []))
+    if not attachments and occurrence.id:
+        attachments = list(occurrence.attachments.all())
+    if attachments:
+        lines.append("Images attached in Daily Todo Sync:")
+        for attachment in attachments:
+            lines.append(f"- {attachment.original_filename}")
         lines.append("")
     lines.append("Synced one-way from Daily Todo Sync.")
     lines.append("Changes made in Google Calendar will not update the todo.")

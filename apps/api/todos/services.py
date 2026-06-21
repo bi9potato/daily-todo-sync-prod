@@ -18,12 +18,23 @@ ALLOWED_ATTACHMENT_TYPES = {
 }
 
 
-def _next_sort_order(user, task_date: date) -> int:
+def _next_sort_order(user, task_date: date, *, is_pinned: bool = False) -> int:
     current_max = (
         TodoOccurrence.objects.filter(
             user=user,
             task_date=task_date,
+            is_pinned=is_pinned,
             deleted_at__isnull=True,
+        ).aggregate(Max("sort_order"))["sort_order__max"]
+    )
+    return (current_max or 0) + 1000
+
+
+def _next_attachment_sort_order(user, occurrence: TodoOccurrence) -> int:
+    current_max = (
+        TaskAttachment.objects.filter(
+            user=user,
+            occurrence=occurrence,
         ).aggregate(Max("sort_order"))["sort_order__max"]
     )
     return (current_max or 0) + 1000
@@ -132,7 +143,6 @@ def create_task_for_day(
     task = Task.objects.create(
         user=user,
         text=text.strip(),
-        note=note.strip(),
         reminder_time=reminder_time,
         recurrence_kind=normalized_kind,
         recurrence_interval=max(recurrence_interval or 1, 1),
@@ -145,6 +155,7 @@ def create_task_for_day(
         task=task,
         root_id=task.root_id,
         task_date=task_date,
+        note=note.strip(),
         source=TodoOccurrence.Source.MANUAL,
         sort_order=_next_sort_order(user, task_date),
     )
@@ -270,6 +281,7 @@ def update_occurrence(
     done: bool | None = None,
     text: str | None = None,
     note: str | None = None,
+    pinned: bool | None = None,
     reminder_time: time | None = None,
     set_reminder_time: bool = False,
     recurrence_kind: str | None = None,
@@ -290,7 +302,7 @@ def update_occurrence(
             occurrence.task.text = stripped
 
     if note is not None:
-        occurrence.task.note = note.strip()
+        occurrence.note = note.strip()
 
     if set_reminder_time:
         occurrence.task.reminder_time = reminder_time
@@ -309,7 +321,6 @@ def update_occurrence(
         value is not None
         for value in [
             text,
-            note,
             reminder_time,
             recurrence_kind,
             recurrence_interval,
@@ -321,7 +332,6 @@ def update_occurrence(
         occurrence.task.save(
             update_fields=[
                 "text",
-                "note",
                 "reminder_time",
                 "recurrence_kind",
                 "recurrence_interval",
@@ -366,6 +376,25 @@ def update_occurrence(
         occurrence.version += 1
         occurrence.save(update_fields=["version", "updated_at"])
 
+    occurrence_changed_fields = []
+    if note is not None:
+        occurrence_changed_fields.append("note")
+    if pinned is not None:
+        next_pinned = bool(pinned)
+        if occurrence.is_pinned != next_pinned:
+            occurrence.is_pinned = next_pinned
+            occurrence.sort_order = _next_sort_order(
+                user,
+                occurrence.task_date,
+                is_pinned=next_pinned,
+            )
+            occurrence_changed_fields.extend(["is_pinned", "sort_order"])
+
+    if occurrence_changed_fields:
+        occurrence.version += 1
+        occurrence_changed_fields.extend(["version", "updated_at"])
+        occurrence.save(update_fields=occurrence_changed_fields)
+
     return occurrence
 
 
@@ -400,23 +429,33 @@ def clear_completed(user, task_date: date) -> int:
 
 @transaction.atomic
 def reorder_day(user, task_date: date, ordered_ids: list[UUID]) -> None:
-    occurrences = {
-        occurrence.id: occurrence
-        for occurrence in TodoOccurrence.objects.filter(
+    occurrences = list(
+        TodoOccurrence.objects.filter(
             user=user,
             task_date=task_date,
             id__in=ordered_ids,
             deleted_at__isnull=True,
             task__deleted_at__isnull=True,
         )
+    )
+    occurrences_by_id = {occurrence.id: occurrence for occurrence in occurrences}
+    pinned_by_id = {occurrence.id: occurrence.is_pinned for occurrence in occurrences}
+    order_by_id = {
+        occurrence_id: index
+        for index, occurrence_id in enumerate(ordered_ids)
+        if occurrence_id in occurrences_by_id
     }
 
-    for index, occurrence_id in enumerate(ordered_ids, start=1):
-        occurrence = occurrences.get(occurrence_id)
-        if occurrence is None:
-            continue
-        occurrence.sort_order = index * 1000
-        occurrence.save(update_fields=["sort_order", "updated_at"])
+    for is_pinned in (True, False):
+        group = [
+            occurrence
+            for occurrence in occurrences
+            if pinned_by_id.get(occurrence.id) == is_pinned
+        ]
+        group.sort(key=lambda item: order_by_id.get(item.id, 10_000))
+        for index, occurrence in enumerate(group, start=1):
+            occurrence.sort_order = index * 1000
+            occurrence.save(update_fields=["sort_order", "updated_at"])
 
 
 @transaction.atomic
@@ -431,9 +470,11 @@ def add_task_attachment(user, occurrence_id: UUID, uploaded_file) -> TaskAttachm
     attachment = TaskAttachment(
         user=user,
         task=occurrence.task,
+        occurrence=occurrence,
         original_filename=original_filename,
         content_type=content_type,
         size_bytes=size,
+        sort_order=_next_attachment_sort_order(user, occurrence),
     )
     attachment.file.save(original_filename, uploaded_file, save=True)
     occurrence.version += 1
@@ -447,3 +488,27 @@ def delete_task_attachment(user, attachment_id: UUID) -> None:
     if attachment is None:
         raise Http404("Attachment not found.")
     attachment.delete()
+
+
+@transaction.atomic
+def reorder_task_attachments(user, occurrence_id: UUID, ordered_ids: list[UUID]) -> None:
+    occurrence = TodoOccurrence.objects.get(
+        id=occurrence_id,
+        user=user,
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
+    )
+    attachments = {
+        attachment.id: attachment
+        for attachment in TaskAttachment.objects.filter(
+            user=user,
+            occurrence=occurrence,
+            id__in=ordered_ids,
+        )
+    }
+    for index, attachment_id in enumerate(ordered_ids, start=1):
+        attachment = attachments.get(attachment_id)
+        if attachment is None:
+            continue
+        attachment.sort_order = index * 1000
+        attachment.save(update_fields=["sort_order"])

@@ -24,6 +24,7 @@ from .services import (
     ensure_day,
     ensure_range,
     reorder_day,
+    reorder_task_attachments,
     update_occurrence,
 )
 
@@ -49,6 +50,7 @@ class TodoOccurrenceOut(Schema):
     status: str
     source: str
     sortOrder: int
+    isPinned: bool
     createdAt: str
     updatedAt: str
     completedAt: str | None
@@ -91,6 +93,7 @@ class OccurrencePatchIn(Schema):
     done: bool | None = None
     text: str | None = None
     note: str | None = None
+    pinned: bool | None = None
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
 
@@ -157,8 +160,8 @@ def serialize_attachment(attachment: TaskAttachment) -> dict:
 def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
     task = occurrence.task
     attachments = sorted(
-        task.attachments.all(),
-        key=lambda attachment: attachment.created_at,
+        occurrence.attachments.all(),
+        key=lambda attachment: (attachment.sort_order, attachment.created_at),
     )
     return {
         "id": str(occurrence.id),
@@ -166,10 +169,11 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
         "rootId": str(occurrence.root_id),
         "taskDate": occurrence.task_date.isoformat(),
         "text": task.text,
-        "note": task.note,
+        "note": occurrence.note,
         "status": occurrence.status,
         "source": occurrence.source,
         "sortOrder": occurrence.sort_order,
+        "isPinned": occurrence.is_pinned,
         "createdAt": occurrence.created_at.isoformat(),
         "updatedAt": occurrence.updated_at.isoformat(),
         "completedAt": occurrence.completed_at.isoformat() if occurrence.completed_at else None,
@@ -195,14 +199,14 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
 def serialize_day(user, day: date) -> dict:
     occurrences = (
         TodoOccurrence.objects.select_related("task")
-        .prefetch_related("task__attachments")
+        .prefetch_related("attachments")
         .filter(
             user=user,
             task_date=day,
             deleted_at__isnull=True,
             task__deleted_at__isnull=True,
         )
-        .order_by("sort_order", "created_at")
+        .order_by("-is_pinned", "sort_order", "created_at")
     )
     pending = []
     done = []
@@ -249,6 +253,7 @@ def create_task(request, day: date, payload: TaskCreateIn):
         day,
         text,
         note=payload.note,
+        pinned=payload.pinned,
         reminder_time=parse_reminder_time(payload.reminderTime),
         **recurrence_payload(payload.repeat),
     )
@@ -327,6 +332,12 @@ def get_attachment_content(request, attachment_id: UUID):
 @router.delete("/attachments/{attachment_id}", response={204: None}, auth=bearer_auth)
 def remove_attachment(request, attachment_id: UUID):
     delete_task_attachment(request.auth, attachment_id)
+    return 204, None
+
+
+@router.patch("/occurrences/{occurrence_id}/attachments/reorder", response={204: None}, auth=bearer_auth)
+def reorder_attachments(request, occurrence_id: UUID, payload: ReorderIn):
+    reorder_task_attachments(request.auth, occurrence_id, payload.orderedIds)
     return 204, None
 
 
