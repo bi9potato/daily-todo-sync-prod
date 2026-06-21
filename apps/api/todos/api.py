@@ -23,8 +23,10 @@ from .services import (
     delete_occurrence,
     ensure_day,
     ensure_range,
+    list_deleted_occurrences,
     reorder_day,
     reorder_task_attachments,
+    restore_occurrence,
     update_occurrence,
 )
 
@@ -61,6 +63,10 @@ class TodoOccurrenceOut(Schema):
     isRecurring: bool
     repeat: dict
     attachments: list[TaskAttachmentOut]
+
+
+class DeletedTodoOccurrenceOut(TodoOccurrenceOut):
+    deletedAt: str | None
 
 
 class DayTodosOut(Schema):
@@ -196,6 +202,13 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
     }
 
 
+def serialize_deleted_occurrence(occurrence: TodoOccurrence) -> dict:
+    return {
+        **serialize_occurrence(occurrence),
+        "deletedAt": occurrence.deleted_at.isoformat() if occurrence.deleted_at else None,
+    }
+
+
 def serialize_day(user, day: date) -> dict:
     occurrences = (
         TodoOccurrence.objects.select_related("task")
@@ -253,7 +266,6 @@ def create_task(request, day: date, payload: TaskCreateIn):
         day,
         text,
         note=payload.note,
-        pinned=payload.pinned,
         reminder_time=parse_reminder_time(payload.reminderTime),
         **recurrence_payload(payload.repeat),
     )
@@ -277,6 +289,7 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
         done=payload.done,
         text=payload.text,
         note=payload.note,
+        pinned=payload.pinned,
         reminder_time=parse_reminder_time(payload.reminderTime),
         set_reminder_time="reminderTime" in data,
         **(recurrence_payload(payload.repeat) if payload.repeat is not None else {}),
@@ -297,6 +310,25 @@ def remove_occurrence(request, occurrence_id: UUID):
     delete_occurrence(request.auth, occurrence_id)
     delete_google_calendar_event_for_occurrence(request.auth, occurrence)
     return 204, None
+
+
+@router.get("/trash", response=list[DeletedTodoOccurrenceOut], auth=bearer_auth)
+def get_trash(request):
+    return [
+        serialize_deleted_occurrence(occurrence)
+        for occurrence in list_deleted_occurrences(request.auth)
+    ]
+
+
+@router.post(
+    "/occurrences/{occurrence_id}/restore",
+    response=TodoOccurrenceOut,
+    auth=bearer_auth,
+)
+def restore_deleted_occurrence(request, occurrence_id: UUID):
+    occurrence = restore_occurrence(request.auth, occurrence_id)
+    sync_occurrence_to_google_calendar(request.auth, occurrence)
+    return serialize_occurrence(occurrence)
 
 
 @router.post(

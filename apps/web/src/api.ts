@@ -33,6 +33,10 @@ export type TodoOccurrence = {
   attachments: TaskAttachment[];
 };
 
+export type DeletedTodoOccurrence = TodoOccurrence & {
+  deletedAt: string | null;
+};
+
 export type TaskAttachment = {
   id: string;
   originalFilename: string;
@@ -329,6 +333,20 @@ export function deleteOccurrence(id: string, accessToken: string) {
     `/occurrences/${id}`,
     {
       method: "DELETE",
+    },
+    accessToken,
+  );
+}
+
+export function getTrash(accessToken: string) {
+  return request<DeletedTodoOccurrence[]>("/trash", {}, accessToken);
+}
+
+export function restoreOccurrence(id: string, accessToken: string) {
+  return request<TodoOccurrence>(
+    `/occurrences/${id}/restore`,
+    {
+      method: "POST",
     },
     accessToken,
   );

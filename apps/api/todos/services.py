@@ -416,6 +416,67 @@ def delete_occurrence(user, occurrence_id: UUID) -> None:
     ).update(deleted_at=now, updated_at=now)
 
 
+def list_deleted_occurrences(user, *, limit: int = 50) -> list[TodoOccurrence]:
+    occurrences = (
+        TodoOccurrence.objects.select_related("task")
+        .prefetch_related("attachments")
+        .filter(user=user, deleted_at__isnull=False)
+        .order_by("-deleted_at", "-updated_at")
+    )
+    seen_roots = set()
+    deleted: list[TodoOccurrence] = []
+    for occurrence in occurrences:
+        if occurrence.root_id in seen_roots:
+            continue
+        seen_roots.add(occurrence.root_id)
+        deleted.append(occurrence)
+        if len(deleted) >= limit:
+            break
+    return deleted
+
+
+@transaction.atomic
+def restore_occurrence(user, occurrence_id: UUID) -> TodoOccurrence:
+    occurrence = TodoOccurrence.objects.select_for_update().select_related("task").get(
+        id=occurrence_id,
+        user=user,
+    )
+    now = timezone.now()
+
+    if occurrence.task.deleted_at is not None:
+        occurrence.task.deleted_at = None
+        occurrence.task.save(update_fields=["deleted_at", "updated_at"])
+
+    deleted_occurrences = TodoOccurrence.objects.select_for_update().filter(
+        user=user,
+        root_id=occurrence.root_id,
+        deleted_at__isnull=False,
+    )
+    for deleted_occurrence in deleted_occurrences:
+        has_active_duplicate = (
+            TodoOccurrence.objects.filter(
+                user=user,
+                root_id=deleted_occurrence.root_id,
+                task_date=deleted_occurrence.task_date,
+                deleted_at__isnull=True,
+            )
+            .exclude(id=deleted_occurrence.id)
+            .exists()
+        )
+        if has_active_duplicate:
+            continue
+        deleted_occurrence.deleted_at = None
+        deleted_occurrence.updated_at = now
+        deleted_occurrence.version += 1
+        deleted_occurrence.save(update_fields=["deleted_at", "updated_at", "version"])
+
+    return (
+        TodoOccurrence.objects.select_related("task")
+        .prefetch_related("attachments")
+        .get(id=occurrence_id, user=user)
+    )
+
+
 @transaction.atomic
 def clear_completed(user, task_date: date) -> int:
     now = timezone.now()

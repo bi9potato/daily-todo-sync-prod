@@ -1,16 +1,21 @@
+import json
 from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 
+from accounts.tokens import issue_access_token
 from .models import TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
     create_task_for_day,
+    delete_occurrence,
     ensure_day,
     ensure_range,
+    list_deleted_occurrences,
     reorder_day,
+    restore_occurrence,
     update_occurrence,
 )
 
@@ -147,3 +152,76 @@ class CarryoverTests(TestCase):
             self.assertEqual(attachment.original_filename, "receipt.png")
             self.assertTrue(TaskAttachment.objects.filter(id=attachment.id).exists())
             attachment.file.close()
+
+    def test_deleted_task_can_be_listed_and_restored(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+
+        delete_occurrence(self.user, occurrence.id)
+
+        deleted = list_deleted_occurrences(self.user)
+        self.assertEqual([item.id for item in deleted], [occurrence.id])
+
+        restore_occurrence(self.user, occurrence.id)
+
+        occurrence.refresh_from_db()
+        occurrence.task.refresh_from_db()
+        self.assertIsNone(occurrence.deleted_at)
+        self.assertIsNone(occurrence.task.deleted_at)
+
+
+class TodoApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ryan",
+            email="ryan@example.com",
+            password="test-password-123",
+        )
+        self.client = Client()
+        self.auth_header = f"Bearer {issue_access_token(self.user)}"
+
+    def test_create_task_endpoint_accepts_basic_payload(self):
+        response = self.client.post(
+            "/api/days/2026-06-20/tasks",
+            data=json.dumps({"text": "Read"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["text"], "Read")
+
+    def test_patch_occurrence_can_pin_task(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+
+        response = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps({"pinned": True}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["isPinned"])
+        occurrence.refresh_from_db()
+        self.assertTrue(occurrence.is_pinned)
+
+    def test_trash_endpoint_can_restore_deleted_task(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        delete_occurrence(self.user, occurrence.id)
+
+        trash_response = self.client.get(
+            "/api/trash",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(trash_response.status_code, 200)
+        self.assertEqual(trash_response.json()[0]["id"], str(occurrence.id))
+
+        restore_response = self.client.post(
+            f"/api/occurrences/{occurrence.id}/restore",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(restore_response.status_code, 200)
+        occurrence.refresh_from_db()
+        self.assertIsNone(occurrence.deleted_at)

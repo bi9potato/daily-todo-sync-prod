@@ -30,17 +30,20 @@ import {
   getMe,
   getTaskAttachmentBlob,
   getRange,
+  getTrash,
   login,
   register,
   REFRESH_TOKEN_KEY,
   reorderDay,
   reorderTaskAttachments,
+  restoreOccurrence,
   SESSION_EXPIRED_EVENT,
   setGoogleCalendarSyncEnabled,
   startGoogleAuth,
   syncGoogleCalendarForDays,
   updateOccurrence,
   uploadTaskAttachment,
+  type DeletedTodoOccurrence,
   type DayTodos,
   type GoogleCalendarStatus,
   type GoogleCalendarSyncResult,
@@ -225,6 +228,16 @@ type UpdateOccurrencePayload = {
 
 type UpdateOccurrenceContext = {
   previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
+};
+
+type DeleteTaskPayload = {
+  id: string;
+  text: string;
+};
+
+type TaskActionMessage = {
+  message: string;
+  tone: "success" | "error";
 };
 
 type CompletionOverride = {
@@ -509,6 +522,12 @@ function TodoScreen({
   const [googleCalendarSyncDays, setGoogleCalendarSyncDays] =
     useState<GoogleCalendarSyncDays>(45);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [pendingDeleteTask, setPendingDeleteTask] =
+    useState<DeleteTaskPayload | null>(null);
+  const [undoDeleteCandidate, setUndoDeleteCandidate] =
+    useState<DeleteTaskPayload | null>(null);
+  const [taskActionMessage, setTaskActionMessage] =
+    useState<TaskActionMessage | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [completionOverrides, setCompletionOverrides] = useState<
     Record<string, CompletionOverride>
@@ -518,6 +537,7 @@ function TodoScreen({
   const reorderAnimationFrameRef = useRef<number | null>(null);
   const completionOverrideVersionRef = useRef(0);
   const hasScheduledReloadRef = useRef(false);
+  const undoDeleteTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const isAnalytics = viewMode === "analytics";
 
@@ -557,6 +577,12 @@ function TodoScreen({
   const googleCalendarStatusQuery = useQuery({
     queryKey: ["google-calendar-status"],
     queryFn: () => getGoogleCalendarStatus(accessToken),
+    enabled: isSettingsOpen,
+  });
+
+  const trashQuery = useQuery({
+    queryKey: ["trash"],
+    queryFn: () => getTrash(accessToken),
     enabled: isSettingsOpen,
   });
 
@@ -611,6 +637,14 @@ function TodoScreen({
     return () => window.clearInterval(intervalId);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (undoDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoDeleteTimerRef.current);
+      }
+    };
+  }, []);
+
   const createMutation = useMutation({
     mutationFn: (payload: {
       date: string;
@@ -630,7 +664,14 @@ function TodoScreen({
         accessToken,
       ),
     onSuccess: () => {
+      setTaskActionMessage(null);
       queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+    onError: (error) => {
+      setTaskActionMessage({
+        tone: "error",
+        message: error.message || "新增任务失败，请稍后再试。",
+      });
     },
   });
 
@@ -656,10 +697,19 @@ function TodoScreen({
 
       return { previousRanges };
     },
-    onError: (_error, _payload, context) => {
+    onError: (error, _payload, context) => {
       context?.previousRanges.forEach(([queryKey, data]) => {
         queryClient.setQueryData(queryKey, data);
       });
+      setTaskActionMessage({
+        tone: "error",
+        message: error.message || "任务更新失败，请稍后再试。",
+      });
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyServerOccurrenceUpdate(data, updated),
+      );
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
@@ -766,11 +816,78 @@ function TodoScreen({
     updateMutation.mutate({ id, pinned });
   }
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteOccurrence(id, accessToken),
-    onSuccess: () => {
+  function requestDeleteTask(id: string) {
+    const item = allTasks.find((task) => task.id === id);
+    setPendingDeleteTask({
+      id,
+      text: item?.text ?? "这个任务",
+    });
+  }
+
+  function confirmDeleteTask() {
+    if (!pendingDeleteTask || deleteMutation.isPending) {
+      return;
+    }
+    deleteMutation.mutate(pendingDeleteTask);
+  }
+
+  function restoreDeletedTask(id: string) {
+    if (restoreMutation.isPending) {
+      return;
+    }
+    restoreMutation.mutate(id);
+  }
+
+  const deleteMutation = useMutation<void, Error, DeleteTaskPayload>({
+    mutationFn: (payload) => deleteOccurrence(payload.id, accessToken),
+    onSuccess: (_data, payload) => {
       setSelectedTaskId(null);
+      setPendingDeleteTask(null);
+      setTaskActionMessage(null);
+      setUndoDeleteCandidate(payload);
+      if (undoDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoDeleteTimerRef.current);
+      }
+      undoDeleteTimerRef.current = window.setTimeout(() => {
+        setUndoDeleteCandidate((current) =>
+          current?.id === payload.id ? null : current,
+        );
+        undoDeleteTimerRef.current = null;
+      }, 6500);
       queryClient.invalidateQueries({ queryKey: ["range"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
+    },
+    onError: (error) => {
+      setTaskActionMessage({
+        tone: "error",
+        message: error.message || "删除失败，请稍后再试。",
+      });
+    },
+  });
+
+  const restoreMutation = useMutation<TodoOccurrence, Error, string>({
+    mutationFn: (id) => restoreOccurrence(id, accessToken),
+    onSuccess: (updated) => {
+      setUndoDeleteCandidate(null);
+      if (undoDeleteTimerRef.current !== null) {
+        window.clearTimeout(undoDeleteTimerRef.current);
+        undoDeleteTimerRef.current = null;
+      }
+      setTaskActionMessage({
+        tone: "success",
+        message: "任务已恢复。",
+      });
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyServerOccurrenceUpdate(data, updated),
+      );
+      queryClient.invalidateQueries({ queryKey: ["range"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
+    },
+    onError: (error) => {
+      setTaskActionMessage({
+        tone: "error",
+        message: error.message || "恢复失败，请稍后再试。",
+      });
     },
   });
 
@@ -1390,7 +1507,7 @@ function TodoScreen({
                   isToday={date === today}
                   hideHeading
                   key={date}
-                  onDelete={(id) => deleteMutation.mutate(id)}
+                  onDelete={requestDeleteTask}
                   onDone={updateTaskDone}
                   onPin={updateTaskPinned}
                   onCancelDrag={cancelTaskDrag}
@@ -1412,7 +1529,7 @@ function TodoScreen({
               today={today}
               viewMode={viewMode as CalendarViewMode}
               onCancelDrag={cancelTaskDrag}
-              onDelete={(id) => deleteMutation.mutate(id)}
+              onDelete={requestDeleteTask}
               onDone={updateTaskDone}
               onPin={updateTaskPinned}
               onEndDrag={finishTaskDrag}
@@ -1460,7 +1577,7 @@ function TodoScreen({
             uploadAttachmentMutation.variables?.occurrenceId === selectedTask.id
           }
           onClose={() => setSelectedTaskId(null)}
-          onDelete={() => deleteMutation.mutate(selectedTask.id)}
+          onDelete={() => requestDeleteTask(selectedTask.id)}
           onDeleteAttachment={(attachmentId) =>
             deleteAttachmentMutation.mutate({
               attachmentId,
@@ -1503,15 +1620,52 @@ function TodoScreen({
             authorizeGoogleCalendarMutation.error ??
             disconnectGoogleAccountMutation.error ??
             toggleGoogleCalendarSyncMutation.error ??
-            syncGoogleCalendarMutation.error
+            syncGoogleCalendarMutation.error ??
+            trashQuery.error ??
+            restoreMutation.error
+          }
+          trashItems={trashQuery.data ?? []}
+          isTrashLoading={trashQuery.isLoading}
+          restoringTrashId={
+            restoreMutation.isPending ? restoreMutation.variables ?? null : null
           }
           onClose={closeSettingsPanel}
           onAuthorizeCalendar={() => authorizeGoogleCalendarMutation.mutate()}
           onBindGoogle={() => bindGoogleAccountMutation.mutate()}
           onDisconnect={() => disconnectGoogleAccountMutation.mutate()}
+          onRestoreTrash={restoreDeletedTask}
           onChangeSyncDays={setGoogleCalendarSyncDays}
           onSync={() => syncGoogleCalendarMutation.mutate(googleCalendarSyncDays)}
           onToggleSync={(enabled) => toggleGoogleCalendarSyncMutation.mutate(enabled)}
+        />
+      ) : null}
+
+      {pendingDeleteTask ? (
+        <ConfirmDeleteModal
+          isDeleting={deleteMutation.isPending}
+          task={pendingDeleteTask}
+          onCancel={() => setPendingDeleteTask(null)}
+          onConfirm={confirmDeleteTask}
+        />
+      ) : null}
+
+      {undoDeleteCandidate ? (
+        <UndoDeleteToast
+          isRestoring={
+            restoreMutation.isPending &&
+            restoreMutation.variables === undoDeleteCandidate.id
+          }
+          task={undoDeleteCandidate}
+          onDismiss={() => setUndoDeleteCandidate(null)}
+          onUndo={() => restoreDeletedTask(undoDeleteCandidate.id)}
+        />
+      ) : null}
+
+      {taskActionMessage ? (
+        <TaskActionToast
+          message={taskActionMessage.message}
+          tone={taskActionMessage.tone}
+          onDismiss={() => setTaskActionMessage(null)}
         />
       ) : null}
     </main>
@@ -2530,6 +2684,7 @@ function SettingsModal({
   isDisconnecting,
   isLoading,
   isSyncing,
+  isTrashLoading,
   isTogglingSync,
   notice,
   onAuthorizeCalendar,
@@ -2537,11 +2692,14 @@ function SettingsModal({
   onChangeSyncDays,
   onClose,
   onDisconnect,
+  onRestoreTrash,
   onSync,
   onToggleSync,
+  restoringTrashId,
   status,
   syncDays,
   syncResult,
+  trashItems,
 }: {
   error: Error | null;
   isAuthorizingCalendar: boolean;
@@ -2549,6 +2707,7 @@ function SettingsModal({
   isDisconnecting: boolean;
   isLoading: boolean;
   isSyncing: boolean;
+  isTrashLoading: boolean;
   isTogglingSync: boolean;
   notice: GoogleCalendarNotice | null;
   onAuthorizeCalendar: () => void;
@@ -2556,11 +2715,14 @@ function SettingsModal({
   onChangeSyncDays: (days: GoogleCalendarSyncDays) => void;
   onClose: () => void;
   onDisconnect: () => void;
+  onRestoreTrash: (id: string) => void;
   onSync: () => void;
   onToggleSync: (enabled: boolean) => void;
+  restoringTrashId: string | null;
   status: GoogleCalendarStatus | null;
   syncDays: GoogleCalendarSyncDays;
   syncResult: GoogleCalendarSyncResult | null;
+  trashItems: DeletedTodoOccurrence[];
 }) {
   const isGoogleBound = Boolean(status?.googleBound);
   const isCalendarAuthorized = Boolean(status?.calendarAuthorized);
@@ -2766,6 +2928,52 @@ function SettingsModal({
               <span className="settings-inline-status">正在前往 Google 授权...</span>
             ) : null}
           </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="eyebrow">Trash</p>
+              <h3>回收站</h3>
+            </div>
+            <span className="integration-status is-muted">
+              {isTrashLoading ? "读取中" : `${trashItems.length} 项`}
+            </span>
+          </div>
+          <p className="muted">删除后的任务会先留在这里，可以恢复到原来的日期。</p>
+
+          {isTrashLoading ? (
+            <div className="settings-busy" role="status" aria-live="polite">
+              <span className="loading-spinner" />
+              <span>正在读取回收站...</span>
+            </div>
+          ) : trashItems.length === 0 ? (
+            <p className="settings-note">回收站是空的。</p>
+          ) : (
+            <div className="trash-list">
+              {trashItems.map((item) => (
+                <article className="trash-row" key={item.id}>
+                  <div>
+                    <strong>{item.text}</strong>
+                    <small>
+                      {item.taskDate} 删除
+                      {item.deletedAt
+                        ? ` · ${new Date(item.deletedAt).toLocaleString()}`
+                        : ""}
+                    </small>
+                  </div>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    disabled={restoringTrashId === item.id}
+                    onClick={() => onRestoreTrash(item.id)}
+                  >
+                    {restoringTrashId === item.id ? "恢复中..." : "恢复"}
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       </div>
     </ModalShell>
@@ -3149,6 +3357,98 @@ function TaskDetailsModal({
         </div>
       </form>
     </ModalShell>
+  );
+}
+
+function ConfirmDeleteModal({
+  isDeleting,
+  onCancel,
+  onConfirm,
+  task,
+}: {
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+  task: DeleteTaskPayload;
+}) {
+  return (
+    <ModalShell title="删除任务" onClose={isDeleting ? () => undefined : onCancel}>
+      <div className="confirm-delete-body">
+        <p>确定要删除这条任务吗？删除后可以在几秒内撤销，也可以去 Settings 的回收站恢复。</p>
+        <div className="delete-preview">
+          <TrashIcon />
+          <span>{task.text}</span>
+        </div>
+        <div className="modal-actions">
+          <button
+            className="ghost-button"
+            type="button"
+            disabled={isDeleting}
+            onClick={onCancel}
+          >
+            取消
+          </button>
+          <button
+            className="primary-button danger-primary-button"
+            type="button"
+            disabled={isDeleting}
+            onClick={onConfirm}
+          >
+            {isDeleting ? "删除中..." : "确认删除"}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+function UndoDeleteToast({
+  isRestoring,
+  onDismiss,
+  onUndo,
+  task,
+}: {
+  isRestoring: boolean;
+  onDismiss: () => void;
+  onUndo: () => void;
+  task: DeleteTaskPayload;
+}) {
+  return (
+    <div className="floating-action-toast" role="status" aria-live="polite">
+      <div>
+        <strong>已删除</strong>
+        <span>{task.text}</span>
+      </div>
+      <button className="ghost-button" type="button" disabled={isRestoring} onClick={onUndo}>
+        {isRestoring ? "恢复中..." : "撤销"}
+      </button>
+      <button className="icon-button tiny-icon-button" type="button" aria-label="关闭提示" onClick={onDismiss}>
+        x
+      </button>
+    </div>
+  );
+}
+
+function TaskActionToast({
+  message,
+  onDismiss,
+  tone,
+}: {
+  message: string;
+  onDismiss: () => void;
+  tone: "success" | "error";
+}) {
+  return (
+    <div
+      className={`task-action-toast is-${tone}`}
+      role="status"
+      aria-live={tone === "error" ? "assertive" : "polite"}
+    >
+      <span>{message}</span>
+      <button className="icon-button tiny-icon-button" type="button" aria-label="关闭提示" onClick={onDismiss}>
+        x
+      </button>
+    </div>
   );
 }
 
@@ -3730,6 +4030,37 @@ function applyOptimisticOccurrenceUpdate(
       return nextItem;
     });
 
+    return {
+      ...day,
+      pending: nextItems
+        .filter((item) => item.status === "pending")
+        .sort(compareOccurrences),
+      done: nextItems
+        .filter((item) => item.status === "done")
+        .sort(compareOccurrences),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
+function applyServerOccurrenceUpdate(
+  data: RangeTodos | undefined,
+  updated: TodoOccurrence,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const days = data.days.map((day) => {
+    const items = [...day.pending, ...day.done];
+    if (!items.some((item) => item.id === updated.id)) {
+      return day;
+    }
+
+    changed = true;
+    const nextItems = items.map((item) => (item.id === updated.id ? updated : item));
     return {
       ...day,
       pending: nextItems
