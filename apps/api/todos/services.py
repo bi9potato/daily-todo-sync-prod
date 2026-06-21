@@ -153,7 +153,7 @@ def _copy_task_attachments_to_occurrence(user, task: Task, occurrence: TodoOccur
             continue
         TaskAttachment.objects.create(
             user=user,
-            task=task,
+            task=occurrence.task,
             occurrence=occurrence,
             file=attachment.file.name,
             original_filename=attachment.original_filename,
@@ -162,6 +162,25 @@ def _copy_task_attachments_to_occurrence(user, task: Task, occurrence: TodoOccur
             sort_order=next_sort_order,
         )
         next_sort_order += 1000
+
+
+def _copy_future_content_to_occurrences(
+    user,
+    task: Task,
+    start_date: date,
+) -> None:
+    note = task.note
+    future_occurrences = TodoOccurrence.objects.select_for_update().filter(
+        user=user,
+        task=task,
+        task_date__gte=start_date,
+        deleted_at__isnull=True,
+    )
+    for future_occurrence in future_occurrences:
+        future_occurrence.note = note
+        future_occurrence.version += 1
+        future_occurrence.save(update_fields=["note", "version", "updated_at"])
+        _copy_task_attachments_to_occurrence(user, task, future_occurrence)
 
 
 def _split_task_for_future(user, occurrence: TodoOccurrence) -> tuple[Task, dict[UUID, UUID]]:
@@ -502,9 +521,9 @@ def update_occurrence(
         _ensure_future_content_task(user, occurrence)
     elif is_long_term is False and _uses_future_content(occurrence.task):
         task, _ = _split_task_for_future(user, occurrence)
+        _copy_future_content_to_occurrences(user, task, occurrence.task_date)
         occurrence.note = task.note
         converted_to_occurrence_content = True
-        _copy_task_attachments_to_occurrence(user, task, occurrence)
         task.note = ""
         task.content_mode = Task.ContentMode.OCCURRENCE
         task.save(update_fields=["note", "content_mode", "updated_at"])
@@ -627,6 +646,30 @@ def update_occurrence(
             _propagate_ordering_to_future_auto_occurrences(user, occurrence)
 
     return occurrence
+
+
+@transaction.atomic
+def copy_long_term_occurrence_as_regular(user, occurrence_id: UUID) -> TodoOccurrence:
+    source = TodoOccurrence.objects.select_related("task").get(
+        id=occurrence_id,
+        user=user,
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
+    )
+    if not _uses_future_content(source.task):
+        raise ValueError("Only long-term tasks can be copied into regular tasks.")
+
+    copied = create_task_for_day(
+        user,
+        source.task_date,
+        source.task.text,
+        note=source.task.note,
+        content_mode=Task.ContentMode.OCCURRENCE,
+        reminder_time=source.task.reminder_time,
+        recurrence_kind=Task.RecurrenceKind.NONE,
+    )
+    _copy_task_attachments_to_occurrence(user, source.task, copied)
+    return copied
 
 
 @transaction.atomic

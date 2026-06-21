@@ -18,6 +18,7 @@ from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
     clear_completed,
+    copy_long_term_occurrence_as_regular,
     create_task_for_day,
     delete_task_attachment,
     delete_occurrence,
@@ -319,6 +320,20 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
     )
     sync_occurrence_to_google_calendar(request.auth, occurrence)
     return serialize_occurrence(occurrence)
+
+
+@router.post(
+    "/occurrences/{occurrence_id}/copy-regular",
+    response={201: TodoOccurrenceOut},
+    auth=bearer_auth,
+)
+def copy_occurrence_to_regular_task(request, occurrence_id: UUID):
+    try:
+        occurrence = copy_long_term_occurrence_as_regular(request.auth, occurrence_id)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+    sync_occurrence_to_google_calendar(request.auth, occurrence)
+    return 201, serialize_occurrence(occurrence)
 
 
 @router.delete("/occurrences/{occurrence_id}", response={204: None}, auth=bearer_auth)

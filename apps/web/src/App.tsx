@@ -22,6 +22,7 @@ import {
   ACCESS_TOKEN_KEY,
   AUTH_TOKENS_UPDATED_EVENT,
   bindGoogleAccount,
+  copyLongTermOccurrenceAsRegular,
   createTask,
   deleteTaskAttachment,
   deleteOccurrence,
@@ -206,6 +207,7 @@ type DragState = {
   startX: number;
   startY: number;
   targetId: string | null;
+  targetLongTerm: boolean | null;
   width: number;
   x: number;
   y: number;
@@ -517,6 +519,7 @@ function TodoScreen({
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLongTermSectionOpen, setIsLongTermSectionOpen] = useState(false);
   const [appUpdateNotice, setAppUpdateNotice] = useState("");
   const [googleCalendarNotice, setGoogleCalendarNotice] =
     useState<GoogleCalendarNotice | null>(null);
@@ -590,6 +593,14 @@ function TodoScreen({
   const daysByDate = useMemo(() => {
     return new Map(rangeQuery.data?.days.map((day) => [day.date, day]) ?? []);
   }, [rangeQuery.data]);
+
+  const todayLongTermCount = useMemo(() => {
+    const day = daysByDate.get(today);
+    if (!day) {
+      return 0;
+    }
+    return [...day.pending, ...day.done].filter((item) => item.isLongTerm).length;
+  }, [daysByDate, today]);
 
   const allTasks = useMemo(() => {
     return rangeQuery.data?.days.flatMap((day) => [...day.pending, ...day.done]) ?? [];
@@ -672,6 +683,26 @@ function TodoScreen({
       setTaskActionMessage({
         tone: "error",
         message: error.message || "新增任务失败，请稍后再试。",
+      });
+    },
+  });
+
+  const copyLongTermMutation = useMutation<TodoOccurrence, Error, string>({
+    mutationFn: (id) => copyLongTermOccurrenceAsRegular(id, accessToken),
+    onSuccess: (created) => {
+      setTaskActionMessage({
+        tone: "success",
+        message: "已复制到普通任务。",
+      });
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOccurrenceInsert(data, created),
+      );
+      queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+    onError: (error) => {
+      setTaskActionMessage({
+        tone: "error",
+        message: error.message || "复制长期任务失败，请稍后再试。",
       });
     },
   });
@@ -1003,6 +1034,14 @@ function TodoScreen({
   function openMyDay() {
     setSelectedDate(today);
     setViewMode("day");
+    setIsLongTermSectionOpen(false);
+    setIsMobileSidebarOpen(false);
+  }
+
+  function openLongTermTasks() {
+    setSelectedDate(today);
+    setViewMode("day");
+    setIsLongTermSectionOpen(true);
     setIsMobileSidebarOpen(false);
   }
 
@@ -1091,7 +1130,11 @@ function TodoScreen({
       return null;
     }
     const ids = items
-      .filter((item) => item.isPinned === draggedItem.isPinned)
+      .filter(
+        (item) =>
+          item.isPinned === draggedItem.isPinned &&
+          item.isLongTerm === draggedItem.isLongTerm,
+      )
       .map((item) => item.id)
       .filter((id) => id !== draggedId);
     const index = ids.indexOf(hoveredId);
@@ -1101,33 +1144,46 @@ function TodoScreen({
     return ids[index + 1] ?? null;
   }
 
-  function targetIdFromPointer(current: DragState, clientX: number, clientY: number) {
+  function targetFromPointer(current: DragState, clientX: number, clientY: number) {
     const element = document.elementFromPoint(clientX, clientY);
+    const hoveredSection = element?.closest<HTMLElement>("[data-task-section]");
+    const targetLongTerm =
+      hoveredSection?.dataset.dayDate === current.date
+        ? hoveredSection.dataset.taskSection === "long-term"
+        : current.targetLongTerm;
     const hoveredCard = element?.closest<HTMLElement>('[data-task-sortable="true"]');
     if (hoveredCard?.dataset.taskDate === current.date) {
       const hoveredId = hoveredCard.dataset.taskId;
       if (!hoveredId || hoveredId === current.id) {
-        return current.targetId;
+        return { targetId: current.targetId, targetLongTerm };
       }
       const items = orderedDayItems(daysByDate.get(current.date) ?? emptyDay(current.date));
       const draggedItem = items.find((item) => item.id === current.id);
       const hoveredItem = items.find((item) => item.id === hoveredId);
-      if (!draggedItem || !hoveredItem || draggedItem.isPinned !== hoveredItem.isPinned) {
-        return current.targetId;
+      if (
+        !draggedItem ||
+        !hoveredItem ||
+        draggedItem.isPinned !== hoveredItem.isPinned ||
+        draggedItem.isLongTerm !== hoveredItem.isLongTerm
+      ) {
+        return { targetId: current.targetId, targetLongTerm };
       }
       const rect = hoveredCard.getBoundingClientRect();
       const shouldInsertAfter = clientY > rect.top + rect.height / 2;
-      return shouldInsertAfter
-        ? nextTargetIdAfter(current.date, hoveredId, current.id)
-        : hoveredId;
+      return {
+        targetId: shouldInsertAfter
+          ? nextTargetIdAfter(current.date, hoveredId, current.id)
+          : hoveredId,
+        targetLongTerm,
+      };
     }
 
     const hoveredList = element?.closest<HTMLElement>("[data-day-date]");
     if (hoveredList?.dataset.dayDate === current.date) {
-      return null;
+      return { targetId: null, targetLongTerm };
     }
 
-    return current.targetId;
+    return { targetId: current.targetId, targetLongTerm };
   }
 
   function startTaskDrag(
@@ -1136,6 +1192,8 @@ function TodoScreen({
     event: ReactPointerEvent<HTMLElement>,
   ) {
     const rect = event.currentTarget.getBoundingClientRect();
+    const day = daysByDate.get(date) ?? emptyDay(date);
+    const draggedItem = orderedDayItems(day).find((item) => item.id === id);
     clearPendingDrag();
     const initialState = {
       active: false,
@@ -1148,6 +1206,7 @@ function TodoScreen({
       startX: event.clientX,
       startY: event.clientY,
       targetId: id,
+      targetLongTerm: draggedItem?.isLongTerm ?? null,
       width: rect.width,
       x: event.clientX,
       y: event.clientY,
@@ -1187,18 +1246,22 @@ function TodoScreen({
       return;
     }
 
-    const targetId = targetIdFromPointer(dragState, event.clientX, event.clientY);
+    const target = targetFromPointer(dragState, event.clientX, event.clientY);
     const nextState = {
       ...dragState,
       active: true,
-      targetId,
+      targetId: target.targetId,
+      targetLongTerm: target.targetLongTerm,
       x: event.clientX,
       y: event.clientY,
     };
 
     event.preventDefault();
 
-    if (targetId !== dragState.targetId) {
+    if (
+      target.targetId !== dragState.targetId ||
+      target.targetLongTerm !== dragState.targetLongTerm
+    ) {
       setDragStateWithReorderAnimation(nextState);
       return;
     }
@@ -1220,6 +1283,19 @@ function TodoScreen({
       suppressOpenTaskIdRef.current = dragState.id;
       const day = daysByDate.get(dragState.date) ?? emptyDay(dragState.date);
       const currentItems = orderedDayItems(day);
+      const draggedItem = currentItems.find((item) => item.id === dragState.id);
+      if (
+        draggedItem &&
+        dragState.targetLongTerm !== null &&
+        dragState.targetLongTerm !== draggedItem.isLongTerm
+      ) {
+        updateMutation.mutate({
+          id: dragState.id,
+          isLongTerm: dragState.targetLongTerm,
+        });
+        setDragState(null);
+        return;
+      }
       const currentIds = currentItems.map((item) => item.id);
       const orderedIds = reorderOccurrenceItems(
         currentItems,
@@ -1385,6 +1461,19 @@ function TodoScreen({
             </small>
           </button>
           <button
+            className={
+              isMyDay && isLongTermSectionOpen ? "active sidebar-subtag" : "sidebar-subtag"
+            }
+            type="button"
+            onClick={openLongTermTasks}
+          >
+            <span className="nav-icon">
+              <TagIcon />
+            </span>
+            <span className="nav-label">长期任务</span>
+            <small className="nav-meta">{todayLongTermCount} 项</small>
+          </button>
+          <button
             className={viewMode === "analytics" ? "active" : ""}
             type="button"
             onClick={() => changeViewMode("analytics")}
@@ -1508,10 +1597,17 @@ function TodoScreen({
                   date={date}
                   day={daysByDate.get(date) ?? emptyDay(date)}
                   dragState={dragState}
+                  copyingTaskId={
+                    copyLongTermMutation.isPending
+                      ? copyLongTermMutation.variables ?? null
+                      : null
+                  }
                   isSelected={date === selectedDate}
                   isToday={date === today}
                   hideHeading
+                  isLongTermSectionOpen={isLongTermSectionOpen}
                   key={date}
+                  onCopyAsRegular={(id) => copyLongTermMutation.mutate(id)}
                   onDelete={requestDeleteTask}
                   onDone={updateTaskDone}
                   onPin={updateTaskPinned}
@@ -1521,6 +1617,9 @@ function TodoScreen({
                   onOpenTask={openTaskDetails}
                   onSelectDate={setSelectedDate}
                   onStartDrag={startTaskDrag}
+                  onToggleLongTermSection={() =>
+                    setIsLongTermSectionOpen((value) => !value)
+                  }
                 />
               ))}
             </section>
@@ -2151,13 +2250,16 @@ function CalendarTaskChip({
 
 function DayColumn({
   completionOverrides,
+  copyingTaskId,
   date,
   day,
   dragState,
   hideHeading,
+  isLongTermSectionOpen = false,
   isSelected,
   isToday,
   onCancelDrag,
+  onCopyAsRegular,
   onDelete,
   onDone,
   onPin,
@@ -2166,15 +2268,19 @@ function DayColumn({
   onOpenTask,
   onSelectDate,
   onStartDrag,
+  onToggleLongTermSection,
 }: {
   completionOverrides: Record<string, CompletionOverride>;
+  copyingTaskId?: string | null;
   date: string;
   day: DayTodos;
   dragState: DragState | null;
   hideHeading: boolean;
+  isLongTermSectionOpen?: boolean;
   isSelected: boolean;
   isToday: boolean;
   onCancelDrag: () => void;
+  onCopyAsRegular?: (id: string) => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
   onPin: (id: string, pinned: boolean) => void;
@@ -2187,9 +2293,16 @@ function DayColumn({
     id: string,
     event: ReactPointerEvent<HTMLElement>,
   ) => void;
+  onToggleLongTermSection?: () => void;
 }) {
   const items = previewDayItems(orderedDayItems(day), dragState, date);
+  const longTermItems = items.filter((item) => item.isLongTerm);
+  const regularItems = items.filter((item) => !item.isLongTerm);
   const isReordering = dragState?.active && dragState.date === date;
+  const isLongTermDropTarget =
+    dragState?.active && dragState.date === date && dragState.targetLongTerm === true;
+  const isRegularDropTarget =
+    dragState?.active && dragState.date === date && dragState.targetLongTerm === false;
 
   return (
     <article className={`day-column surface-panel ${isSelected ? "is-selected" : ""}`}>
@@ -2201,21 +2314,76 @@ function DayColumn({
         </button>
       ) : null}
 
-      <ul
-        className={`todo-list card-list ${isReordering ? "is-reordering" : ""}`}
+      <section
+        className={[
+          "long-term-task-section",
+          isLongTermSectionOpen ? "is-open" : "",
+          isLongTermDropTarget ? "is-drop-target" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         data-day-date={date}
+        data-task-section="long-term"
       >
-        {items.length === 0 ? (
+        <button
+          className="long-term-section-header"
+          type="button"
+          onClick={onToggleLongTermSection}
+        >
+          <span>
+            <strong>长期任务</strong>
+            <small>{longTermItems.length} 项 · 默认收起</small>
+          </span>
+          <ChevronDownIcon expanded={isLongTermSectionOpen} />
+        </button>
+        {isLongTermSectionOpen ? (
+          <ul className={`todo-list long-term-list ${isReordering ? "is-reordering" : ""}`}>
+            {longTermItems.length === 0 ? (
+              <li className="empty-state is-visible">把任务拖到这里，就会变成长期任务</li>
+            ) : null}
+            {longTermItems.map((item) => (
+              <TodoCard
+                copying={copyingTaskId === item.id}
+                date={date}
+                done={completionOverrides[item.id]?.done ?? item.status === "done"}
+                dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                item={item}
+                key={item.id}
+                onCancelDrag={onCancelDrag}
+                onCopyAsRegular={onCopyAsRegular}
+                onDelete={onDelete}
+                onDone={onDone}
+                onPin={onPin}
+                onEndDrag={onEndDrag}
+                onMoveDrag={onMoveDrag}
+                onOpen={() => onOpenTask(item.id)}
+                onStartDrag={(event) => onStartDrag(date, item.id, event)}
+              />
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <ul
+        className={`todo-list card-list ${isReordering ? "is-reordering" : ""} ${
+          isRegularDropTarget ? "is-drop-target" : ""
+        }`}
+        data-day-date={date}
+        data-task-section="regular"
+      >
+        {regularItems.length === 0 ? (
           <li className="empty-state is-visible">暂无任务</li>
         ) : null}
-        {items.map((item) => (
+        {regularItems.map((item) => (
           <TodoCard
+            copying={false}
             date={date}
             done={completionOverrides[item.id]?.done ?? item.status === "done"}
             dragged={Boolean(dragState?.active && dragState.id === item.id)}
             item={item}
             key={item.id}
             onCancelDrag={onCancelDrag}
+            onCopyAsRegular={onCopyAsRegular}
             onDelete={onDelete}
             onDone={onDone}
             onPin={onPin}
@@ -2231,11 +2399,13 @@ function DayColumn({
 }
 
 function TodoCard({
+  copying = false,
   date,
   done = false,
   dragged,
   item,
   onCancelDrag,
+  onCopyAsRegular,
   onDelete,
   onDone,
   onPin,
@@ -2244,11 +2414,13 @@ function TodoCard({
   onOpen,
   onStartDrag,
 }: {
+  copying?: boolean;
   date: string;
   done?: boolean;
   dragged: boolean;
   item: TodoOccurrence;
   onCancelDrag: () => void;
+  onCopyAsRegular?: (id: string) => void;
   onDelete: (id: string) => void;
   onDone: (id: string, done: boolean) => void;
   onPin: (id: string, pinned: boolean) => void;
@@ -2317,7 +2489,22 @@ function TodoCard({
       />
       <div className="task-body">
         <p>{item.text}</p>
+        {item.isLongTerm ? <small className="task-kicker">长期任务</small> : null}
       </div>
+      {item.isLongTerm ? (
+        <button
+          className="icon-button copy-task-button"
+          type="button"
+          aria-label="复制到普通任务"
+          disabled={copying}
+          onClick={(event) => {
+            event.stopPropagation();
+            onCopyAsRegular?.(item.id);
+          }}
+        >
+          {copying ? <span className="loading-spinner" /> : <CopyIcon />}
+        </button>
+      ) : null}
       <button
         className={`icon-button pin-task-button ${item.isPinned ? "is-pinned" : ""}`}
         type="button"
@@ -3333,17 +3520,20 @@ function TaskDetailsModal({
             状态
             <input value={item.status === "done" ? "已完成" : "待处理"} disabled />
           </label>
-          <label className="checkbox-field">
-            长期任务
+          <div className="toggle-field">
             <span>
-              <input
-                type="checkbox"
-                checked={isLongTerm}
-                onChange={(event) => setIsLongTerm(event.target.checked)}
-              />
-              内容从当前日期开始同步到之后的任务
+              <strong>长期任务</strong>
+              <small>内容从当前日期开始同步到之后的任务</small>
             </span>
-          </label>
+            <button
+              className={`toggle-switch ${isLongTerm ? "is-on" : ""}`}
+              type="button"
+              aria-pressed={isLongTerm}
+              onClick={() => setIsLongTerm((value) => !value)}
+            >
+              <span />
+            </button>
+          </div>
           <label>
             提醒
             <input
@@ -3692,6 +3882,42 @@ function PinIcon({ pinned }: { pinned: boolean }) {
       <path d="M12 17v5" />
       <path d="M5 17h14" />
       <path d="M8 3h8l-1 8 3 3v3H6v-3l3-3Z" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="8" y="8" width="11" height="11" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function TagIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20.6 13.2 13.2 20.6a2 2 0 0 1-2.8 0L3 13.2V3h10.2l7.4 7.4a2 2 0 0 1 0 2.8Z" />
+      <path d="M7.5 7.5h.01" />
     </svg>
   );
 }
@@ -4107,6 +4333,33 @@ function applyServerOccurrenceUpdate(
   return changed ? { ...data, days } : data;
 }
 
+function applyOccurrenceInsert(
+  data: RangeTodos | undefined,
+  created: TodoOccurrence,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const days = data.days.map((day) => {
+    if (day.date !== created.taskDate) {
+      return day;
+    }
+    if ([...day.pending, ...day.done].some((item) => item.id === created.id)) {
+      return day;
+    }
+    changed = true;
+    const targetKey = created.status === "done" ? "done" : "pending";
+    return {
+      ...day,
+      [targetKey]: [...day[targetKey], created].sort(compareOccurrences),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
 function applyAttachmentAdd(
   data: RangeTodos | undefined,
   occurrenceId: string,
@@ -4295,9 +4548,11 @@ function reorderOccurrenceItems(
     return items;
   }
 
-  const pinnedItems = items.filter((item) => item.isPinned);
-  const unpinnedItems = items.filter((item) => !item.isPinned);
-  const group = draggedItem.isPinned ? pinnedItems : unpinnedItems;
+  const group = items.filter(
+    (item) =>
+      item.isPinned === draggedItem.isPinned &&
+      item.isLongTerm === draggedItem.isLongTerm,
+  );
   const groupById = new Map(group.map((item) => [item.id, item]));
   const orderedGroup = reorderIds(
     group.map((item) => item.id),
@@ -4307,9 +4562,16 @@ function reorderOccurrenceItems(
     .map((id) => groupById.get(id))
     .filter((item): item is TodoOccurrence => Boolean(item));
 
-  return draggedItem.isPinned
-    ? [...orderedGroup, ...unpinnedItems]
-    : [...pinnedItems, ...orderedGroup];
+  const nextGroup = [...orderedGroup];
+  return items.map((item) => {
+    if (
+      item.isPinned === draggedItem.isPinned &&
+      item.isLongTerm === draggedItem.isLongTerm
+    ) {
+      return nextGroup.shift() ?? item;
+    }
+    return item;
+  });
 }
 
 function buildTodayAnalyticsSnapshot(

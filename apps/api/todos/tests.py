@@ -9,6 +9,7 @@ from accounts.tokens import issue_access_token
 from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
+    copy_long_term_occurrence_as_regular,
     create_task_for_day,
     delete_occurrence,
     ensure_day,
@@ -265,6 +266,75 @@ class CarryoverTests(TestCase):
             self.assertTrue(TaskAttachment.objects.filter(task=middle.task, occurrence__isnull=True).exists())
             attachment.file.close()
 
+    def test_long_term_task_can_be_copied_as_regular_with_content(self):
+        source = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Outfit",
+            note="linen shirt",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        image = SimpleUploadedFile(
+            "outfit.png",
+            b"\x89PNG\r\n\x1a\n" + b"0" * 32,
+            content_type="image/png",
+        )
+
+        with override_settings(STORAGES=TEST_STORAGES):
+            attachment = add_task_attachment(self.user, source.id, image)
+            copied = copy_long_term_occurrence_as_regular(self.user, source.id)
+
+            source.refresh_from_db()
+            source.task.refresh_from_db()
+            copied.refresh_from_db()
+            copied.task.refresh_from_db()
+            self.assertEqual(copied.task.text, "Outfit")
+            self.assertEqual(copied.note, "linen shirt")
+            self.assertEqual(copied.task.content_mode, Task.ContentMode.OCCURRENCE)
+            self.assertEqual(copied.task.recurrence_kind, Task.RecurrenceKind.NONE)
+            self.assertEqual(source.task.content_mode, Task.ContentMode.FUTURE)
+            self.assertTrue(
+                TaskAttachment.objects.filter(
+                    task=copied.task,
+                    occurrence=copied,
+                    original_filename="outfit.png",
+                ).exists()
+            )
+            attachment.file.close()
+
+    def test_turning_long_term_recurring_task_regular_preserves_future_content(self):
+        start = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Glasses",
+            note="try black frame",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        ensure_range(self.user, date(2026, 6, 21), date(2026, 6, 22), today=date(2026, 6, 20))
+        middle = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 21))
+        image = SimpleUploadedFile(
+            "glasses.png",
+            b"\x89PNG\r\n\x1a\n" + b"0" * 32,
+            content_type="image/png",
+        )
+
+        with override_settings(STORAGES=TEST_STORAGES):
+            attachment = add_task_attachment(self.user, middle.id, image)
+
+            update_occurrence(self.user, middle.id, is_long_term=False)
+
+            middle.refresh_from_db()
+            future = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 22))
+            future.task.refresh_from_db()
+            self.assertEqual(middle.note, "try black frame")
+            self.assertEqual(future.note, "try black frame")
+            self.assertEqual(future.task.content_mode, Task.ContentMode.OCCURRENCE)
+            self.assertTrue(TaskAttachment.objects.filter(occurrence=middle).exists())
+            self.assertTrue(TaskAttachment.objects.filter(occurrence=future).exists())
+            attachment.file.close()
+
     def test_deleted_task_can_be_listed_and_restored(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
 
@@ -336,6 +406,27 @@ class TodoApiTests(TestCase):
         body = response.json()
         self.assertTrue(body["isLongTerm"])
         self.assertEqual(body["note"], "keep this")
+
+    def test_copy_long_term_task_endpoint_returns_regular_task(self):
+        occurrence = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Outfit",
+            note="copy this",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+
+        response = self.client.post(
+            f"/api/occurrences/{occurrence.id}/copy-regular",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertFalse(body["isLongTerm"])
+        self.assertFalse(body["isRecurring"])
+        self.assertEqual(body["note"], "copy this")
 
     def test_trash_endpoint_can_restore_deleted_task(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")

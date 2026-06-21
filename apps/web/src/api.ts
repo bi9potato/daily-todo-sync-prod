@@ -305,6 +305,16 @@ export function updateOccurrence(
   );
 }
 
+export function copyLongTermOccurrenceAsRegular(id: string, accessToken: string) {
+  return request<TodoOccurrence>(
+    `/occurrences/${id}/copy-regular`,
+    {
+      method: "POST",
+    },
+    accessToken,
+  );
+}
+
 export function reorderDay(date: string, orderedIds: string[], accessToken: string) {
   return request<void>(
     `/days/${date}/reorder`,
