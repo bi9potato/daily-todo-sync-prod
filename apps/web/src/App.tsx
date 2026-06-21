@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -42,7 +43,105 @@ import {
 } from "./date";
 
 type AuthMode = "login" | "register";
-type ViewMode = "day" | "week" | "month";
+type CalendarViewMode = "day" | "week" | "month";
+type ViewMode = CalendarViewMode | "analytics";
+type TaskDraftSource = "typed" | "voice" | "ai";
+
+type TaskDraft = {
+  confidence: number;
+  fields: {
+    note?: string;
+    reminderTime?: string | null;
+    repeat?: RepeatRule;
+  };
+  locale: string;
+  rawText: string;
+  source: TaskDraftSource;
+  text: string;
+};
+
+type VoiceCaptureState =
+  | { status: "idle"; message: string }
+  | { status: "listening"; message: string }
+  | { status: "ready"; message: string }
+  | { status: "error"; message: string }
+  | { status: "unsupported"; message: string };
+
+type DailyAnalytics = {
+  carryover: number;
+  completionRate: number;
+  date: string;
+  done: number;
+  pending: number;
+  recurring: number;
+  reminders: number;
+  total: number;
+};
+
+type WeekdayAnalytics = {
+  completionRate: number;
+  done: number;
+  label: string;
+  total: number;
+};
+
+type AnalyticsSnapshot = {
+  activeDays: number;
+  bestDay: DailyAnalytics | null;
+  carryoverRate: number;
+  completionRate: number;
+  completionStreak: number;
+  dailyStats: DailyAnalytics[];
+  done: number;
+  insights: string[];
+  pending: number;
+  recurringRate: number;
+  reminderCoverage: number;
+  total: number;
+  weekdayStats: WeekdayAnalytics[];
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type SpeechRecognitionLike = {
+  abort: () => void;
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onend: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onstart: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionErrorLike = {
+  error?: string;
+};
+
+type SpeechRecognitionResultEventLike = {
+  resultIndex: number;
+  results: SpeechRecognitionResultListLike;
+};
+
+type SpeechRecognitionResultListLike = {
+  length: number;
+  [index: number]: SpeechRecognitionResultLike;
+};
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  [index: number]: { transcript: string } | undefined;
+};
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
 
 type DragState = {
   active: boolean;
@@ -87,6 +186,8 @@ const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
   { value: "monthly", label: "每月" },
   { value: "yearly", label: "每年" },
 ];
+
+const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 export function App() {
   const [accessToken, setAccessToken] = useState(() =>
@@ -241,8 +342,12 @@ function TodoScreen({
   const suppressOpenTaskIdRef = useRef<string | null>(null);
   const reorderAnimationFrameRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
+  const isAnalytics = viewMode === "analytics";
 
   const visibleRange = useMemo(() => {
+    if (viewMode === "analytics") {
+      return { start: addDays(today, -29), end: today };
+    }
     if (viewMode === "week") {
       return { start: startOfWeek(selectedDate), end: endOfWeek(selectedDate) };
     }
@@ -250,7 +355,7 @@ function TodoScreen({
       return { start: startOfMonth(selectedDate), end: endOfMonth(selectedDate) };
     }
     return { start: selectedDate, end: selectedDate };
-  }, [selectedDate, viewMode]);
+  }, [selectedDate, today, viewMode]);
 
   const visibleDates = useMemo(
     () => datesBetween(visibleRange.start, visibleRange.end),
@@ -590,6 +695,9 @@ function TodoScreen({
   }
 
   function viewTitle() {
+    if (viewMode === "analytics") {
+      return "分析";
+    }
     if (viewMode === "day" && selectedDate === today) {
       return "我的一天";
     }
@@ -703,12 +811,23 @@ function TodoScreen({
               {today} · {weekdayLabel(today)}
             </small>
           </button>
+          <button
+            className={viewMode === "analytics" ? "active" : ""}
+            type="button"
+            onClick={() => changeViewMode("analytics")}
+          >
+            <span className="nav-icon">
+              <AnalyticsIcon />
+            </span>
+            <span className="nav-label">分析</span>
+            <small className="nav-meta">近 30 天</small>
+          </button>
         </nav>
 
         <div className="sidebar-section">
           <p>视图</p>
           <div className="sidebar-switch">
-            {(["day", "week", "month"] as ViewMode[]).map((mode) => (
+            {(["day", "week", "month"] as CalendarViewMode[]).map((mode) => (
               <button
                 className={viewMode === mode ? "active" : ""}
                 key={mode}
@@ -722,9 +841,13 @@ function TodoScreen({
         </div>
 
         <div className="sidebar-date">
-          <span>当前日期</span>
-          <strong>{selectedDate}</strong>
-          <small>{weekdayLabel(selectedDate)}</small>
+          <span>{isAnalytics ? "分析范围" : "当前日期"}</span>
+          <strong>{isAnalytics ? "近 30 天" : selectedDate}</strong>
+          <small>
+            {isAnalytics
+              ? `${visibleRange.start} - ${visibleRange.end}`
+              : weekdayLabel(selectedDate)}
+          </small>
         </div>
       </aside>
 
@@ -746,7 +869,9 @@ function TodoScreen({
 
         <header className="workspace-header surface-panel">
           <div>
-            {!isMyDay ? (
+            {isAnalytics ? (
+              <p className="eyebrow">近 30 天</p>
+            ) : !isMyDay ? (
               <p className="eyebrow">
                 {visibleRange.start === visibleRange.end
                   ? selectedDate
@@ -755,11 +880,13 @@ function TodoScreen({
             ) : null}
             <h1>{viewTitle()}</h1>
             <p className="muted">
-              {selectedDate} · {weekdayLabel(selectedDate)}
+              {isAnalytics
+                ? `${visibleRange.start} - ${visibleRange.end} · 单向日历同步策略`
+                : `${selectedDate} · ${weekdayLabel(selectedDate)}`}
             </p>
           </div>
 
-          {!isMyDay ? (
+          {!isMyDay && !isAnalytics ? (
             <nav className="date-controls">
               <button type="button" onClick={() => shiftDate(-1)}>
                 &lt;
@@ -779,40 +906,52 @@ function TodoScreen({
           ) : null}
         </header>
 
-        <div className="workspace-actions">
-          <QuickAddTask
-            date={selectedDate}
-            isSaving={createMutation.isPending}
-            onSubmit={(payload) => createMutation.mutate(payload)}
-          />
-        </div>
+        {!isAnalytics ? (
+          <div className="workspace-actions">
+            <QuickAddTask
+              date={selectedDate}
+              isSaving={createMutation.isPending}
+              onSubmit={(payload) => createMutation.mutate(payload)}
+            />
+          </div>
+        ) : null}
 
         {rangeQuery.isLoading ? <p className="empty-state is-visible">加载中...</p> : null}
         {rangeQuery.isError ? (
           <p className="empty-state is-visible">加载失败：{String(rangeQuery.error)}</p>
         ) : null}
 
-        <section className={`calendar-grid view-${viewMode}`}>
-          {visibleDates.map((date) => (
-            <DayColumn
-              date={date}
-              day={daysByDate.get(date) ?? emptyDay(date)}
-              dragState={dragState}
-              isSelected={date === selectedDate}
-              isToday={date === today}
-              hideHeading={isMyDay}
-              key={date}
-              onDelete={(id) => deleteMutation.mutate(id)}
-              onDone={(id, done) => updateMutation.mutate({ id, done })}
-              onCancelDrag={cancelTaskDrag}
-              onEndDrag={finishTaskDrag}
-              onMoveDrag={moveTaskDrag}
-              onOpenTask={openTaskDetails}
-              onSelectDate={setSelectedDate}
-              onStartDrag={startTaskDrag}
+        {!rangeQuery.isLoading && !rangeQuery.isError ? (
+          isAnalytics ? (
+            <AnalyticsDashboard
+              days={rangeQuery.data?.days ?? []}
+              range={visibleRange}
+              today={today}
             />
-          ))}
-        </section>
+          ) : (
+            <section className={`calendar-grid view-${viewMode}`}>
+              {visibleDates.map((date) => (
+                <DayColumn
+                  date={date}
+                  day={daysByDate.get(date) ?? emptyDay(date)}
+                  dragState={dragState}
+                  isSelected={date === selectedDate}
+                  isToday={date === today}
+                  hideHeading={isMyDay}
+                  key={date}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                  onDone={(id, done) => updateMutation.mutate({ id, done })}
+                  onCancelDrag={cancelTaskDrag}
+                  onEndDrag={finishTaskDrag}
+                  onMoveDrag={moveTaskDrag}
+                  onOpenTask={openTaskDetails}
+                  onSelectDate={setSelectedDate}
+                  onStartDrag={startTaskDrag}
+                />
+              ))}
+            </section>
+          )
+        ) : null}
       </section>
 
       {dragState?.active && draggedTask ? (
@@ -1011,6 +1150,193 @@ function TodoCard({
   );
 }
 
+function AnalyticsDashboard({
+  days,
+  range,
+  today,
+}: {
+  days: DayTodos[];
+  range: { start: string; end: string };
+  today: string;
+}) {
+  const snapshot = useMemo(
+    () => buildAnalyticsSnapshot(days, today),
+    [days, today],
+  );
+
+  return (
+    <section className="analytics-dashboard">
+      <div className="analytics-hero surface-panel">
+        <div>
+          <p className="eyebrow">节奏概览</p>
+          <h2>把每天的任务流动看清楚</h2>
+          <p className="muted">
+            {range.start} - {range.end}，共 {snapshot.activeDays} 个有任务的日子。
+          </p>
+        </div>
+        <div className="completion-ring-wrap">
+          <div
+            className="completion-ring"
+            style={{
+              background: `conic-gradient(var(--accent) ${snapshot.completionRate}%, rgba(213, 221, 211, 0.72) 0)`,
+            }}
+          >
+            <span>{snapshot.completionRate}%</span>
+          </div>
+          <small>完成率</small>
+        </div>
+      </div>
+
+      <div className="metric-grid">
+        <MetricCard label="总任务" value={String(snapshot.total)} detail="近 30 天" />
+        <MetricCard label="已完成" value={String(snapshot.done)} detail="保持推进" />
+        <MetricCard label="待处理" value={String(snapshot.pending)} detail="当前压力" />
+        <MetricCard
+          label="连续完成"
+          value={`${snapshot.completionStreak} 天`}
+          detail="有任务且全完成"
+        />
+      </div>
+
+      <div className="analytics-grid">
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">趋势</p>
+              <h2>完成节奏</h2>
+            </div>
+            <span>{snapshot.dailyStats.length} 天</span>
+          </div>
+          <div className="trend-bars" aria-label="近 30 天完成趋势">
+            {snapshot.dailyStats.map((day) => (
+              <span
+                className={day.date === today ? "is-today" : ""}
+                key={day.date}
+                style={{
+                  height: `${Math.max(8, day.completionRate)}%`,
+                }}
+                title={`${day.date}: ${day.done}/${day.total}`}
+              />
+            ))}
+          </div>
+          <div className="trend-footer">
+            <span>{formatShortDate(range.start)}</span>
+            <span>{formatShortDate(range.end)}</span>
+          </div>
+        </section>
+
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">结构</p>
+              <h2>任务质量</h2>
+            </div>
+          </div>
+          <div className="quality-list">
+            <QualityMeter label="提醒覆盖" value={snapshot.reminderCoverage} />
+            <QualityMeter label="结转压力" value={snapshot.carryoverRate} inverse />
+            <QualityMeter label="重复任务" value={snapshot.recurringRate} />
+          </div>
+        </section>
+
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">周内节奏</p>
+              <h2>哪天最稳</h2>
+            </div>
+          </div>
+          <div className="weekday-list">
+            {snapshot.weekdayStats.map((day) => (
+              <div className="weekday-row" key={day.label}>
+                <span>{day.label}</span>
+                <div className="weekday-track">
+                  <i style={{ width: `${day.completionRate}%` }} />
+                </div>
+                <strong>{day.done}/{day.total}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="analytics-panel surface-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">洞察</p>
+              <h2>下一步建议</h2>
+            </div>
+          </div>
+          <ul className="insight-list">
+            {snapshot.insights.map((insight) => (
+              <li key={insight}>{insight}</li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      <section className="calendar-sync-panel surface-panel">
+        <div>
+          <p className="eyebrow">Google Calendar</p>
+          <h2>同步策略：Todo 单向写入日历</h2>
+          <p className="muted">
+            暂不做双向同步。任务创建和更新后只推送到 Google Calendar，
+            Google Calendar 里的改动不会反向修改 Todo。
+          </p>
+        </div>
+        <div className="sync-flow" aria-label="单向同步流程">
+          <span>Todo</span>
+          <i />
+          <span>Google Calendar</span>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function MetricCard({
+  detail,
+  label,
+  value,
+}: {
+  detail: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <section className="metric-card surface-panel">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </section>
+  );
+}
+
+function QualityMeter({
+  inverse = false,
+  label,
+  value,
+}: {
+  inverse?: boolean;
+  label: string;
+  value: number;
+}) {
+  const score = inverse ? 100 - value : value;
+  return (
+    <div className="quality-meter">
+      <div>
+        <span>{label}</span>
+        <strong>{value}%</strong>
+      </div>
+      <div className="meter-track">
+        <i
+          className={score >= 65 ? "is-strong" : score >= 35 ? "is-medium" : ""}
+          style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function QuickAddTask({
   date,
   isSaving,
@@ -1027,21 +1353,106 @@ function QuickAddTask({
   }) => void;
 }) {
   const [text, setText] = useState("");
+  const [inputSource, setInputSource] = useState<TaskDraftSource>("typed");
+  const [voiceState, setVoiceState] = useState<VoiceCaptureState>({
+    status: "idle",
+    message: "语音输入",
+  });
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const latestTranscriptRef = useRef("");
+  const isListening = voiceState.status === "listening";
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.abort();
+    };
+  }, []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const trimmedText = text.trim();
-    if (!trimmedText || isSaving) {
+    const draft = createTaskDraftFromInput(text, inputSource, date);
+    if (!draft.text || isSaving) {
       return;
     }
     onSubmit({
       date,
-      text: trimmedText,
-      note: "",
-      reminderTime: null,
-      repeat: repeatRuleForDate("none", date),
+      text: draft.text,
+      note: draft.fields.note ?? "",
+      reminderTime: draft.fields.reminderTime ?? null,
+      repeat: draft.fields.repeat ?? repeatRuleForDate("none", date),
     });
     setText("");
+    setInputSource("typed");
+    setVoiceState({ status: "idle", message: "语音输入" });
+  }
+
+  function updateText(value: string) {
+    setInputSource("typed");
+    setText(value);
+    if (voiceState.status !== "listening") {
+      setVoiceState({ status: "idle", message: "语音输入" });
+    }
+  }
+
+  function toggleVoiceInput() {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setVoiceState({ status: "ready", message: "已停止听写" });
+      return;
+    }
+
+    const SpeechRecognition = getSpeechRecognitionConstructor();
+    if (!SpeechRecognition) {
+      setVoiceState({
+        status: "unsupported",
+        message: "当前浏览器不支持语音输入",
+      });
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    latestTranscriptRef.current = "";
+    recognitionRef.current = recognition;
+    recognition.lang = "zh-CN";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      setInputSource("voice");
+      setVoiceState({ status: "listening", message: "正在听写..." });
+    };
+    recognition.onresult = (event) => {
+      const transcript = transcriptFromSpeechEvent(event);
+      if (!transcript) {
+        return;
+      }
+      latestTranscriptRef.current = transcript;
+      const draft = createTaskDraftFromInput(transcript, "voice", date);
+      setInputSource("voice");
+      setText(draft.text);
+      setVoiceState({
+        status: draft.text ? "ready" : "listening",
+        message: draft.text ? "已识别语音" : "正在听写...",
+      });
+    };
+    recognition.onerror = (event) => {
+      setVoiceState({
+        status: "error",
+        message: voiceErrorMessage(event.error),
+      });
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setVoiceState((current) => {
+        if (current.status === "error" || current.status === "unsupported") {
+          return current;
+        }
+        return latestTranscriptRef.current
+          ? { status: "ready", message: "已识别语音" }
+          : { status: "idle", message: "语音输入" };
+      });
+    };
+    recognition.start();
   }
 
   return (
@@ -1050,11 +1461,21 @@ function QuickAddTask({
       <input
         aria-label="添加任务"
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => updateText(event.target.value)}
         placeholder="输入任务，按 Enter 添加"
         maxLength={280}
         disabled={isSaving}
       />
+      <button
+        className={`voice-button ${isListening ? "is-listening" : ""}`}
+        type="button"
+        aria-label={isListening ? "停止语音输入" : "开始语音输入"}
+        aria-pressed={isListening}
+        onClick={toggleVoiceInput}
+        title={voiceState.message}
+      >
+        <MicIcon active={isListening} />
+      </button>
       <button
         className="quick-add-submit"
         type="submit"
@@ -1309,6 +1730,47 @@ function ChevronDownIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
+function AnalyticsIcon() {
+  return (
+    <svg
+      className="mini-icon"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 19V5" />
+      <path d="M4 19h16" />
+      <path d="M8 16v-5" />
+      <path d="M12 16V8" />
+      <path d="M16 16v-9" />
+    </svg>
+  );
+}
+
+function MicIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      className={`mini-icon mic-icon ${active ? "is-active" : ""}`}
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+      <path d="M12 18v3" />
+      <path d="M8 21h8" />
+    </svg>
+  );
+}
+
 function SunIcon() {
   return (
     <svg
@@ -1437,6 +1899,189 @@ function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
     draggedId,
     ...withoutDragged.slice(targetIndex),
   ];
+}
+
+function buildAnalyticsSnapshot(days: DayTodos[], today: string): AnalyticsSnapshot {
+  const dailyStats = [...days]
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .map((day) => {
+      const items = orderedDayItems(day);
+      const done = items.filter((item) => item.status === "done").length;
+      const pending = items.length - done;
+      const carryover = items.filter((item) => item.source === "carryover").length;
+      const recurring = items.filter((item) => item.isRecurring).length;
+      const reminders = items.filter((item) => Boolean(item.reminderTime)).length;
+      return {
+        carryover,
+        completionRate: percentage(done, items.length),
+        date: day.date,
+        done,
+        pending,
+        recurring,
+        reminders,
+        total: items.length,
+      };
+    });
+
+  const total = dailyStats.reduce((sum, day) => sum + day.total, 0);
+  const done = dailyStats.reduce((sum, day) => sum + day.done, 0);
+  const pending = dailyStats.reduce((sum, day) => sum + day.pending, 0);
+  const carryover = dailyStats.reduce((sum, day) => sum + day.carryover, 0);
+  const recurring = dailyStats.reduce((sum, day) => sum + day.recurring, 0);
+  const reminders = dailyStats.reduce((sum, day) => sum + day.reminders, 0);
+  const activeDays = dailyStats.filter((day) => day.total > 0).length;
+  const completionRate = percentage(done, total);
+  const carryoverRate = percentage(carryover, total);
+  const reminderCoverage = percentage(reminders, total);
+  const recurringRate = percentage(recurring, total);
+  const bestDay =
+    dailyStats
+      .filter((day) => day.total > 0)
+      .sort((left, right) => {
+        if (right.completionRate !== left.completionRate) {
+          return right.completionRate - left.completionRate;
+        }
+        return right.done - left.done;
+      })[0] ?? null;
+  const weekdayStats = buildWeekdayStats(dailyStats);
+
+  const snapshot = {
+    activeDays,
+    bestDay,
+    carryoverRate,
+    completionRate,
+    completionStreak: completionStreak(dailyStats, today),
+    dailyStats,
+    done,
+    insights: [],
+    pending,
+    recurringRate,
+    reminderCoverage,
+    total,
+    weekdayStats,
+  };
+
+  return {
+    ...snapshot,
+    insights: buildAnalyticsInsights(snapshot),
+  };
+}
+
+function buildWeekdayStats(dailyStats: DailyAnalytics[]): WeekdayAnalytics[] {
+  return WEEKDAY_NAMES.map((label, index) => {
+    const matchedDays = dailyStats.filter(
+      (day) => (fromDateKey(day.date).getDay() + 6) % 7 === index,
+    );
+    const total = matchedDays.reduce((sum, day) => sum + day.total, 0);
+    const done = matchedDays.reduce((sum, day) => sum + day.done, 0);
+    return {
+      completionRate: percentage(done, total),
+      done,
+      label,
+      total,
+    };
+  });
+}
+
+function completionStreak(dailyStats: DailyAnalytics[], today: string) {
+  let streak = 0;
+  for (const day of [...dailyStats].reverse()) {
+    if (day.date > today || day.total === 0) {
+      continue;
+    }
+    if (day.pending > 0) {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
+}
+
+function buildAnalyticsInsights(
+  snapshot: Omit<AnalyticsSnapshot, "insights">,
+) {
+  if (snapshot.total === 0) {
+    return ["先记录几个任务，分析页会自动形成你的节奏画像。"];
+  }
+
+  const insights: string[] = [];
+  if (snapshot.completionRate >= 80) {
+    insights.push("完成率很稳，可以开始把重复任务和提醒做得更精细。");
+  } else if (snapshot.completionRate >= 50) {
+    insights.push("整体推进正常，建议每天只保留少量真正关键的待处理项。");
+  } else {
+    insights.push("待处理压力偏高，适合先清理低价值任务，再安排新的任务。");
+  }
+
+  if (snapshot.carryoverRate >= 35) {
+    insights.push("结转任务占比偏高，说明部分任务需要拆小或重新定义完成标准。");
+  }
+
+  if (snapshot.reminderCoverage <= 20 && snapshot.pending >= 5) {
+    insights.push("提醒覆盖较低，重要任务可以加提醒，降低靠记忆维护的成本。");
+  }
+
+  if (snapshot.recurringRate > 0) {
+    insights.push("已有重复任务结构，后续接 Google Calendar 时适合优先同步这类任务。");
+  }
+
+  if (snapshot.bestDay) {
+    insights.push(
+      `${formatShortDate(snapshot.bestDay.date)} 是近期表现最好的日期，可参考那天的任务密度。`,
+    );
+  }
+
+  return insights.slice(0, 4);
+}
+
+function percentage(part: number, total: number) {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
+}
+
+function createTaskDraftFromInput(
+  rawText: string,
+  source: TaskDraftSource,
+  date: string,
+): TaskDraft {
+  const text = rawText.replace(/\s+/g, " ").trim();
+  // This draft contract is intentionally richer than today's create API.
+  // Later the AI parser can fill fields without changing the quick-add UI.
+  return {
+    confidence: source === "typed" ? 1 : 0.72,
+    fields: {
+      reminderTime: null,
+      repeat: repeatRuleForDate("none", date),
+    },
+    locale: "zh-CN",
+    rawText,
+    source,
+    text,
+  };
+}
+
+function getSpeechRecognitionConstructor() {
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+}
+
+function transcriptFromSpeechEvent(event: SpeechRecognitionResultEventLike) {
+  let transcript = "";
+  for (let index = event.resultIndex; index < event.results.length; index += 1) {
+    transcript += event.results[index]?.[0]?.transcript ?? "";
+  }
+  return transcript.trim();
+}
+
+function voiceErrorMessage(error?: string) {
+  if (error === "not-allowed" || error === "service-not-allowed") {
+    return "麦克风权限被拒绝";
+  }
+  if (error === "no-speech") {
+    return "没有识别到语音";
+  }
+  if (error === "network") {
+    return "语音服务网络异常";
+  }
+  return "语音输入失败";
 }
 
 function repeatRuleForDate(kind: RepeatKind, date: string): RepeatRule {

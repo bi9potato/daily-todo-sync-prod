@@ -571,3 +571,59 @@ DOMAIN_OR_SSLIP_HOST=
 - 第一阶段不做邮箱验证。
 - 公开分享前建议买域名。
 - 数据库用 Supabase PostgreSQL，不在 VM 上自建 Postgres。
+
+## 17. 语音输入、分析页和日历同步方向
+
+### 17.1 语音输入
+
+当前 Web 端先使用浏览器原生 Web Speech API 做语音转文字，不引入第三方语音服务，也不增加后端成本。
+
+快速添加输入框内部使用 `TaskDraft` 作为中间结构，而不是直接把输入框字符串写入创建接口。这样以后接入大模型时，可以把同一段输入解析成：
+
+- 任务标题
+- 备注
+- 提醒时间
+- 重复规则
+- 优先级或标签
+
+当前版本只填充任务标题，提醒、重复、备注仍然保持默认值。后续大模型能力应该接在 `TaskDraft` 解析层，而不是直接改 UI 表单。
+
+### 17.2 分析页
+
+分析页第一版只依赖现有 `/range` 数据，在前端计算近 30 天统计，不新增后端接口。
+
+当前指标：
+
+- 总任务数
+- 已完成数
+- 待处理数
+- 完成率
+- 连续完成天数
+- 结转压力
+- 提醒覆盖率
+- 重复任务占比
+- 周内完成节奏
+- 自动洞察建议
+
+后续如果要做更强的智能分析，可以把前端计算出的 `AnalyticsSnapshot` 发给后端，由大模型生成周报、月报或任务结构建议。
+
+### 17.3 Google Calendar 同步
+
+当前产品方向明确为单向同步：
+
+```text
+Daily Todo Sync -> Google Calendar
+```
+
+暂时不做双向同步。Google Calendar 中的修改、删除、拖动时间，不会反向修改 Todo 数据。
+
+单向同步阶段建议实现：
+
+- 用户在 Settings 中连接 Google 账号。
+- 后端保存 OAuth token 和 refresh token。
+- 任务有提醒时间时，可创建或更新 Google Calendar event。
+- 本地数据库保存 `google_calendar_id`、`google_event_id`、`last_synced_at`、`sync_status`。
+- 删除 Todo 时，第一版建议取消或删除对应 Google event，但不处理 Google 端主动变化。
+- 重复任务后续映射为 Google Calendar RRULE。
+
+这个阶段不需要 Google Calendar push notification，也不需要增量拉取 `syncToken`。这些能力留到未来双向同步或日历导入时再做。
