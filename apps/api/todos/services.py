@@ -55,6 +55,38 @@ def _uses_future_content(task: Task) -> bool:
     return task.content_mode == Task.ContentMode.FUTURE
 
 
+def _propagate_ordering_to_future_auto_occurrences(user, occurrence: TodoOccurrence) -> None:
+    TodoOccurrence.objects.filter(
+        user=user,
+        root_id=occurrence.root_id,
+        task_date__gt=occurrence.task_date,
+        source__in=[
+            TodoOccurrence.Source.CARRYOVER,
+            TodoOccurrence.Source.RECURRING,
+        ],
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
+    ).update(
+        is_pinned=occurrence.is_pinned,
+        sort_order=occurrence.sort_order,
+        updated_at=timezone.now(),
+    )
+
+
+def _latest_ordering_template(user, task: Task, target_date: date) -> TodoOccurrence | None:
+    return (
+        TodoOccurrence.objects.filter(
+            user=user,
+            root_id=task.root_id,
+            task_date__lt=target_date,
+            deleted_at__isnull=True,
+            task__deleted_at__isnull=True,
+        )
+        .order_by("-task_date", "-updated_at", "-created_at")
+        .first()
+    )
+
+
 def _copy_task_level_attachments(user, source_task: Task, target_task: Task) -> dict[UUID, UUID]:
     attachment_id_map: dict[UUID, UUID] = {}
     for attachment in TaskAttachment.objects.filter(
@@ -335,6 +367,13 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
             ).exists()
             if exists:
                 continue
+            template = _latest_ordering_template(user, task, current)
+            is_pinned = template.is_pinned if template else False
+            sort_order = (
+                template.sort_order
+                if template
+                else _next_sort_order(user, current, is_pinned=is_pinned)
+            )
             try:
                 TodoOccurrence.objects.create(
                     user=user,
@@ -342,7 +381,8 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
                     root_id=task.root_id,
                     task_date=current,
                     source=TodoOccurrence.Source.RECURRING,
-                    sort_order=_next_sort_order(user, current),
+                    is_pinned=is_pinned,
+                    sort_order=sort_order,
                 )
             except IntegrityError:
                 pass
@@ -394,7 +434,7 @@ def ensure_range(
                 deleted_at__isnull=True,
                 task__deleted_at__isnull=True,
             )
-            .order_by("created_at")
+            .order_by("-is_pinned", "sort_order", "created_at")
         )
 
         for occurrence in previous_pending:
@@ -414,7 +454,8 @@ def ensure_range(
                     root_id=occurrence.root_id,
                     task_date=current,
                     source=TodoOccurrence.Source.CARRYOVER,
-                    sort_order=_next_sort_order(user, current),
+                    is_pinned=occurrence.is_pinned,
+                    sort_order=occurrence.sort_order,
                     carryover_from_occurrence=occurrence,
                 )
             except IntegrityError:
@@ -470,6 +511,7 @@ def update_occurrence(
 
     use_future_content = _uses_future_content(occurrence.task)
     occurrence_changed_fields = []
+    ordering_changed = False
     if converted_to_occurrence_content:
         occurrence_changed_fields.append("note")
 
@@ -574,12 +616,15 @@ def update_occurrence(
                 occurrence.task_date,
                 is_pinned=next_pinned,
             )
+            ordering_changed = True
             occurrence_changed_fields.extend(["is_pinned", "sort_order"])
 
     if occurrence_changed_fields:
         occurrence.version += 1
         occurrence_changed_fields.extend(["version", "updated_at"])
         occurrence.save(update_fields=occurrence_changed_fields)
+        if ordering_changed:
+            _propagate_ordering_to_future_auto_occurrences(user, occurrence)
 
     return occurrence
 
@@ -703,6 +748,7 @@ def reorder_day(user, task_date: date, ordered_ids: list[UUID]) -> None:
         for index, occurrence in enumerate(group, start=1):
             occurrence.sort_order = index * 1000
             occurrence.save(update_fields=["sort_order", "updated_at"])
+            _propagate_ordering_to_future_auto_occurrences(user, occurrence)
 
 
 @transaction.atomic

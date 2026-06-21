@@ -136,6 +136,66 @@ class CarryoverTests(TestCase):
         self.assertTrue(second.is_pinned)
         self.assertLess(second.sort_order, 2000)
 
+    def test_carryover_preserves_pin_and_visual_order(self):
+        first = create_task_for_day(self.user, date(2026, 6, 20), "First")
+        second = create_task_for_day(self.user, date(2026, 6, 20), "Second")
+        third = create_task_for_day(self.user, date(2026, 6, 20), "Third")
+        update_occurrence(self.user, second.id, pinned=True)
+        reorder_day(self.user, date(2026, 6, 20), [second.id, third.id, first.id])
+
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        carried = list(
+            TodoOccurrence.objects.filter(
+                user=self.user,
+                task_date=date(2026, 6, 21),
+                source=TodoOccurrence.Source.CARRYOVER,
+                deleted_at__isnull=True,
+            ).order_by("-is_pinned", "sort_order", "created_at")
+        )
+        self.assertEqual([item.task.text for item in carried], ["Second", "Third", "First"])
+        self.assertTrue(carried[0].is_pinned)
+
+    def test_existing_future_carryover_tracks_pin_and_reorder_changes(self):
+        first = create_task_for_day(self.user, date(2026, 6, 20), "First")
+        second = create_task_for_day(self.user, date(2026, 6, 20), "Second")
+        third = create_task_for_day(self.user, date(2026, 6, 20), "Third")
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        update_occurrence(self.user, second.id, pinned=True)
+        reorder_day(self.user, date(2026, 6, 20), [second.id, third.id, first.id])
+
+        carried = list(
+            TodoOccurrence.objects.filter(
+                user=self.user,
+                task_date=date(2026, 6, 21),
+                deleted_at__isnull=True,
+            ).order_by("-is_pinned", "sort_order", "created_at")
+        )
+        self.assertEqual([item.task.text for item in carried], ["Second", "Third", "First"])
+        self.assertTrue(carried[0].is_pinned)
+
+    def test_recurring_generation_preserves_latest_pin_and_order(self):
+        occurrence = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Standup",
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        update_occurrence(self.user, occurrence.id, pinned=True)
+
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 20))
+
+        recurring = TodoOccurrence.objects.get(
+            user=self.user,
+            task_date=date(2026, 6, 21),
+            root_id=occurrence.root_id,
+            deleted_at__isnull=True,
+        )
+        occurrence.refresh_from_db()
+        self.assertTrue(recurring.is_pinned)
+        self.assertEqual(recurring.sort_order, occurrence.sort_order)
+
     def test_image_attachment_can_be_added_to_task(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
         image = SimpleUploadedFile(
