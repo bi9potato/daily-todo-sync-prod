@@ -209,6 +209,11 @@ type UpdateOccurrenceContext = {
   previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
 };
 
+type CompletionOverride = {
+  done: boolean;
+  version: number;
+};
+
 type ReorderPayload = {
   date: string;
   orderedIds: string[];
@@ -387,9 +392,13 @@ function TodoScreen({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const [completionOverrides, setCompletionOverrides] = useState<
+    Record<string, CompletionOverride>
+  >({});
   const pendingDragRef = useRef<PendingDrag | null>(null);
   const suppressOpenTaskIdRef = useRef<string | null>(null);
   const reorderAnimationFrameRef = useRef<number | null>(null);
+  const completionOverrideVersionRef = useRef(0);
   const queryClient = useQueryClient();
   const isAnalytics = viewMode === "analytics";
 
@@ -497,6 +506,33 @@ function TodoScreen({
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
+
+  function updateTaskDone(id: string, done: boolean) {
+    const version = completionOverrideVersionRef.current + 1;
+    completionOverrideVersionRef.current = version;
+
+    setCompletionOverrides((current) => ({
+      ...current,
+      [id]: { done, version },
+    }));
+
+    updateMutation.mutate(
+      { id, done },
+      {
+        onSettled: () => {
+          setCompletionOverrides((current) => {
+            if (current[id]?.version !== version) {
+              return current;
+            }
+
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+        },
+      },
+    );
+  }
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteOccurrence(id, accessToken),
@@ -1045,6 +1081,7 @@ function TodoScreen({
             <section className="calendar-grid view-day">
               {visibleDates.map((date) => (
                 <DayColumn
+                  completionOverrides={completionOverrides}
                   date={date}
                   day={daysByDate.get(date) ?? emptyDay(date)}
                   dragState={dragState}
@@ -1053,7 +1090,7 @@ function TodoScreen({
                   hideHeading
                   key={date}
                   onDelete={(id) => deleteMutation.mutate(id)}
-                  onDone={(id, done) => updateMutation.mutate({ id, done })}
+                  onDone={updateTaskDone}
                   onCancelDrag={cancelTaskDrag}
                   onEndDrag={finishTaskDrag}
                   onMoveDrag={moveTaskDrag}
@@ -1065,6 +1102,7 @@ function TodoScreen({
             </section>
           ) : (
             <CalendarBoard
+              completionOverrides={completionOverrides}
               dates={visibleDates}
               daysByDate={daysByDate}
               dragState={dragState}
@@ -1073,7 +1111,7 @@ function TodoScreen({
               viewMode={viewMode as CalendarViewMode}
               onCancelDrag={cancelTaskDrag}
               onDelete={(id) => deleteMutation.mutate(id)}
-              onDone={(id, done) => updateMutation.mutate({ id, done })}
+              onDone={updateTaskDone}
               onEndDrag={finishTaskDrag}
               onMoveDrag={moveTaskDrag}
               onOpenTask={openTaskDetails}
@@ -1141,6 +1179,7 @@ function TodoScreen({
 }
 
 function CalendarBoard({
+  completionOverrides,
   dates,
   daysByDate,
   dragState,
@@ -1156,6 +1195,7 @@ function CalendarBoard({
   onSelectDate,
   onStartDrag,
 }: {
+  completionOverrides: Record<string, CompletionOverride>;
   dates: string[];
   daysByDate: Map<string, DayTodos>;
   dragState: DragState | null;
@@ -1178,6 +1218,7 @@ function CalendarBoard({
   if (viewMode === "month") {
     return (
       <MonthCalendar
+        completionOverrides={completionOverrides}
         dates={dates}
         daysByDate={daysByDate}
         dragState={dragState}
@@ -1197,6 +1238,7 @@ function CalendarBoard({
 
   return (
     <TimeCalendar
+      completionOverrides={completionOverrides}
       dates={dates}
       daysByDate={daysByDate}
       dragState={dragState}
@@ -1215,6 +1257,7 @@ function CalendarBoard({
 }
 
 function TimeCalendar({
+  completionOverrides,
   dates,
   daysByDate,
   dragState,
@@ -1229,6 +1272,7 @@ function TimeCalendar({
   onSelectDate,
   onStartDrag,
 }: {
+  completionOverrides: Record<string, CompletionOverride>;
   dates: string[];
   daysByDate: Map<string, DayTodos>;
   dragState: DragState | null;
@@ -1288,6 +1332,7 @@ function TimeCalendar({
                 {buckets.allDay.map((item) => (
                   <CalendarTaskChip
                     date={date}
+                    done={completionOverrides[item.id]?.done ?? item.status === "done"}
                     dragged={Boolean(dragState?.active && dragState.id === item.id)}
                     item={item}
                     key={item.id}
@@ -1347,6 +1392,7 @@ function TimeCalendar({
                   return (
                     <CalendarTaskChip
                       date={date}
+                      done={completionOverrides[item.id]?.done ?? item.status === "done"}
                       dragged={Boolean(dragState?.active && dragState.id === item.id)}
                       item={item}
                       key={item.id}
@@ -1372,6 +1418,7 @@ function TimeCalendar({
 }
 
 function MonthCalendar({
+  completionOverrides,
   dates,
   daysByDate,
   dragState,
@@ -1386,6 +1433,7 @@ function MonthCalendar({
   onSelectDate,
   onStartDrag,
 }: {
+  completionOverrides: Record<string, CompletionOverride>;
   dates: string[];
   daysByDate: Map<string, DayTodos>;
   dragState: DragState | null;
@@ -1448,6 +1496,7 @@ function MonthCalendar({
                 {visibleItems.map((item) => (
                   <CalendarTaskChip
                     date={date}
+                    done={completionOverrides[item.id]?.done ?? item.status === "done"}
                     dragged={Boolean(dragState?.active && dragState.id === item.id)}
                     item={item}
                     key={item.id}
@@ -1481,6 +1530,7 @@ function MonthCalendar({
 
 function CalendarTaskChip({
   date,
+  done,
   dragged,
   item,
   style,
@@ -1494,6 +1544,7 @@ function CalendarTaskChip({
   onStartDrag,
 }: {
   date: string;
+  done: boolean;
   dragged: boolean;
   item: TodoOccurrence;
   style?: CSSProperties;
@@ -1506,8 +1557,6 @@ function CalendarTaskChip({
   onOpen: () => void;
   onStartDrag: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
-  const done = item.status === "done";
-
   function isInteractiveTarget(target: EventTarget) {
     return Boolean(
       target instanceof Element &&
@@ -1549,8 +1598,12 @@ function CalendarTaskChip({
         className="mini-checkbox"
         type="checkbox"
         checked={done}
-        onClick={(event) => event.stopPropagation()}
-        onChange={(event) => onDone(item.id, event.target.checked)}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onDone(item.id, !done);
+        }}
+        onChange={() => undefined}
       />
       <span className="calendar-chip-title">{item.text}</span>
       {item.reminderTime ? <time>{item.reminderTime}</time> : null}
@@ -1570,6 +1623,7 @@ function CalendarTaskChip({
 }
 
 function DayColumn({
+  completionOverrides,
   date,
   day,
   dragState,
@@ -1585,6 +1639,7 @@ function DayColumn({
   onSelectDate,
   onStartDrag,
 }: {
+  completionOverrides: Record<string, CompletionOverride>;
   date: string;
   day: DayTodos;
   dragState: DragState | null;
@@ -1627,7 +1682,7 @@ function DayColumn({
         {items.map((item) => (
           <TodoCard
             date={date}
-            done={item.status === "done"}
+            done={completionOverrides[item.id]?.done ?? item.status === "done"}
             dragged={Boolean(dragState?.active && dragState.id === item.id)}
             item={item}
             key={item.id}
@@ -1715,8 +1770,12 @@ function TodoCard({
         className="round-checkbox"
         type="checkbox"
         checked={done}
-        onClick={(event) => event.stopPropagation()}
-        onChange={(event) => onDone(item.id, event.target.checked)}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onDone(item.id, !done);
+        }}
+        onChange={() => undefined}
       />
       <div className="task-body">
         <p>{item.text}</p>
