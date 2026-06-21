@@ -1447,7 +1447,7 @@ function SettingsModal({
                   ? "已连接"
                   : isConfigured
                     ? "未连接"
-                    : "未配置"}
+                    : "暂未开启"}
             </span>
           </div>
 
@@ -1475,8 +1475,8 @@ function SettingsModal({
 
           {!isConfigured ? (
             <p className="settings-note">
-              服务器还缺少 Google OAuth 环境变量：
-              `GOOGLE_CALENDAR_CLIENT_ID`、`GOOGLE_CALENDAR_CLIENT_SECRET`。
+              Google Calendar 同步暂未开启。开启后，用户只需要登录 Google 账号并授权，
+              不需要自己获取任何 token 或密钥。
             </p>
           ) : null}
 
@@ -1506,7 +1506,7 @@ function SettingsModal({
                 disabled={!isConfigured || isConnecting}
                 onClick={onConnect}
               >
-                {isConnecting ? "跳转中..." : "连接 Google Calendar"}
+                {isConnecting ? "正在跳转..." : "登录 Google 并授权"}
               </button>
             ) : (
               <>
