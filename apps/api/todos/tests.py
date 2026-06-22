@@ -165,6 +165,22 @@ class CarryoverTests(TestCase):
         self.assertTrue(second.is_pinned)
         self.assertLess(second.sort_order, 2000)
 
+    def test_unpin_moves_item_to_top_of_unpinned_group(self):
+        first = create_task_for_day(self.user, date(2026, 6, 20), "First")
+        second = create_task_for_day(self.user, date(2026, 6, 20), "Second")
+        third = create_task_for_day(self.user, date(2026, 6, 20), "Third")
+
+        update_occurrence(self.user, second.id, pinned=True)
+        update_occurrence(self.user, second.id, pinned=False)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        third.refresh_from_db()
+
+        self.assertFalse(second.is_pinned)
+        self.assertLess(second.sort_order, first.sort_order)
+        self.assertLess(second.sort_order, third.sort_order)
+
     def test_carryover_preserves_pin_and_visual_order(self):
         first = create_task_for_day(self.user, date(2026, 6, 20), "First")
         second = create_task_for_day(self.user, date(2026, 6, 20), "Second")

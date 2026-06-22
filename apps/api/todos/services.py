@@ -24,16 +24,29 @@ def _next_sort_order(
     *,
     is_pinned: bool = False,
     is_low_priority: bool = False,
+    is_long_term: bool = False,
+    placement: str = "end",
 ) -> int:
-    current_max = (
-        TodoOccurrence.objects.filter(
-            user=user,
-            task_date=task_date,
-            is_pinned=is_pinned,
-            is_low_priority=is_low_priority,
-            deleted_at__isnull=True,
-        ).aggregate(Max("sort_order"))["sort_order__max"]
+    queryset = TodoOccurrence.objects.filter(
+        user=user,
+        task_date=task_date,
+        is_pinned=is_pinned,
+        is_low_priority=is_low_priority,
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
     )
+    if is_long_term:
+        queryset = queryset.filter(task__content_mode=Task.ContentMode.FUTURE)
+    else:
+        queryset = queryset.exclude(task__content_mode=Task.ContentMode.FUTURE)
+
+    if placement == "start":
+        current_min = queryset.aggregate(Min("sort_order"))["sort_order__min"]
+        if current_min is None:
+            return 1000
+        return max(current_min - 1000, 0)
+
+    current_max = queryset.aggregate(Max("sort_order"))["sort_order__max"]
     return (current_max or 0) + 1000
 
 
@@ -381,7 +394,12 @@ def create_task_for_day(
         note="" if normalized_content_mode == Task.ContentMode.FUTURE else note.strip(),
         source=TodoOccurrence.Source.MANUAL,
         is_low_priority=is_low_priority,
-        sort_order=_next_sort_order(user, task_date, is_low_priority=is_low_priority),
+        sort_order=_next_sort_order(
+            user,
+            task_date,
+            is_low_priority=is_low_priority,
+            is_long_term=normalized_content_mode == Task.ContentMode.FUTURE,
+        ),
     )
 
 
@@ -420,6 +438,7 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
                     current,
                     is_pinned=is_pinned,
                     is_low_priority=is_low_priority,
+                    is_long_term=_uses_future_content(task),
                 )
             )
             try:
@@ -674,6 +693,8 @@ def update_occurrence(
                 occurrence.task_date,
                 is_pinned=next_pinned,
                 is_low_priority=occurrence.is_low_priority,
+                is_long_term=_uses_future_content(occurrence.task),
+                placement="end" if next_pinned else "start",
             )
             ordering_changed = True
             occurrence_changed_fields.extend(["is_pinned", "sort_order"])
@@ -687,6 +708,7 @@ def update_occurrence(
                 occurrence.task_date,
                 is_pinned=occurrence.is_pinned,
                 is_low_priority=next_is_low_priority,
+                is_long_term=_uses_future_content(occurrence.task),
             )
             ordering_changed = True
             occurrence_changed_fields.extend(["is_low_priority", "sort_order"])

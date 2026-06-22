@@ -756,8 +756,8 @@ function TodoScreen({
       const { id, ...changes } = payload;
       return updateOccurrence(id, changes, accessToken);
     },
-    onMutate: (payload) => {
-      void queryClient.cancelQueries({ queryKey: ["range"] });
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: ["range"] });
       const previousRanges = queryClient.getQueriesData<RangeTodos>({
         queryKey: ["range"],
       });
@@ -4645,7 +4645,11 @@ function applyOptimisticOccurrenceUpdate(
         ("pinned" in payload && payload.pinned !== undefined) ||
         ("isLowPriority" in payload && payload.isLowPriority !== undefined)
       ) {
-        nextItem.sortOrder = nextOptimisticSortOrder(items, nextItem);
+        nextItem.sortOrder = nextOptimisticSortOrder(
+          items,
+          nextItem,
+          payload.pinned === false ? "start" : "end",
+        );
       }
       if ("reminderTime" in payload) {
         nextItem.reminderTime = payload.reminderTime ?? null;
@@ -4676,19 +4680,28 @@ function applyOptimisticOccurrenceUpdate(
 function nextOptimisticSortOrder(
   items: TodoOccurrence[],
   updatedItem: TodoOccurrence,
+  placement: "start" | "end",
 ) {
-  const currentMax = items.reduce((max, item) => {
-    if (item.id === updatedItem.id) {
-      return max;
-    }
-    if (
+  const group = items.filter(
+    (item) =>
+      item.id !== updatedItem.id &&
       item.isPinned === updatedItem.isPinned &&
-      item.isLowPriority === updatedItem.isLowPriority
-    ) {
-      return Math.max(max, item.sortOrder);
-    }
-    return max;
-  }, 0);
+      item.isLowPriority === updatedItem.isLowPriority &&
+      sectionForOccurrence(item) === sectionForOccurrence(updatedItem),
+  );
+
+  if (placement === "start") {
+    const currentMin = group.reduce(
+      (min, item) => Math.min(min, item.sortOrder),
+      Number.POSITIVE_INFINITY,
+    );
+    return Number.isFinite(currentMin) ? Math.max(currentMin - 1000, 0) : 1000;
+  }
+
+  const currentMax = group.reduce(
+    (max, item) => Math.max(max, item.sortOrder),
+    0,
+  );
 
   return currentMax + 1000;
 }
