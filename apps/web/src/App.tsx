@@ -888,7 +888,12 @@ function TodoScreen({
   }
 
   function updateTaskPinned(id: string, pinned: boolean) {
+    const item = allTasks.find((task) => task.id === id);
+    const before = item ? measureTaskRects(item.taskDate) : null;
     updateMutation.mutate({ id, pinned });
+    if (item && before) {
+      animateReorderFrom(item.taskDate, null, before);
+    }
   }
 
   function requestDeleteTask(id: string) {
@@ -1122,7 +1127,7 @@ function TodoScreen({
 
   function animateReorderFrom(
     date: string,
-    draggedId: string,
+    skippedTaskId: string | null,
     before: Map<string, DOMRect>,
   ) {
     if (reorderAnimationFrameRef.current !== null) {
@@ -1134,7 +1139,7 @@ function TodoScreen({
         .forEach((element) => {
           const taskId = element.dataset.taskId;
           const previous = taskId ? before.get(taskId) : null;
-          if (!previous || taskId === draggedId) {
+          if (!previous || (skippedTaskId && taskId === skippedTaskId)) {
             return;
           }
           const next = element.getBoundingClientRect();
@@ -4616,7 +4621,6 @@ function applyOptimisticOccurrenceUpdate(
       }
       if ("pinned" in payload && payload.pinned !== undefined) {
         nextItem.isPinned = payload.pinned;
-        nextItem.sortOrder = Date.now();
       }
       if ("isLongTerm" in payload && payload.isLongTerm !== undefined) {
         nextItem.isLongTerm = payload.isLongTerm;
@@ -4636,6 +4640,12 @@ function applyOptimisticOccurrenceUpdate(
         if (payload.isLowPriority) {
           nextItem.isLongTerm = false;
         }
+      }
+      if (
+        ("pinned" in payload && payload.pinned !== undefined) ||
+        ("isLowPriority" in payload && payload.isLowPriority !== undefined)
+      ) {
+        nextItem.sortOrder = nextOptimisticSortOrder(items, nextItem);
       }
       if ("reminderTime" in payload) {
         nextItem.reminderTime = payload.reminderTime ?? null;
@@ -4661,6 +4671,26 @@ function applyOptimisticOccurrenceUpdate(
   });
 
   return changed ? { ...data, days } : data;
+}
+
+function nextOptimisticSortOrder(
+  items: TodoOccurrence[],
+  updatedItem: TodoOccurrence,
+) {
+  const currentMax = items.reduce((max, item) => {
+    if (item.id === updatedItem.id) {
+      return max;
+    }
+    if (
+      item.isPinned === updatedItem.isPinned &&
+      item.isLowPriority === updatedItem.isLowPriority
+    ) {
+      return Math.max(max, item.sortOrder);
+    }
+    return max;
+  }, 0);
+
+  return currentMax + 1000;
 }
 
 function applyServerOccurrenceUpdate(

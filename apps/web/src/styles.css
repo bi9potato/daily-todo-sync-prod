@@ -2058,6 +2058,7 @@ h2 {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 4px;
+  min-height: 20px;
 }
 
 .task-body p:first-child {
