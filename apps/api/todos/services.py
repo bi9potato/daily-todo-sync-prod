@@ -835,13 +835,20 @@ def reorder_day(user, task_date: date, ordered_ids: list[UUID]) -> None:
         if occurrence_id in occurrences_by_id
     }
 
+    def section_key(occurrence: TodoOccurrence) -> str:
+        if _uses_future_content(occurrence.task):
+            return "long-term"
+        if occurrence.is_low_priority:
+            return "low-priority"
+        return "regular"
+
     for is_pinned in (True, False):
-        for is_low_priority in (False, True):
+        for section in ("long-term", "regular", "low-priority"):
             group = [
                 occurrence
                 for occurrence in occurrences
                 if pinned_by_id.get(occurrence.id) == is_pinned
-                and occurrence.is_low_priority == is_low_priority
+                and section_key(occurrence) == section
             ]
             group.sort(key=lambda item: order_by_id.get(item.id, 10_000))
             for index, occurrence in enumerate(group, start=1):

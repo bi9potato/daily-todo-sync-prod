@@ -110,6 +110,34 @@ class CarryoverTests(TestCase):
         second.refresh_from_db()
         self.assertLess(second.sort_order, first.sort_order)
 
+
+    def test_reorder_day_keeps_long_term_order_separate_from_regular_tasks(self):
+        regular = create_task_for_day(self.user, date(2026, 6, 20), "Regular")
+        long_first = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Long first",
+            content_mode=Task.ContentMode.FUTURE,
+        )
+        long_second = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Long second",
+            content_mode=Task.ContentMode.FUTURE,
+        )
+
+        reorder_day(
+            self.user,
+            date(2026, 6, 20),
+            [regular.id, long_second.id, long_first.id],
+        )
+
+        regular.refresh_from_db()
+        long_first.refresh_from_db()
+        long_second.refresh_from_db()
+        self.assertLess(long_second.sort_order, long_first.sort_order)
+        self.assertEqual(regular.sort_order, 1000)
+
     def test_note_can_be_created_and_updated(self):
         occurrence = create_task_for_day(
             self.user,
