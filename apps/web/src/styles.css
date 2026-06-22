@@ -46,6 +46,12 @@ body {
     Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
 }
 
+body.is-task-dragging {
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 button,
 input,
 select,

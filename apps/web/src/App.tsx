@@ -278,6 +278,9 @@ type AttachmentMutationContext = {
 
 const LONG_PRESS_TO_DRAG_MS = 320;
 const LONG_PRESS_MOVE_CANCEL_PX = 10;
+const TOUCH_LONG_PRESS_MOVE_CANCEL_PX = 24;
+const DRAG_EDGE_SCROLL_ZONE_PX = 84;
+const DRAG_EDGE_SCROLL_MAX_PX = 18;
 const CALENDAR_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const CALENDAR_MINUTES_PER_DAY = 24 * 60;
 const CALENDAR_EVENT_HEIGHT = 42;
@@ -539,6 +542,7 @@ function TodoScreen({
   const pendingDragRef = useRef<PendingDrag | null>(null);
   const suppressOpenTaskIdRef = useRef<string | null>(null);
   const reorderAnimationFrameRef = useRef<number | null>(null);
+  const dragScrollFrameRef = useRef<number | null>(null);
   const completionOverrideVersionRef = useRef(0);
   const hasScheduledReloadRef = useRef(false);
   const undoDeleteTimerRef = useRef<number | null>(null);
@@ -613,6 +617,28 @@ function TodoScreen({
   const isSidebarExpanded =
     isSidebarPinned || isSidebarHovered || isMobileSidebarOpen;
   const isSidebarCollapsed = !isSidebarExpanded;
+
+  useEffect(() => {
+    if (!dragState?.active) {
+      stopDragEdgeScroll();
+      return undefined;
+    }
+
+    function preventNativeTouchScroll(event: TouchEvent) {
+      event.preventDefault();
+    }
+
+    document.body.classList.add("is-task-dragging");
+    document.addEventListener("touchmove", preventNativeTouchScroll, {
+      passive: false,
+    });
+
+    return () => {
+      document.body.classList.remove("is-task-dragging");
+      document.removeEventListener("touchmove", preventNativeTouchScroll);
+      stopDragEdgeScroll();
+    };
+  }, [dragState?.active]);
 
   useEffect(() => {
     const currentAssetSignature = [...document.querySelectorAll("script[src], link[href]")]
@@ -1123,6 +1149,41 @@ function TodoScreen({
     pendingDragRef.current = null;
   }
 
+  function stopDragEdgeScroll() {
+    if (dragScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragScrollFrameRef.current);
+      dragScrollFrameRef.current = null;
+    }
+  }
+
+  function scrollViewportDuringDrag(clientY: number) {
+    if (dragScrollFrameRef.current !== null) {
+      return;
+    }
+
+    dragScrollFrameRef.current = window.requestAnimationFrame(() => {
+      dragScrollFrameRef.current = null;
+      const viewportHeight = window.innerHeight;
+      let delta = 0;
+      if (clientY < DRAG_EDGE_SCROLL_ZONE_PX) {
+        delta = -Math.ceil(
+          ((DRAG_EDGE_SCROLL_ZONE_PX - clientY) / DRAG_EDGE_SCROLL_ZONE_PX) *
+            DRAG_EDGE_SCROLL_MAX_PX,
+        );
+      } else if (clientY > viewportHeight - DRAG_EDGE_SCROLL_ZONE_PX) {
+        delta = Math.ceil(
+          ((clientY - (viewportHeight - DRAG_EDGE_SCROLL_ZONE_PX)) /
+            DRAG_EDGE_SCROLL_ZONE_PX) *
+            DRAG_EDGE_SCROLL_MAX_PX,
+        );
+      }
+
+      if (delta !== 0) {
+        window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+      }
+    });
+  }
+
   function nextTargetIdAfter(date: string, hoveredId: string, draggedId: string) {
     const items = orderedDayItems(daysByDate.get(date) ?? emptyDay(date));
     const draggedItem = items.find((item) => item.id === draggedId);
@@ -1250,7 +1311,11 @@ function TodoScreen({
     if (pending?.state.pointerId === event.pointerId) {
       const deltaX = event.clientX - pending.state.startX;
       const deltaY = event.clientY - pending.state.startY;
-      if (Math.hypot(deltaX, deltaY) > LONG_PRESS_MOVE_CANCEL_PX) {
+      const cancelDistance =
+        event.pointerType === "touch"
+          ? TOUCH_LONG_PRESS_MOVE_CANCEL_PX
+          : LONG_PRESS_MOVE_CANCEL_PX;
+      if (Math.hypot(deltaX, deltaY) > cancelDistance) {
         suppressOpenTaskIdRef.current = pending.state.id;
         clearPendingDrag();
         return;
@@ -1267,6 +1332,9 @@ function TodoScreen({
       return;
     }
 
+    event.preventDefault();
+    scrollViewportDuringDrag(event.clientY);
+
     const target = targetFromPointer(dragState, event.clientX, event.clientY);
     if (target.targetLongTerm === true && !isLongTermSectionOpen) {
       setIsLongTermSectionOpen(true);
@@ -1279,8 +1347,6 @@ function TodoScreen({
       x: event.clientX,
       y: event.clientY,
     };
-
-    event.preventDefault();
 
     if (
       target.targetId !== dragState.targetId ||
@@ -1302,6 +1368,8 @@ function TodoScreen({
     if (!dragState) {
       return;
     }
+
+    stopDragEdgeScroll();
 
     if (dragState.active) {
       suppressOpenTaskIdRef.current = dragState.id;
@@ -1336,6 +1404,7 @@ function TodoScreen({
 
   function cancelTaskDrag() {
     clearPendingDrag();
+    stopDragEdgeScroll();
     setDragState(null);
   }
 
