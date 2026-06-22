@@ -16,6 +16,7 @@ from integrations.google_calendar import (
     exchange_code_for_tokens,
     fetch_google_userinfo,
 )
+from integrations.models import GoogleCalendarConnection
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
@@ -175,6 +176,7 @@ def google_auth_callback(
             callback_redirect_url(return_url, googleAuth="error", message=str(exc))
         )
 
+    subject = str(userinfo.get("sub") or "").strip()
     email = str(userinfo.get("email") or "").strip().lower()
     name = str(userinfo.get("name") or "").strip()
     if not email:
@@ -187,7 +189,14 @@ def google_auth_callback(
         )
 
     User = get_user_model()
-    user = User.objects.filter(email__iexact=email).first()
+    connection = None
+    if subject:
+        connection = (
+            GoogleCalendarConnection.objects.select_related("user")
+            .filter(google_subject=subject, user__is_active=True)
+            .first()
+        )
+    user = connection.user if connection else User.objects.filter(email__iexact=email).first()
     if user is None:
         base_username = (email.split("@")[0] or "google").replace(".", "-")[:140]
         username = base_username

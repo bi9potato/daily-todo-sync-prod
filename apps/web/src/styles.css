@@ -1694,10 +1694,10 @@ h2 {
   display: grid;
   gap: 9px;
   margin-bottom: 10px;
-  border: 1px solid rgba(184, 197, 185, 0.7);
+  border: 1px solid rgba(151, 117, 47, 0.28);
   border-radius: var(--radius);
   background:
-    linear-gradient(180deg, rgba(246, 248, 243, 0.62), rgba(255, 255, 255, 0.54)),
+    linear-gradient(180deg, rgba(251, 246, 234, 0.76), rgba(255, 255, 255, 0.58)),
     rgba(255, 255, 255, 0.52);
   padding: 8px;
   transition:
@@ -1708,8 +1708,9 @@ h2 {
 
 .long-term-task-section.is-open {
   background:
-    linear-gradient(180deg, rgba(232, 240, 235, 0.72), rgba(255, 255, 255, 0.62)),
+    linear-gradient(180deg, rgba(250, 242, 222, 0.86), rgba(255, 255, 255, 0.66)),
     rgba(255, 255, 255, 0.58);
+  box-shadow: 0 16px 34px rgba(98, 75, 28, 0.08);
 }
 
 .long-term-section-header {
@@ -1774,7 +1775,7 @@ h2 {
 
 .todo-item {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) repeat(3, auto);
   align-items: center;
   gap: 11px;
   min-height: 58px;
@@ -1806,6 +1807,24 @@ h2 {
   box-shadow:
     0 0 0 1px rgba(44, 87, 69, 0.11) inset,
     0 16px 34px rgba(44, 87, 69, 0.13);
+}
+
+.todo-item.is-long-term {
+  border-color: rgba(151, 117, 47, 0.46);
+  background:
+    linear-gradient(180deg, rgba(255, 252, 245, 0.98), rgba(249, 244, 232, 0.94)),
+    var(--card);
+  box-shadow:
+    inset 4px 0 0 rgba(151, 117, 47, 0.58),
+    0 15px 32px rgba(98, 75, 28, 0.12);
+}
+
+.todo-item.is-long-term.is-pinned {
+  border-color: rgba(151, 117, 47, 0.66);
+  box-shadow:
+    inset 4px 0 0 rgba(151, 117, 47, 0.72),
+    0 0 0 1px rgba(151, 117, 47, 0.12) inset,
+    0 16px 34px rgba(98, 75, 28, 0.15);
 }
 
 .pin-task-button.is-pinned {
@@ -1959,6 +1978,18 @@ h2 {
   transition:
     color 0.22s ease,
     text-decoration-color 0.22s ease;
+}
+
+.todo-item.is-long-term .task-body p:first-child {
+  color: #3f3320;
+}
+
+.todo-item.is-long-term .task-kicker {
+  justify-self: start;
+  border-radius: 999px;
+  background: rgba(151, 117, 47, 0.12);
+  color: #7a5b18;
+  padding: 2px 7px;
 }
 
 .todo-item.is-done {
@@ -2879,10 +2910,23 @@ h2 {
   }
 
   .todo-item {
-    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto auto minmax(0, 1fr) repeat(3, auto);
     min-height: 56px;
+    gap: 8px;
     padding: 10px;
     width: 100%;
+  }
+
+  .todo-item .icon-button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+  }
+
+  .todo-item .task-body p:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .calendar-grid.view-day {

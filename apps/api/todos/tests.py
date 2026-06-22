@@ -364,6 +364,7 @@ class CarryoverTests(TestCase):
             )
             carried.task.refresh_from_db()
             self.assertEqual(source.task.content_mode, Task.ContentMode.FUTURE)
+            self.assertEqual(source.task.recurrence_kind, Task.RecurrenceKind.DAILY)
             self.assertEqual(carried.task_id, source.task_id)
             self.assertEqual(carried.task.note, "keep context")
             self.assertTrue(
@@ -435,7 +436,7 @@ class TodoApiTests(TestCase):
                     "text": "Outfit",
                     "note": "keep this",
                     "isLongTerm": True,
-                    "repeat": {"kind": "daily", "interval": 1},
+                    "repeat": {"kind": "none", "interval": 1},
                 }
             ),
             content_type="application/json",
@@ -445,6 +446,8 @@ class TodoApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertTrue(body["isLongTerm"])
+        self.assertTrue(body["isRecurring"])
+        self.assertEqual(body["repeat"]["kind"], "daily")
         self.assertEqual(body["note"], "keep this")
 
     def test_copy_long_term_task_endpoint_returns_regular_task(self):

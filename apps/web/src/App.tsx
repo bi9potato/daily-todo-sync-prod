@@ -1152,8 +1152,7 @@ function TodoScreen({
     const sections = document.querySelectorAll<HTMLElement>(
       `[data-day-date="${date}"][data-task-section]`,
     );
-    let matchedSection: HTMLElement | null = null;
-    sections.forEach((section) => {
+    for (const section of sections) {
       const rect = section.getBoundingClientRect();
       if (
         clientX >= rect.left &&
@@ -1161,14 +1160,11 @@ function TodoScreen({
         clientY >= rect.top &&
         clientY <= rect.bottom
       ) {
-        matchedSection = section;
+        return section.dataset.taskSection === "long-term";
       }
-    });
-
-    if (!matchedSection) {
-      return null;
     }
-    return matchedSection.dataset.taskSection === "long-term";
+
+    return null;
   }
 
   function targetFromPointer(current: DragState, clientX: number, clientY: number) {
@@ -2483,7 +2479,7 @@ function TodoCard({
     <li
       className={`todo-item task-card ${done ? "is-done" : ""} ${
         dragged ? "is-dragging" : ""
-      } ${item.isPinned ? "is-pinned" : ""}`}
+      } ${item.isPinned ? "is-pinned" : ""} ${item.isLongTerm ? "is-long-term" : ""}`}
       data-task-date={date}
       data-task-id={item.id}
       data-task-sortable="true"
@@ -3403,10 +3399,16 @@ function TaskDetailsModal({
     setNote(item.note);
     setIsLongTerm(item.isLongTerm);
     setReminderTime(item.reminderTime ?? "");
-    setRepeatKind(item.repeat.kind);
+    setRepeatKind(item.isLongTerm ? "daily" : item.repeat.kind);
     setSaveMessage("");
     setUploadMessage("");
   }, [item.id, item.isLongTerm, item.note, item.reminderTime, item.repeat.kind, item.text]);
+
+  useEffect(() => {
+    if (isLongTerm) {
+      setRepeatKind("daily");
+    }
+  }, [isLongTerm]);
 
   async function uploadFiles(fileList: FileList | File[]) {
     const imageFiles = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
@@ -3574,6 +3576,7 @@ function TaskDetailsModal({
             重复
             <select
               value={repeatKind}
+              disabled={isLongTerm}
               onChange={(event) => setRepeatKind(event.target.value as RepeatKind)}
             >
               {REPEAT_OPTIONS.map((option) => (
@@ -3582,6 +3585,7 @@ function TaskDetailsModal({
                 </option>
               ))}
             </select>
+            {isLongTerm ? <small>长期任务会自动每天重复。</small> : null}
           </label>
         </div>
         <div className="modal-actions">
@@ -4303,6 +4307,15 @@ function applyOptimisticOccurrenceUpdate(
       }
       if ("isLongTerm" in payload && payload.isLongTerm !== undefined) {
         nextItem.isLongTerm = payload.isLongTerm;
+        if (payload.isLongTerm) {
+          nextItem.repeat = {
+            kind: "daily",
+            interval: 1,
+            daysOfWeek: [],
+            until: null,
+          };
+          nextItem.isRecurring = true;
+        }
       }
       if ("reminderTime" in payload) {
         nextItem.reminderTime = payload.reminderTime ?? null;

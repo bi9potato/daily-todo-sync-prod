@@ -55,6 +55,14 @@ def _uses_future_content(task: Task) -> bool:
     return task.content_mode == Task.ContentMode.FUTURE
 
 
+def _force_long_term_daily_recurrence(task: Task, start_date: date) -> None:
+    task.recurrence_kind = Task.RecurrenceKind.DAILY
+    task.recurrence_interval = 1
+    task.recurrence_days_of_week = []
+    task.recurrence_until = None
+    task.recurrence_start_date = start_date
+
+
 def _propagate_ordering_to_future_auto_occurrences(user, occurrence: TodoOccurrence) -> None:
     TodoOccurrence.objects.filter(
         user=user,
@@ -339,6 +347,11 @@ def create_task_for_day(
         if content_mode == Task.ContentMode.FUTURE
         else Task.ContentMode.OCCURRENCE
     )
+    if normalized_content_mode == Task.ContentMode.FUTURE:
+        normalized_kind = Task.RecurrenceKind.DAILY
+        recurrence_interval = 1
+        recurrence_days_of_week = []
+        recurrence_until = None
     task = Task.objects.create(
         user=user,
         text=text.strip(),
@@ -558,6 +571,9 @@ def update_occurrence(
         occurrence.task.recurrence_start_date = (
             occurrence.task_date if normalized_kind != Task.RecurrenceKind.NONE else None
         )
+
+    if _uses_future_content(occurrence.task):
+        _force_long_term_daily_recurrence(occurrence.task, occurrence.task_date)
 
     task_changed = (
         is_long_term is not None
