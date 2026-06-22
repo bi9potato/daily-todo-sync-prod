@@ -2755,10 +2755,18 @@ function TodoCard({
       />
       <div className="task-body">
         <p>{item.text}</p>
-        {item.isLongTerm ? <small className="task-kicker">长期任务</small> : null}
-        {!item.isLongTerm && item.isLowPriority ? (
-          <small className="task-kicker">低优先级</small>
-        ) : null}
+        <span className="task-meta-row">
+          {item.isPinned ? (
+            <small className="task-kicker pinned-kicker">
+              <PinIcon pinned />
+              置顶
+            </small>
+          ) : null}
+          {item.isLongTerm ? <small className="task-kicker">长期任务</small> : null}
+          {!item.isLongTerm && item.isLowPriority ? (
+            <small className="task-kicker">低优先级</small>
+          ) : null}
+        </span>
       </div>
       {item.isLongTerm ? (
         <button
