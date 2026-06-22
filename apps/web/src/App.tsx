@@ -1234,6 +1234,29 @@ function TodoScreen({
     return ids[index + 1] ?? null;
   }
 
+  function targetIdAtPinnedBoundary(
+    date: string,
+    draggedId: string,
+    targetSection: TaskSection | null,
+  ) {
+    const items = orderedDayItems(daysByDate.get(date) ?? emptyDay(date));
+    const draggedItem = items.find((item) => item.id === draggedId);
+    if (!draggedItem) {
+      return null;
+    }
+    const dragSection = targetSection ?? sectionForOccurrence(draggedItem);
+    const sameGroupIds = items
+      .filter(
+        (item) =>
+          item.id !== draggedId &&
+          item.isPinned === draggedItem.isPinned &&
+          sectionForOccurrence(item) === dragSection,
+      )
+      .map((item) => item.id);
+
+    return draggedItem.isPinned ? null : sameGroupIds[0] ?? null;
+  }
+
   function sectionTargetFromPointer(
     date: string,
     clientX: number,
@@ -1275,11 +1298,14 @@ function TodoScreen({
       }
       const hoveredSection = sectionForOccurrence(hoveredItem);
       const dragSection = targetSection ?? sectionForOccurrence(draggedItem);
-      if (
-        draggedItem.isPinned !== hoveredItem.isPinned ||
-        hoveredSection !== dragSection
-      ) {
+      if (hoveredSection !== dragSection) {
         return { targetId: current.targetId, targetSection };
+      }
+      if (draggedItem.isPinned !== hoveredItem.isPinned) {
+        return {
+          targetId: targetIdAtPinnedBoundary(current.date, current.id, dragSection),
+          targetSection,
+        };
       }
       const rect = hoveredCard.getBoundingClientRect();
       const shouldInsertAfter = clientY > rect.top + rect.height / 2;
