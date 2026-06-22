@@ -1207,17 +1207,23 @@ function TodoScreen({
     });
   }
 
-  function nextTargetIdAfter(date: string, hoveredId: string, draggedId: string) {
+  function nextTargetIdAfter(
+    date: string,
+    hoveredId: string,
+    draggedId: string,
+    targetSection: TaskSection | null,
+  ) {
     const items = orderedDayItems(daysByDate.get(date) ?? emptyDay(date));
     const draggedItem = items.find((item) => item.id === draggedId);
     if (!draggedItem) {
       return null;
     }
+    const dragSection = targetSection ?? sectionForOccurrence(draggedItem);
     const ids = items
       .filter(
         (item) =>
           item.isPinned === draggedItem.isPinned &&
-          sectionForOccurrence(item) === sectionForOccurrence(draggedItem),
+          sectionForOccurrence(item) === dragSection,
       )
       .map((item) => item.id)
       .filter((id) => id !== draggedId);
@@ -1264,11 +1270,14 @@ function TodoScreen({
       const items = orderedDayItems(daysByDate.get(current.date) ?? emptyDay(current.date));
       const draggedItem = items.find((item) => item.id === current.id);
       const hoveredItem = items.find((item) => item.id === hoveredId);
+      if (!draggedItem || !hoveredItem) {
+        return { targetId: current.targetId, targetSection };
+      }
+      const hoveredSection = sectionForOccurrence(hoveredItem);
+      const dragSection = targetSection ?? sectionForOccurrence(draggedItem);
       if (
-        !draggedItem ||
-        !hoveredItem ||
         draggedItem.isPinned !== hoveredItem.isPinned ||
-        sectionForOccurrence(draggedItem) !== sectionForOccurrence(hoveredItem)
+        hoveredSection !== dragSection
       ) {
         return { targetId: current.targetId, targetSection };
       }
@@ -1276,7 +1285,7 @@ function TodoScreen({
       const shouldInsertAfter = clientY > rect.top + rect.height / 2;
       return {
         targetId: shouldInsertAfter
-          ? nextTargetIdAfter(current.date, hoveredId, current.id)
+          ? nextTargetIdAfter(current.date, hoveredId, current.id, dragSection)
           : hoveredId,
         targetSection,
       };
@@ -1406,11 +1415,13 @@ function TodoScreen({
         dragState.targetSection !== null &&
         dragState.targetSection !== sectionForOccurrence(draggedItem)
       ) {
-        updateMutation.mutate({
-          id: dragState.id,
-          isLongTerm: dragState.targetSection === "long-term",
-          isLowPriority: dragState.targetSection === "low-priority",
-        });
+        const orderedIds = reorderOccurrenceItems(
+          currentItems,
+          dragState.id,
+          dragState.targetId,
+          dragState.targetSection,
+        ).map((item) => item.id);
+        void moveTaskToSectionAndReorder(dragState, orderedIds);
         setDragState(null);
         return;
       }
@@ -1419,6 +1430,7 @@ function TodoScreen({
         currentItems,
         dragState.id,
         dragState.targetId,
+        dragState.targetSection,
       ).map((item) => item.id);
       if (orderedIds.join("|") !== currentIds.join("|")) {
         reorderMutation.mutate({ date: dragState.date, orderedIds });
@@ -1432,6 +1444,33 @@ function TodoScreen({
     clearPendingDrag();
     stopDragEdgeScroll();
     setDragState(null);
+  }
+
+  async function moveTaskToSectionAndReorder(state: DragState, orderedIds: string[]) {
+    try {
+      const updated = await updateOccurrence(
+        state.id,
+        {
+          isLongTerm: state.targetSection === "long-term",
+          isLowPriority: state.targetSection === "low-priority",
+        },
+        accessToken,
+      );
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyServerOccurrenceUpdate(data, updated),
+      );
+      await reorderDay(state.date, orderedIds, accessToken);
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOptimisticDayOrder(data, { date: state.date, orderedIds }),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["range"] });
+    } catch {
+      await queryClient.invalidateQueries({ queryKey: ["range"] });
+      setTaskActionMessage({
+        tone: "error",
+        message: "移动任务失败，请稍后再试。",
+      });
+    }
   }
 
   function shiftDate(amount: number) {
@@ -4807,7 +4846,12 @@ function previewDayItems(
     return items;
   }
 
-  return reorderOccurrenceItems(items, dragState.id, dragState.targetId);
+  return reorderOccurrenceItems(
+    items,
+    dragState.id,
+    dragState.targetId,
+    dragState.targetSection,
+  );
 }
 
 function reorderIds(ids: string[], draggedId: string, targetId: string | null) {
@@ -4830,17 +4874,30 @@ function reorderOccurrenceItems(
   items: TodoOccurrence[],
   draggedId: string,
   targetId: string | null,
+  targetSection?: TaskSection | null,
 ) {
   const draggedItem = items.find((item) => item.id === draggedId);
   if (!draggedItem) {
     return items;
   }
 
-  const group = items.filter(
-    (item) =>
-      item.isPinned === draggedItem.isPinned &&
-      sectionForOccurrence(item) === sectionForOccurrence(draggedItem),
-  );
+  const dragSection = targetSection ?? sectionForOccurrence(draggedItem);
+  const previewDraggedItem: TodoOccurrence = targetSection
+    ? {
+        ...draggedItem,
+        isLongTerm: targetSection === "long-term",
+        isLowPriority: targetSection === "low-priority",
+      }
+    : draggedItem;
+  const group = [
+    ...items.filter(
+      (item) =>
+        item.id !== draggedId &&
+        item.isPinned === draggedItem.isPinned &&
+        sectionForOccurrence(item) === dragSection,
+    ),
+    previewDraggedItem,
+  ];
   const groupById = new Map(group.map((item) => [item.id, item]));
   const orderedGroup = reorderIds(
     group.map((item) => item.id),
@@ -4854,7 +4911,7 @@ function reorderOccurrenceItems(
   return items.map((item) => {
     if (
       item.isPinned === draggedItem.isPinned &&
-      sectionForOccurrence(item) === sectionForOccurrence(draggedItem)
+      (item.id === draggedId || sectionForOccurrence(item) === dragSection)
     ) {
       return nextGroup.shift() ?? item;
     }
