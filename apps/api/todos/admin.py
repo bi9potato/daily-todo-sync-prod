@@ -29,11 +29,12 @@ class TodoOccurrenceAdmin(admin.ModelAdmin):
         "status",
         "source",
         "is_pinned",
+        "is_low_priority",
         "sort_order",
         "task",
         "created_at",
     )
-    list_filter = ("status", "source", "is_pinned", "task_date", "deleted_at")
+    list_filter = ("status", "source", "is_pinned", "is_low_priority", "task_date", "deleted_at")
     search_fields = ("task__text", "user__username", "user__email")
     readonly_fields = ("id", "root_id", "created_at", "updated_at")
 

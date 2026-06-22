@@ -18,12 +18,19 @@ ALLOWED_ATTACHMENT_TYPES = {
 }
 
 
-def _next_sort_order(user, task_date: date, *, is_pinned: bool = False) -> int:
+def _next_sort_order(
+    user,
+    task_date: date,
+    *,
+    is_pinned: bool = False,
+    is_low_priority: bool = False,
+) -> int:
     current_max = (
         TodoOccurrence.objects.filter(
             user=user,
             task_date=task_date,
             is_pinned=is_pinned,
+            is_low_priority=is_low_priority,
             deleted_at__isnull=True,
         ).aggregate(Max("sort_order"))["sort_order__max"]
     )
@@ -76,6 +83,7 @@ def _propagate_ordering_to_future_auto_occurrences(user, occurrence: TodoOccurre
         task__deleted_at__isnull=True,
     ).update(
         is_pinned=occurrence.is_pinned,
+        is_low_priority=occurrence.is_low_priority,
         sort_order=occurrence.sort_order,
         updated_at=timezone.now(),
     )
@@ -340,6 +348,7 @@ def create_task_for_day(
     recurrence_interval: int = 1,
     recurrence_days_of_week: list[int] | None = None,
     recurrence_until: date | None = None,
+    is_low_priority: bool = False,
 ) -> TodoOccurrence:
     normalized_kind = recurrence_kind or Task.RecurrenceKind.NONE
     normalized_content_mode = (
@@ -371,7 +380,8 @@ def create_task_for_day(
         task_date=task_date,
         note="" if normalized_content_mode == Task.ContentMode.FUTURE else note.strip(),
         source=TodoOccurrence.Source.MANUAL,
-        sort_order=_next_sort_order(user, task_date),
+        is_low_priority=is_low_priority,
+        sort_order=_next_sort_order(user, task_date, is_low_priority=is_low_priority),
     )
 
 
@@ -401,10 +411,16 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
                 continue
             template = _latest_ordering_template(user, task, current)
             is_pinned = template.is_pinned if template else False
+            is_low_priority = template.is_low_priority if template else False
             sort_order = (
                 template.sort_order
                 if template
-                else _next_sort_order(user, current, is_pinned=is_pinned)
+                else _next_sort_order(
+                    user,
+                    current,
+                    is_pinned=is_pinned,
+                    is_low_priority=is_low_priority,
+                )
             )
             try:
                 TodoOccurrence.objects.create(
@@ -414,6 +430,7 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
                     task_date=current,
                     source=TodoOccurrence.Source.RECURRING,
                     is_pinned=is_pinned,
+                    is_low_priority=is_low_priority,
                     sort_order=sort_order,
                 )
             except IntegrityError:
@@ -487,6 +504,7 @@ def ensure_range(
                     task_date=current,
                     source=TodoOccurrence.Source.CARRYOVER,
                     is_pinned=occurrence.is_pinned,
+                    is_low_priority=occurrence.is_low_priority,
                     sort_order=occurrence.sort_order,
                     carryover_from_occurrence=occurrence,
                 )
@@ -505,6 +523,7 @@ def update_occurrence(
     text: str | None = None,
     note: str | None = None,
     pinned: bool | None = None,
+    is_low_priority: bool | None = None,
     is_long_term: bool | None = None,
     reminder_time: time | None = None,
     set_reminder_time: bool = False,
@@ -519,6 +538,10 @@ def update_occurrence(
         deleted_at__isnull=True,
         task__deleted_at__isnull=True,
     )
+    if is_low_priority is True and is_long_term is None and _uses_future_content(occurrence.task):
+        is_long_term = False
+    if is_long_term is True:
+        is_low_priority = False
 
     content_changed = (
         text is not None
@@ -650,9 +673,23 @@ def update_occurrence(
                 user,
                 occurrence.task_date,
                 is_pinned=next_pinned,
+                is_low_priority=occurrence.is_low_priority,
             )
             ordering_changed = True
             occurrence_changed_fields.extend(["is_pinned", "sort_order"])
+
+    if is_low_priority is not None:
+        next_is_low_priority = bool(is_low_priority)
+        if occurrence.is_low_priority != next_is_low_priority:
+            occurrence.is_low_priority = next_is_low_priority
+            occurrence.sort_order = _next_sort_order(
+                user,
+                occurrence.task_date,
+                is_pinned=occurrence.is_pinned,
+                is_low_priority=next_is_low_priority,
+            )
+            ordering_changed = True
+            occurrence_changed_fields.extend(["is_low_priority", "sort_order"])
 
     if occurrence_changed_fields:
         occurrence.version += 1
@@ -683,6 +720,7 @@ def copy_long_term_occurrence_as_regular(user, occurrence_id: UUID) -> TodoOccur
         content_mode=Task.ContentMode.OCCURRENCE,
         reminder_time=source.task.reminder_time,
         recurrence_kind=Task.RecurrenceKind.NONE,
+        is_low_priority=source.is_low_priority,
     )
     _copy_task_attachments_to_occurrence(user, source.task, copied)
     return copied
@@ -798,16 +836,18 @@ def reorder_day(user, task_date: date, ordered_ids: list[UUID]) -> None:
     }
 
     for is_pinned in (True, False):
-        group = [
-            occurrence
-            for occurrence in occurrences
-            if pinned_by_id.get(occurrence.id) == is_pinned
-        ]
-        group.sort(key=lambda item: order_by_id.get(item.id, 10_000))
-        for index, occurrence in enumerate(group, start=1):
-            occurrence.sort_order = index * 1000
-            occurrence.save(update_fields=["sort_order", "updated_at"])
-            _propagate_ordering_to_future_auto_occurrences(user, occurrence)
+        for is_low_priority in (False, True):
+            group = [
+                occurrence
+                for occurrence in occurrences
+                if pinned_by_id.get(occurrence.id) == is_pinned
+                and occurrence.is_low_priority == is_low_priority
+            ]
+            group.sort(key=lambda item: order_by_id.get(item.id, 10_000))
+            for index, occurrence in enumerate(group, start=1):
+                occurrence.sort_order = index * 1000
+                occurrence.save(update_fields=["sort_order", "updated_at"])
+                _propagate_ordering_to_future_auto_occurrences(user, occurrence)
 
 
 @transaction.atomic

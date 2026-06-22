@@ -157,6 +157,24 @@ class CarryoverTests(TestCase):
         self.assertEqual([item.task.text for item in carried], ["Second", "Third", "First"])
         self.assertTrue(carried[0].is_pinned)
 
+    def test_carryover_preserves_low_priority(self):
+        source = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Someday",
+            is_low_priority=True,
+        )
+
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 21),
+            deleted_at__isnull=True,
+        )
+        self.assertTrue(carried.is_low_priority)
+
     def test_existing_future_carryover_tracks_pin_and_reorder_changes(self):
         first = create_task_for_day(self.user, date(2026, 6, 20), "First")
         second = create_task_for_day(self.user, date(2026, 6, 20), "Second")
@@ -448,7 +466,39 @@ class TodoApiTests(TestCase):
         self.assertTrue(body["isLongTerm"])
         self.assertTrue(body["isRecurring"])
         self.assertEqual(body["repeat"]["kind"], "daily")
+        self.assertFalse(body["isLowPriority"])
         self.assertEqual(body["note"], "keep this")
+
+    def test_low_priority_task_endpoint_sets_low_priority(self):
+        response = self.client.post(
+            "/api/days/2026-06-20/tasks",
+            data=json.dumps({"text": "Someday", "isLowPriority": True}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.json()["isLowPriority"])
+
+    def test_long_term_patch_clears_low_priority(self):
+        occurrence = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Someday",
+            is_low_priority=True,
+        )
+
+        response = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps({"isLongTerm": True}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["isLongTerm"])
+        self.assertFalse(body["isLowPriority"])
 
     def test_copy_long_term_task_endpoint_returns_regular_task(self):
         occurrence = create_task_for_day(

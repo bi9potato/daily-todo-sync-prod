@@ -98,6 +98,7 @@ class TodoOccurrence(models.Model):
         default=Source.MANUAL,
     )
     is_pinned = models.BooleanField(default=False)
+    is_low_priority = models.BooleanField(default=False)
     sort_order = models.PositiveIntegerField(default=0)
     carryover_from_occurrence = models.ForeignKey(
         "self",
@@ -124,6 +125,10 @@ class TodoOccurrence(models.Model):
             models.Index(
                 fields=["user", "task_date", "status", "sort_order"],
                 name="todos_occur_user_id_9159c1_idx",
+            ),
+            models.Index(
+                fields=["user", "task_date", "is_low_priority", "sort_order"],
+                name="todos_occur_user_id_8d18f5_idx",
             ),
             models.Index(
                 fields=["user", "root_id", "task_date"],

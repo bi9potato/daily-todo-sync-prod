@@ -21,6 +21,7 @@ export type TodoOccurrence = {
   source: "manual" | "carryover" | "recurring";
   sortOrder: number;
   isPinned: boolean;
+  isLowPriority: boolean;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -72,6 +73,7 @@ export type TaskCreatePayload = {
   text: string;
   note?: string;
   isLongTerm?: boolean;
+  isLowPriority?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
 };
@@ -290,6 +292,7 @@ export function updateOccurrence(
     note?: string;
     pinned?: boolean;
     isLongTerm?: boolean;
+    isLowPriority?: boolean;
     reminderTime?: string | null;
     repeat?: RepeatRule;
   },

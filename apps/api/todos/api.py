@@ -54,6 +54,7 @@ class TodoOccurrenceOut(Schema):
     source: str
     sortOrder: int
     isPinned: bool
+    isLowPriority: bool
     createdAt: str
     updatedAt: str
     completedAt: str | None
@@ -94,6 +95,7 @@ class TaskCreateIn(Schema):
     text: str
     note: str = ""
     isLongTerm: bool = False
+    isLowPriority: bool = False
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
 
@@ -103,6 +105,7 @@ class OccurrencePatchIn(Schema):
     text: str | None = None
     note: str | None = None
     pinned: bool | None = None
+    isLowPriority: bool | None = None
     isLongTerm: bool | None = None
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
@@ -197,6 +200,7 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
         "source": occurrence.source,
         "sortOrder": occurrence.sort_order,
         "isPinned": occurrence.is_pinned,
+        "isLowPriority": occurrence.is_low_priority,
         "createdAt": occurrence.created_at.isoformat(),
         "updatedAt": occurrence.updated_at.isoformat(),
         "completedAt": occurrence.completed_at.isoformat() if occurrence.completed_at else None,
@@ -290,6 +294,7 @@ def create_task(request, day: date, payload: TaskCreateIn):
             else Task.ContentMode.OCCURRENCE
         ),
         reminder_time=parse_reminder_time(payload.reminderTime),
+        is_low_priority=payload.isLowPriority and not payload.isLongTerm,
         **recurrence_payload(payload.repeat),
     )
     sync_occurrence_to_google_calendar(request.auth, occurrence)
@@ -313,6 +318,7 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
         text=payload.text,
         note=payload.note,
         pinned=payload.pinned,
+        is_low_priority=payload.isLowPriority,
         is_long_term=payload.isLongTerm,
         reminder_time=parse_reminder_time(payload.reminderTime),
         set_reminder_time="reminderTime" in data,

@@ -71,6 +71,7 @@ type AuthMode = "login" | "register";
 type CalendarViewMode = "day" | "week" | "month";
 type ViewMode = CalendarViewMode | "analytics";
 type TaskDraftSource = "typed" | "voice" | "ai";
+type TaskSection = "long-term" | "regular" | "low-priority";
 
 type TaskDraft = {
   confidence: number;
@@ -207,7 +208,7 @@ type DragState = {
   startX: number;
   startY: number;
   targetId: string | null;
-  targetLongTerm: boolean | null;
+  targetSection: TaskSection | null;
   width: number;
   x: number;
   y: number;
@@ -225,6 +226,7 @@ type UpdateOccurrencePayload = {
   note?: string;
   pinned?: boolean;
   isLongTerm?: boolean;
+  isLowPriority?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
 };
@@ -523,6 +525,7 @@ function TodoScreen({
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isLongTermSectionOpen, setIsLongTermSectionOpen] = useState(false);
+  const [isLowPrioritySectionOpen, setIsLowPrioritySectionOpen] = useState(false);
   const [appUpdateNotice, setAppUpdateNotice] = useState("");
   const [googleCalendarNotice, setGoogleCalendarNotice] =
     useState<GoogleCalendarNotice | null>(null);
@@ -604,6 +607,16 @@ function TodoScreen({
       return 0;
     }
     return [...day.pending, ...day.done].filter((item) => item.isLongTerm).length;
+  }, [daysByDate, today]);
+
+  const todayLowPriorityCount = useMemo(() => {
+    const day = daysByDate.get(today);
+    if (!day) {
+      return 0;
+    }
+    return [...day.pending, ...day.done].filter(
+      (item) => !item.isLongTerm && item.isLowPriority,
+    ).length;
   }, [daysByDate, today]);
 
   const allTasks = useMemo(() => {
@@ -1061,6 +1074,7 @@ function TodoScreen({
     setSelectedDate(today);
     setViewMode("day");
     setIsLongTermSectionOpen(false);
+    setIsLowPrioritySectionOpen(false);
     setIsMobileSidebarOpen(false);
   }
 
@@ -1068,6 +1082,15 @@ function TodoScreen({
     setSelectedDate(today);
     setViewMode("day");
     setIsLongTermSectionOpen(true);
+    setIsLowPrioritySectionOpen(false);
+    setIsMobileSidebarOpen(false);
+  }
+
+  function openLowPriorityTasks() {
+    setSelectedDate(today);
+    setViewMode("day");
+    setIsLongTermSectionOpen(false);
+    setIsLowPrioritySectionOpen(true);
     setIsMobileSidebarOpen(false);
   }
 
@@ -1194,7 +1217,7 @@ function TodoScreen({
       .filter(
         (item) =>
           item.isPinned === draggedItem.isPinned &&
-          item.isLongTerm === draggedItem.isLongTerm,
+          sectionForOccurrence(item) === sectionForOccurrence(draggedItem),
       )
       .map((item) => item.id)
       .filter((id) => id !== draggedId);
@@ -1205,7 +1228,7 @@ function TodoScreen({
     return ids[index + 1] ?? null;
   }
 
-  function sectionLongTermTargetFromPointer(
+  function sectionTargetFromPointer(
     date: string,
     clientX: number,
     clientY: number,
@@ -1221,7 +1244,7 @@ function TodoScreen({
         clientY >= rect.top &&
         clientY <= rect.bottom
       ) {
-        return section.dataset.taskSection === "long-term";
+        return taskSectionFromDataset(section.dataset.taskSection);
       }
     }
 
@@ -1230,14 +1253,13 @@ function TodoScreen({
 
   function targetFromPointer(current: DragState, clientX: number, clientY: number) {
     const element = document.elementFromPoint(clientX, clientY);
-    const targetLongTerm =
-      sectionLongTermTargetFromPointer(current.date, clientX, clientY) ??
-      current.targetLongTerm;
+    const targetSection =
+      sectionTargetFromPointer(current.date, clientX, clientY) ?? current.targetSection;
     const hoveredCard = element?.closest<HTMLElement>('[data-task-sortable="true"]');
     if (hoveredCard?.dataset.taskDate === current.date) {
       const hoveredId = hoveredCard.dataset.taskId;
       if (!hoveredId || hoveredId === current.id) {
-        return { targetId: current.targetId, targetLongTerm };
+        return { targetId: current.targetId, targetSection };
       }
       const items = orderedDayItems(daysByDate.get(current.date) ?? emptyDay(current.date));
       const draggedItem = items.find((item) => item.id === current.id);
@@ -1246,9 +1268,9 @@ function TodoScreen({
         !draggedItem ||
         !hoveredItem ||
         draggedItem.isPinned !== hoveredItem.isPinned ||
-        draggedItem.isLongTerm !== hoveredItem.isLongTerm
+        sectionForOccurrence(draggedItem) !== sectionForOccurrence(hoveredItem)
       ) {
-        return { targetId: current.targetId, targetLongTerm };
+        return { targetId: current.targetId, targetSection };
       }
       const rect = hoveredCard.getBoundingClientRect();
       const shouldInsertAfter = clientY > rect.top + rect.height / 2;
@@ -1256,16 +1278,16 @@ function TodoScreen({
         targetId: shouldInsertAfter
           ? nextTargetIdAfter(current.date, hoveredId, current.id)
           : hoveredId,
-        targetLongTerm,
+        targetSection,
       };
     }
 
     const hoveredList = element?.closest<HTMLElement>("[data-day-date]");
     if (hoveredList?.dataset.dayDate === current.date) {
-      return { targetId: null, targetLongTerm };
+      return { targetId: null, targetSection };
     }
 
-    return { targetId: current.targetId, targetLongTerm };
+    return { targetId: current.targetId, targetSection };
   }
 
   function startTaskDrag(
@@ -1288,7 +1310,7 @@ function TodoScreen({
       startX: event.clientX,
       startY: event.clientY,
       targetId: id,
-      targetLongTerm: draggedItem?.isLongTerm ?? null,
+      targetSection: draggedItem ? sectionForOccurrence(draggedItem) : null,
       width: rect.width,
       x: event.clientX,
       y: event.clientY,
@@ -1336,21 +1358,24 @@ function TodoScreen({
     scrollViewportDuringDrag(event.clientY);
 
     const target = targetFromPointer(dragState, event.clientX, event.clientY);
-    if (target.targetLongTerm === true && !isLongTermSectionOpen) {
+    if (target.targetSection === "long-term" && !isLongTermSectionOpen) {
       setIsLongTermSectionOpen(true);
+    }
+    if (target.targetSection === "low-priority" && !isLowPrioritySectionOpen) {
+      setIsLowPrioritySectionOpen(true);
     }
     const nextState = {
       ...dragState,
       active: true,
       targetId: target.targetId,
-      targetLongTerm: target.targetLongTerm,
+      targetSection: target.targetSection,
       x: event.clientX,
       y: event.clientY,
     };
 
     if (
       target.targetId !== dragState.targetId ||
-      target.targetLongTerm !== dragState.targetLongTerm
+      target.targetSection !== dragState.targetSection
     ) {
       setDragStateWithReorderAnimation(nextState);
       return;
@@ -1378,12 +1403,13 @@ function TodoScreen({
       const draggedItem = currentItems.find((item) => item.id === dragState.id);
       if (
         draggedItem &&
-        dragState.targetLongTerm !== null &&
-        dragState.targetLongTerm !== draggedItem.isLongTerm
+        dragState.targetSection !== null &&
+        dragState.targetSection !== sectionForOccurrence(draggedItem)
       ) {
         updateMutation.mutate({
           id: dragState.id,
-          isLongTerm: dragState.targetLongTerm,
+          isLongTerm: dragState.targetSection === "long-term",
+          isLowPriority: dragState.targetSection === "low-priority",
         });
         setDragState(null);
         return;
@@ -1567,6 +1593,21 @@ function TodoScreen({
             <small className="nav-meta">{todayLongTermCount} 项</small>
           </button>
           <button
+            className={
+              isMyDay && isLowPrioritySectionOpen
+                ? "active sidebar-subtag"
+                : "sidebar-subtag"
+            }
+            type="button"
+            onClick={openLowPriorityTasks}
+          >
+            <span className="nav-icon">
+              <TagIcon />
+            </span>
+            <span className="nav-label">低优先级</span>
+            <small className="nav-meta">{todayLowPriorityCount} 项</small>
+          </button>
+          <button
             className={viewMode === "analytics" ? "active" : ""}
             type="button"
             onClick={() => changeViewMode("analytics")}
@@ -1699,6 +1740,7 @@ function TodoScreen({
                   isToday={date === today}
                   hideHeading
                   isLongTermSectionOpen={isLongTermSectionOpen}
+                  isLowPrioritySectionOpen={isLowPrioritySectionOpen}
                   key={date}
                   onCopyAsRegular={(id) => copyLongTermMutation.mutate(id)}
                   onDelete={requestDeleteTask}
@@ -1712,6 +1754,9 @@ function TodoScreen({
                   onStartDrag={startTaskDrag}
                   onToggleLongTermSection={() =>
                     setIsLongTermSectionOpen((value) => !value)
+                  }
+                  onToggleLowPrioritySection={() =>
+                    setIsLowPrioritySectionOpen((value) => !value)
                   }
                 />
               ))}
@@ -2287,7 +2332,9 @@ function CalendarTaskChip({
     <div
       className={`calendar-task-chip is-${variant} ${done ? "is-done" : ""} ${
         dragged ? "is-dragging" : ""
-      } ${item.isPinned ? "is-pinned" : ""}`}
+      } ${item.isPinned ? "is-pinned" : ""} ${
+        item.isLowPriority && !item.isLongTerm ? "is-low-priority" : ""
+      }`}
       data-task-date={date}
       data-task-id={item.id}
       data-task-sortable="true"
@@ -2349,6 +2396,7 @@ function DayColumn({
   dragState,
   hideHeading,
   isLongTermSectionOpen = false,
+  isLowPrioritySectionOpen = false,
   isSelected,
   isToday,
   onCancelDrag,
@@ -2362,6 +2410,7 @@ function DayColumn({
   onSelectDate,
   onStartDrag,
   onToggleLongTermSection,
+  onToggleLowPrioritySection,
 }: {
   completionOverrides: Record<string, CompletionOverride>;
   copyingTaskId?: string | null;
@@ -2370,6 +2419,7 @@ function DayColumn({
   dragState: DragState | null;
   hideHeading: boolean;
   isLongTermSectionOpen?: boolean;
+  isLowPrioritySectionOpen?: boolean;
   isSelected: boolean;
   isToday: boolean;
   onCancelDrag: () => void;
@@ -2387,15 +2437,21 @@ function DayColumn({
     event: ReactPointerEvent<HTMLElement>,
   ) => void;
   onToggleLongTermSection?: () => void;
+  onToggleLowPrioritySection?: () => void;
 }) {
   const items = previewDayItems(orderedDayItems(day), dragState, date);
   const longTermItems = items.filter((item) => item.isLongTerm);
-  const regularItems = items.filter((item) => !item.isLongTerm);
+  const lowPriorityItems = items.filter((item) => !item.isLongTerm && item.isLowPriority);
+  const regularItems = items.filter((item) => !item.isLongTerm && !item.isLowPriority);
   const isReordering = dragState?.active && dragState.date === date;
   const isLongTermDropTarget =
-    dragState?.active && dragState.date === date && dragState.targetLongTerm === true;
+    dragState?.active && dragState.date === date && dragState.targetSection === "long-term";
   const isRegularDropTarget =
-    dragState?.active && dragState.date === date && dragState.targetLongTerm === false;
+    dragState?.active && dragState.date === date && dragState.targetSection === "regular";
+  const isLowPriorityDropTarget =
+    dragState?.active &&
+    dragState.date === date &&
+    dragState.targetSection === "low-priority";
 
   return (
     <article className={`day-column surface-panel ${isSelected ? "is-selected" : ""}`}>
@@ -2425,7 +2481,7 @@ function DayColumn({
         >
           <span>
             <strong>长期任务</strong>
-            <small>{longTermItems.length} 项 · 默认收起</small>
+            {isLongTermSectionOpen ? <small>{longTermItems.length} 项</small> : null}
           </span>
           <ChevronDownIcon expanded={isLongTermSectionOpen} />
         </button>
@@ -2487,6 +2543,56 @@ function DayColumn({
           />
         ))}
       </ul>
+
+      <section
+        className={[
+          "low-priority-task-section",
+          isLowPrioritySectionOpen ? "is-open" : "",
+          isLowPriorityDropTarget ? "is-drop-target" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        data-day-date={date}
+        data-task-section="low-priority"
+      >
+        <button
+          className="long-term-section-header"
+          type="button"
+          onClick={onToggleLowPrioritySection}
+        >
+          <span>
+            <strong>低优先级任务</strong>
+            {isLowPrioritySectionOpen ? <small>{lowPriorityItems.length} 项</small> : null}
+          </span>
+          <ChevronDownIcon expanded={isLowPrioritySectionOpen} />
+        </button>
+        {isLowPrioritySectionOpen ? (
+          <ul className={`todo-list low-priority-list ${isReordering ? "is-reordering" : ""}`}>
+            {lowPriorityItems.length === 0 ? (
+              <li className="empty-state is-visible">把任务拖到这里，就会变成低优先级任务</li>
+            ) : null}
+            {lowPriorityItems.map((item) => (
+              <TodoCard
+                copying={false}
+                date={date}
+                done={completionOverrides[item.id]?.done ?? item.status === "done"}
+                dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                item={item}
+                key={item.id}
+                onCancelDrag={onCancelDrag}
+                onCopyAsRegular={onCopyAsRegular}
+                onDelete={onDelete}
+                onDone={onDone}
+                onPin={onPin}
+                onEndDrag={onEndDrag}
+                onMoveDrag={onMoveDrag}
+                onOpen={() => onOpenTask(item.id)}
+                onStartDrag={(event) => onStartDrag(date, item.id, event)}
+              />
+            ))}
+          </ul>
+        ) : null}
+      </section>
     </article>
   );
 }
@@ -2548,7 +2654,9 @@ function TodoCard({
     <li
       className={`todo-item task-card ${done ? "is-done" : ""} ${
         dragged ? "is-dragging" : ""
-      } ${item.isPinned ? "is-pinned" : ""} ${item.isLongTerm ? "is-long-term" : ""}`}
+      } ${item.isPinned ? "is-pinned" : ""} ${item.isLongTerm ? "is-long-term" : ""} ${
+        item.isLowPriority && !item.isLongTerm ? "is-low-priority" : ""
+      }`}
       data-task-date={date}
       data-task-id={item.id}
       data-task-sortable="true"
@@ -2583,6 +2691,9 @@ function TodoCard({
       <div className="task-body">
         <p>{item.text}</p>
         {item.isLongTerm ? <small className="task-kicker">长期任务</small> : null}
+        {!item.isLongTerm && item.isLowPriority ? (
+          <small className="task-kicker">低优先级</small>
+        ) : null}
       </div>
       {item.isLongTerm ? (
         <button
@@ -3446,6 +3557,7 @@ function TaskDetailsModal({
     text: string;
     note: string;
     isLongTerm: boolean;
+    isLowPriority: boolean;
     reminderTime: string | null;
     repeat: RepeatRule;
   }) => Promise<void>;
@@ -3454,6 +3566,7 @@ function TaskDetailsModal({
   const [text, setText] = useState(item.text);
   const [note, setNote] = useState(item.note);
   const [isLongTerm, setIsLongTerm] = useState(item.isLongTerm);
+  const [isLowPriority, setIsLowPriority] = useState(item.isLowPriority);
   const [reminderTime, setReminderTime] = useState(item.reminderTime ?? "");
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(item.repeat.kind);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
@@ -3467,14 +3580,24 @@ function TaskDetailsModal({
     setText(item.text);
     setNote(item.note);
     setIsLongTerm(item.isLongTerm);
+    setIsLowPriority(item.isLowPriority && !item.isLongTerm);
     setReminderTime(item.reminderTime ?? "");
     setRepeatKind(item.isLongTerm ? "daily" : item.repeat.kind);
     setSaveMessage("");
     setUploadMessage("");
-  }, [item.id, item.isLongTerm, item.note, item.reminderTime, item.repeat.kind, item.text]);
+  }, [
+    item.id,
+    item.isLongTerm,
+    item.isLowPriority,
+    item.note,
+    item.reminderTime,
+    item.repeat.kind,
+    item.text,
+  ]);
 
   useEffect(() => {
     if (isLongTerm) {
+      setIsLowPriority(false);
       setRepeatKind("daily");
     }
   }, [isLongTerm]);
@@ -3535,6 +3658,7 @@ function TaskDetailsModal({
         text,
         note,
         isLongTerm,
+        isLowPriority: isLowPriority && !isLongTerm,
         reminderTime: reminderTime || null,
         repeat: repeatRuleForDate(repeatKind, item.taskDate),
       });
@@ -3628,7 +3752,37 @@ function TaskDetailsModal({
               className={`toggle-switch ${isLongTerm ? "is-on" : ""}`}
               type="button"
               aria-pressed={isLongTerm}
-              onClick={() => setIsLongTerm((value) => !value)}
+              onClick={() => {
+                setIsLongTerm((value) => {
+                  const next = !value;
+                  if (next) {
+                    setIsLowPriority(false);
+                  }
+                  return next;
+                });
+              }}
+            >
+              <span />
+            </button>
+          </div>
+          <div className="toggle-field low-priority-toggle-field">
+            <span>
+              <strong>低优先级任务</strong>
+              <small>收进底部折叠栏，适合不紧急但想保留的任务</small>
+            </span>
+            <button
+              className={`toggle-switch low-priority-toggle ${isLowPriority ? "is-on" : ""}`}
+              type="button"
+              aria-pressed={isLowPriority}
+              onClick={() => {
+                setIsLowPriority((value) => {
+                  const next = !value;
+                  if (next) {
+                    setIsLongTerm(false);
+                  }
+                  return next;
+                });
+              }}
             >
               <span />
             </button>
@@ -4189,6 +4343,23 @@ function orderedDayItems(day: DayTodos) {
   return [...day.pending, ...day.done].sort(compareOccurrences);
 }
 
+function sectionForOccurrence(item: TodoOccurrence): TaskSection {
+  if (item.isLongTerm) {
+    return "long-term";
+  }
+  if (item.isLowPriority) {
+    return "low-priority";
+  }
+  return "regular";
+}
+
+function taskSectionFromDataset(value: string | undefined): TaskSection | null {
+  if (value === "long-term" || value === "regular" || value === "low-priority") {
+    return value;
+  }
+  return null;
+}
+
 function buildCalendarTaskBuckets(items: TodoOccurrence[]): CalendarTaskBuckets {
   const allDay: TodoOccurrence[] = [];
   const byMinute = new Map<number, TodoOccurrence[]>();
@@ -4377,6 +4548,7 @@ function applyOptimisticOccurrenceUpdate(
       if ("isLongTerm" in payload && payload.isLongTerm !== undefined) {
         nextItem.isLongTerm = payload.isLongTerm;
         if (payload.isLongTerm) {
+          nextItem.isLowPriority = false;
           nextItem.repeat = {
             kind: "daily",
             interval: 1,
@@ -4384,6 +4556,12 @@ function applyOptimisticOccurrenceUpdate(
             until: null,
           };
           nextItem.isRecurring = true;
+        }
+      }
+      if ("isLowPriority" in payload && payload.isLowPriority !== undefined) {
+        nextItem.isLowPriority = payload.isLowPriority;
+        if (payload.isLowPriority) {
+          nextItem.isLongTerm = false;
         }
       }
       if ("reminderTime" in payload) {
@@ -4661,7 +4839,7 @@ function reorderOccurrenceItems(
   const group = items.filter(
     (item) =>
       item.isPinned === draggedItem.isPinned &&
-      item.isLongTerm === draggedItem.isLongTerm,
+      sectionForOccurrence(item) === sectionForOccurrence(draggedItem),
   );
   const groupById = new Map(group.map((item) => [item.id, item]));
   const orderedGroup = reorderIds(
@@ -4676,7 +4854,7 @@ function reorderOccurrenceItems(
   return items.map((item) => {
     if (
       item.isPinned === draggedItem.isPinned &&
-      item.isLongTerm === draggedItem.isLongTerm
+      sectionForOccurrence(item) === sectionForOccurrence(draggedItem)
     ) {
       return nextGroup.shift() ?? item;
     }
