@@ -12,6 +12,12 @@
   --accent: #2c5745;
   --accent-dark: #214635;
   --accent-soft: #e8f0eb;
+  --pin-ink: #3f5a4a;
+  --pin-line: rgba(63, 90, 74, 0.56);
+  --pin-line-strong: rgba(63, 90, 74, 0.68);
+  --pin-soft: #eef3ee;
+  --pin-wash: rgba(238, 243, 238, 0.94);
+  --pin-shadow: rgba(43, 66, 53, 0.12);
   --lux-line: #d8ceb5;
   --danger: #b42318;
   --shadow: 0 18px 44px rgba(22, 27, 24, 0.09);
@@ -1056,11 +1062,11 @@ h2 {
 }
 
 .calendar-task-chip.is-pinned:hover {
-  border-color: rgba(172, 116, 28, 0.7);
+  border-color: var(--pin-line-strong);
   box-shadow:
-    inset 0 3px 0 rgba(172, 116, 28, 0.72),
-    0 0 0 1px rgba(172, 116, 28, 0.12) inset,
-    0 12px 26px rgba(128, 83, 18, 0.14);
+    inset 0 3px 0 var(--pin-line-strong),
+    0 0 0 1px rgba(63, 90, 74, 0.1) inset,
+    0 12px 26px var(--pin-shadow);
 }
 
 .calendar-task-chip.is-all-day,
@@ -1090,14 +1096,14 @@ h2 {
 }
 
 .calendar-task-chip.is-pinned {
-  border-color: rgba(172, 116, 28, 0.7);
+  border-color: var(--pin-line-strong);
   background:
-    linear-gradient(180deg, rgba(255, 250, 239, 0.98), rgba(255, 255, 255, 0.92)),
+    linear-gradient(180deg, rgba(248, 251, 248, 0.99), var(--pin-wash)),
     var(--card);
   box-shadow:
-    inset 0 3px 0 rgba(172, 116, 28, 0.72),
-    0 0 0 1px rgba(172, 116, 28, 0.12) inset,
-    0 12px 26px rgba(128, 83, 18, 0.14);
+    inset 0 3px 0 var(--pin-line-strong),
+    0 0 0 1px rgba(63, 90, 74, 0.1) inset,
+    0 12px 26px var(--pin-shadow);
 }
 
 .calendar-task-chip.is-low-priority {
@@ -1865,14 +1871,14 @@ h2 {
 }
 
 .todo-item.is-pinned {
-  border-color: rgba(172, 116, 28, 0.76);
+  border-color: var(--pin-line-strong);
   background:
-    linear-gradient(180deg, rgba(255, 250, 239, 0.98), rgba(255, 255, 255, 0.97)),
+    linear-gradient(180deg, rgba(249, 252, 249, 0.99), rgba(242, 247, 242, 0.96)),
     var(--card);
   box-shadow:
-    inset 0 4px 0 rgba(172, 116, 28, 0.78),
-    0 0 0 1px rgba(172, 116, 28, 0.14) inset,
-    0 17px 36px rgba(128, 83, 18, 0.16);
+    inset 0 4px 0 var(--pin-line-strong),
+    0 0 0 1px rgba(63, 90, 74, 0.12) inset,
+    0 17px 36px var(--pin-shadow);
 }
 
 .todo-item.is-long-term {
@@ -1886,12 +1892,12 @@ h2 {
 }
 
 .todo-item.is-long-term.is-pinned {
-  border-color: rgba(172, 116, 28, 0.78);
+  border-color: var(--pin-line-strong);
   box-shadow:
-    inset 4px 0 0 rgba(151, 117, 47, 0.72),
-    inset 0 4px 0 rgba(172, 116, 28, 0.8),
-    0 0 0 1px rgba(172, 116, 28, 0.14) inset,
-    0 17px 36px rgba(128, 83, 18, 0.17);
+    inset 4px 0 0 rgba(151, 117, 47, 0.58),
+    inset 0 4px 0 var(--pin-line-strong),
+    0 0 0 1px rgba(63, 90, 74, 0.12) inset,
+    0 17px 36px var(--pin-shadow);
 }
 
 .todo-item.is-low-priority {
@@ -1905,20 +1911,20 @@ h2 {
 }
 
 .todo-item.is-low-priority.is-pinned {
-  border-color: rgba(172, 116, 28, 0.72);
+  border-color: var(--pin-line);
   box-shadow:
-    inset 4px 0 0 rgba(92, 111, 119, 0.68),
-    inset 0 4px 0 rgba(172, 116, 28, 0.76),
-    0 0 0 1px rgba(172, 116, 28, 0.13) inset,
-    0 17px 36px rgba(128, 83, 18, 0.15);
+    inset 4px 0 0 rgba(92, 111, 119, 0.5),
+    inset 0 4px 0 var(--pin-line),
+    0 0 0 1px rgba(63, 90, 74, 0.11) inset,
+    0 17px 36px rgba(43, 66, 53, 0.1);
 }
 
 .pin-task-button.is-pinned {
-  border-color: rgba(172, 116, 28, 0.38);
+  border-color: rgba(63, 90, 74, 0.34);
   background:
-    linear-gradient(180deg, rgba(255, 246, 224, 0.98), rgba(248, 238, 212, 0.92));
-  color: #8a5a12;
-  box-shadow: 0 8px 18px rgba(128, 83, 18, 0.12);
+    linear-gradient(180deg, rgba(246, 250, 246, 0.98), rgba(235, 242, 236, 0.92));
+  color: var(--pin-ink);
+  box-shadow: 0 8px 18px rgba(43, 66, 53, 0.1);
 }
 
 .copy-task-button {
@@ -1943,29 +1949,29 @@ h2 {
 }
 
 .todo-item.is-pinned:hover {
-  border-color: rgba(172, 116, 28, 0.76);
+  border-color: var(--pin-line-strong);
   box-shadow:
-    inset 0 4px 0 rgba(172, 116, 28, 0.78),
-    0 0 0 1px rgba(172, 116, 28, 0.14) inset,
-    0 17px 36px rgba(128, 83, 18, 0.16);
+    inset 0 4px 0 var(--pin-line-strong),
+    0 0 0 1px rgba(63, 90, 74, 0.12) inset,
+    0 17px 36px var(--pin-shadow);
 }
 
 .todo-item.is-long-term.is-pinned:hover {
-  border-color: rgba(172, 116, 28, 0.78);
+  border-color: var(--pin-line-strong);
   box-shadow:
-    inset 4px 0 0 rgba(151, 117, 47, 0.72),
-    inset 0 4px 0 rgba(172, 116, 28, 0.8),
-    0 0 0 1px rgba(172, 116, 28, 0.14) inset,
-    0 17px 36px rgba(128, 83, 18, 0.17);
+    inset 4px 0 0 rgba(151, 117, 47, 0.58),
+    inset 0 4px 0 var(--pin-line-strong),
+    0 0 0 1px rgba(63, 90, 74, 0.12) inset,
+    0 17px 36px var(--pin-shadow);
 }
 
 .todo-item.is-low-priority.is-pinned:hover {
-  border-color: rgba(172, 116, 28, 0.72);
+  border-color: var(--pin-line);
   box-shadow:
-    inset 4px 0 0 rgba(92, 111, 119, 0.68),
-    inset 0 4px 0 rgba(172, 116, 28, 0.76),
-    0 0 0 1px rgba(172, 116, 28, 0.13) inset,
-    0 17px 36px rgba(128, 83, 18, 0.15);
+    inset 4px 0 0 rgba(92, 111, 119, 0.5),
+    inset 0 4px 0 var(--pin-line),
+    0 0 0 1px rgba(63, 90, 74, 0.11) inset,
+    0 17px 36px rgba(43, 66, 53, 0.1);
 }
 
 .todo-item.is-dragging {
@@ -2132,20 +2138,20 @@ h2 {
   align-items: center;
   gap: 4px;
   justify-self: start;
-  border: 1px solid rgba(172, 116, 28, 0.24);
+  border: 1px solid rgba(63, 90, 74, 0.22);
   border-radius: 999px;
   background:
-    linear-gradient(180deg, rgba(255, 246, 224, 0.98), rgba(250, 239, 211, 0.92));
-  color: #8a5a12;
+    linear-gradient(180deg, rgba(246, 250, 246, 0.98), rgba(235, 242, 236, 0.92));
+  color: var(--pin-ink);
   padding: 2px 7px 2px 6px;
-  box-shadow: 0 5px 12px rgba(128, 83, 18, 0.09);
+  box-shadow: 0 5px 12px rgba(43, 66, 53, 0.08);
 }
 
 .todo-item .pinned-kicker .mini-icon {
   width: 12px;
   height: 12px;
   color: currentColor;
-  fill: rgba(172, 116, 28, 0.18);
+  fill: rgba(63, 90, 74, 0.16);
   stroke-width: 2.5;
 }
 
