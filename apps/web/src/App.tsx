@@ -782,7 +782,6 @@ function TodoScreen({
         applyServerOccurrenceUpdate(data, updated),
       );
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
   const uploadAttachmentMutation = useMutation<
@@ -796,7 +795,6 @@ function TodoScreen({
       queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
         applyAttachmentAdd(data, payload.occurrenceId, attachment),
       );
-      queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
 
@@ -4065,6 +4063,8 @@ function TaskAttachmentGallery({
   );
 }
 
+const attachmentObjectUrlCache = new Map<string, string>();
+
 function TaskAttachmentThumb({
   accessToken,
   attachment,
@@ -4089,16 +4089,24 @@ function TaskAttachmentThumb({
 
   useEffect(() => {
     let cancelled = false;
-    let nextObjectUrl = "";
+    const cachedObjectUrl = attachmentObjectUrlCache.get(attachment.contentUrl);
 
     setLoadError(false);
+    if (cachedObjectUrl) {
+      setObjectUrl(cachedObjectUrl);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setObjectUrl(null);
     getTaskAttachmentBlob(attachment.contentUrl, accessToken)
       .then((blob) => {
         if (cancelled) {
           return;
         }
-        nextObjectUrl = URL.createObjectURL(blob);
+        const nextObjectUrl = URL.createObjectURL(blob);
+        attachmentObjectUrlCache.set(attachment.contentUrl, nextObjectUrl);
         setObjectUrl(nextObjectUrl);
       })
       .catch(() => {
@@ -4109,9 +4117,6 @@ function TaskAttachmentThumb({
 
     return () => {
       cancelled = true;
-      if (nextObjectUrl) {
-        URL.revokeObjectURL(nextObjectUrl);
-      }
     };
   }, [accessToken, attachment.contentUrl]);
 

@@ -1055,6 +1055,14 @@ h2 {
   transform: translateY(-1px);
 }
 
+.calendar-task-chip.is-pinned:hover {
+  border-color: rgba(172, 116, 28, 0.7);
+  box-shadow:
+    inset 0 3px 0 rgba(172, 116, 28, 0.72),
+    0 0 0 1px rgba(172, 116, 28, 0.12) inset,
+    0 12px 26px rgba(128, 83, 18, 0.14);
+}
+
 .calendar-task-chip.is-all-day,
 .calendar-task-chip.is-month {
   min-height: 30px;
@@ -1932,6 +1940,32 @@ h2 {
   border-color: var(--line-strong);
   box-shadow: 0 14px 30px rgba(22, 27, 24, 0.105);
   transform: translateY(-1px);
+}
+
+.todo-item.is-pinned:hover {
+  border-color: rgba(172, 116, 28, 0.76);
+  box-shadow:
+    inset 0 4px 0 rgba(172, 116, 28, 0.78),
+    0 0 0 1px rgba(172, 116, 28, 0.14) inset,
+    0 17px 36px rgba(128, 83, 18, 0.16);
+}
+
+.todo-item.is-long-term.is-pinned:hover {
+  border-color: rgba(172, 116, 28, 0.78);
+  box-shadow:
+    inset 4px 0 0 rgba(151, 117, 47, 0.72),
+    inset 0 4px 0 rgba(172, 116, 28, 0.8),
+    0 0 0 1px rgba(172, 116, 28, 0.14) inset,
+    0 17px 36px rgba(128, 83, 18, 0.17);
+}
+
+.todo-item.is-low-priority.is-pinned:hover {
+  border-color: rgba(172, 116, 28, 0.72);
+  box-shadow:
+    inset 4px 0 0 rgba(92, 111, 119, 0.68),
+    inset 0 4px 0 rgba(172, 116, 28, 0.76),
+    0 0 0 1px rgba(172, 116, 28, 0.13) inset,
+    0 17px 36px rgba(128, 83, 18, 0.15);
 }
 
 .todo-item.is-dragging {
