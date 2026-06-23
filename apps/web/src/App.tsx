@@ -23,6 +23,7 @@ import {
   AUTH_TOKENS_UPDATED_EVENT,
   bindGoogleAccount,
   chatWithAi,
+  clearTrash,
   copyLongTermOccurrenceAsRegular,
   createTask,
   deleteTaskAttachment,
@@ -646,6 +647,8 @@ function TodoScreen({
   const isSidebarExpanded =
     isSidebarPinned || isSidebarHovered || isMobileSidebarOpen;
   const isSidebarCollapsed = !isSidebarExpanded;
+  const accountDisplayName = meQuery.data?.displayName ?? meQuery.data?.username ?? "账户";
+  const accountInitial = accountDisplayName.trim().charAt(0).toUpperCase() || "D";
 
   useEffect(() => {
     if (!dragState?.active) {
@@ -1006,6 +1009,24 @@ function TodoScreen({
       setTaskActionMessage({
         tone: "error",
         message: error.message || "恢复失败，请稍后再试。",
+      });
+    },
+  });
+
+  const clearTrashMutation = useMutation<void, Error>({
+    mutationFn: () => clearTrash(accessToken),
+    onSuccess: () => {
+      setTaskActionMessage({
+        tone: "success",
+        message: "回收站已清空。",
+      });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
+      queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+    onError: (error) => {
+      setTaskActionMessage({
+        tone: "error",
+        message: error.message || "清空回收站失败，请稍后再试。",
       });
     },
   });
@@ -1645,10 +1666,9 @@ function TodoScreen({
               type="button"
               aria-expanded={isAccountMenuOpen}
             >
-              <span className="brand-mark">D</span>
+              <span className="brand-mark">{accountInitial}</span>
               <span className="sidebar-label account-copy">
-                <span className="eyebrow">Daily Todo Sync</span>
-                <strong>{meQuery.data?.displayName ?? meQuery.data?.username ?? "账户"}</strong>
+                <strong>{accountDisplayName}</strong>
               </span>
               <ChevronDownIcon expanded={isAccountMenuOpen} />
             </button>
@@ -1783,8 +1803,8 @@ function TodoScreen({
             <MenuIcon />
           </button>
           <div>
-            <strong>Daily Todo Sync</strong>
-            <small>{meQuery.data?.displayName ?? meQuery.data?.username ?? "账户"}</small>
+            <strong>{accountDisplayName}</strong>
+            <small>Daily Todo Sync</small>
           </div>
         </div>
 
@@ -1807,7 +1827,7 @@ function TodoScreen({
             </p>
           </div>
 
-        {!isAnalytics ? (
+        {!isAnalytics && !isMyDay ? (
             <nav className="date-controls">
               <button type="button" onClick={() => shiftDate(-1)}>
                 &lt;
@@ -1864,7 +1884,6 @@ function TodoScreen({
                   isSelected={date === selectedDate}
                   isToday={date === today}
                   hideHeading
-                  hideSpecialSections
                   isLongTermSectionOpen={isLongTermSectionOpen}
                   isLowPrioritySectionOpen={isLowPrioritySectionOpen}
                   key={date}
@@ -2000,10 +2019,12 @@ function TodoScreen({
             toggleGoogleCalendarSyncMutation.error ??
             syncGoogleCalendarMutation.error ??
             trashQuery.error ??
-            restoreMutation.error
+            restoreMutation.error ??
+            clearTrashMutation.error
           }
           trashItems={trashQuery.data ?? []}
           isTrashLoading={trashQuery.isLoading}
+          isClearingTrash={clearTrashMutation.isPending}
           restoringTrashId={
             restoreMutation.isPending ? restoreMutation.variables ?? null : null
           }
@@ -2013,6 +2034,7 @@ function TodoScreen({
           onBindGoogle={() => bindGoogleAccountMutation.mutate()}
           onDisconnect={() => disconnectGoogleAccountMutation.mutate(undefined)}
           onDisconnectAccount={(id) => disconnectGoogleAccountMutation.mutate(id)}
+          onClearTrash={() => clearTrashMutation.mutate()}
           onRestoreTrash={restoreDeletedTask}
           onSaveProfile={(displayName) => updateProfileMutation.mutate(displayName)}
           onChangeSyncDays={setGoogleCalendarSyncDays}
@@ -3236,6 +3258,7 @@ function SettingsModal({
   error,
   isAuthorizingCalendar,
   isBindingGoogle,
+  isClearingTrash,
   isDisconnecting,
   isLoading,
   isSyncing,
@@ -3248,6 +3271,7 @@ function SettingsModal({
   onBindGoogle,
   onChangeSyncDays,
   onClose,
+  onClearTrash,
   onDisconnect,
   onDisconnectAccount,
   onRestoreTrash,
@@ -3265,6 +3289,7 @@ function SettingsModal({
   error: Error | null;
   isAuthorizingCalendar: boolean;
   isBindingGoogle: boolean;
+  isClearingTrash: boolean;
   isDisconnecting: boolean;
   isLoading: boolean;
   isSyncing: boolean;
@@ -3277,6 +3302,7 @@ function SettingsModal({
   onBindGoogle: () => void;
   onChangeSyncDays: (days: GoogleCalendarSyncDays) => void;
   onClose: () => void;
+  onClearTrash: () => void;
   onDisconnect: () => void;
   onDisconnectAccount: (connectionId: string) => void;
   onRestoreTrash: (id: string) => void;
@@ -3409,6 +3435,16 @@ function SettingsModal({
           ) : null}
 
           <div className="settings-actions">
+            {isGoogleBound ? (
+              <button
+                className="primary-button"
+                type="button"
+                disabled={!isConfigured || isBindingGoogle}
+                onClick={onBindGoogle}
+              >
+                {isBindingGoogle ? "正在跳转..." : "绑定新的 Google 账户"}
+              </button>
+            ) : null}
             {!isGoogleBound ? (
               <button
                 className="primary-button"
@@ -3565,6 +3601,23 @@ function SettingsModal({
             </span>
           </div>
           <p className="muted">删除后的任务会先留在这里，可以恢复到原来的日期。</p>
+
+          {trashItems.length > 0 ? (
+            <div className="settings-actions">
+              <button
+                className="ghost-button danger-action"
+                type="button"
+                disabled={isClearingTrash || isTrashLoading}
+                onClick={() => {
+                  if (window.confirm("确定清空回收站吗？这一步不能撤销。")) {
+                    onClearTrash();
+                  }
+                }}
+              >
+                {isClearingTrash ? "清空中..." : "清空回收站"}
+              </button>
+            </div>
+          ) : null}
 
           {isTrashLoading ? (
             <div className="settings-busy" role="status" aria-live="polite">

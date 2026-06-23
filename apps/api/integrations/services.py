@@ -230,6 +230,11 @@ def authorize_google_calendar(user, token_body: dict, *, connection_id=None) -> 
     return connection
 
 
+def _is_retryable_google_error(message: str) -> bool:
+    normalized = message.lower()
+    return "rate limit" in normalized or "quota" in normalized or "temporarily" in normalized
+
+
 def google_calendar_status(user) -> dict:
     connections = list(
         GoogleCalendarConnection.objects.filter(user=user).order_by(
@@ -247,10 +252,17 @@ def google_calendar_status(user) -> dict:
         deleted_at__isnull=True,
         task__deleted_at__isnull=True,
     ).values("root_id")
-    failed_count = GoogleCalendarEventLink.objects.filter(
+    failed_queryset = GoogleCalendarEventLink.objects.filter(
         user=user,
         root_id__in=active_roots,
         status=GoogleCalendarEventLink.Status.ERROR,
+    )
+    failed_count = failed_queryset.exclude(
+        last_error__icontains="rate limit",
+    ).exclude(
+        last_error__icontains="quota",
+    ).exclude(
+        last_error__icontains="temporarily",
     ).count()
     synced_count = GoogleCalendarEventLink.objects.filter(
         user=user,
@@ -274,7 +286,13 @@ def google_calendar_status(user) -> dict:
         "calendarName": settings.GOOGLE_CALENDAR_NAME,
         "connectedAt": connection.connected_at.isoformat() if connection else None,
         "lastSyncAt": last_sync_at,
-        "lastError": connection.last_error if connection else "",
+        "lastError": (
+            ""
+            if connection and _is_retryable_google_error(connection.last_error)
+            else connection.last_error
+            if connection
+            else ""
+        ),
         "syncedCount": synced_count,
         "failedCount": failed_count,
         "accounts": [
@@ -294,7 +312,7 @@ def google_calendar_status(user) -> dict:
                 "calendarName": settings.GOOGLE_CALENDAR_NAME,
                 "connectedAt": item.connected_at.isoformat(),
                 "lastSyncAt": item.last_sync_at.isoformat() if item.last_sync_at else None,
-                "lastError": item.last_error,
+                "lastError": "" if _is_retryable_google_error(item.last_error) else item.last_error,
                 "isPrimary": item.is_primary,
             }
             for item in connections

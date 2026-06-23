@@ -18,6 +18,7 @@ from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
     clear_completed,
+    clear_trash,
     copy_long_term_occurrence_as_regular,
     create_task_for_day,
     delete_task_attachment,
@@ -362,6 +363,12 @@ def get_trash(request):
         serialize_deleted_occurrence(occurrence)
         for occurrence in list_deleted_occurrences(request.auth)
     ]
+
+
+@router.delete("/trash", response={204: None}, auth=bearer_auth)
+def clear_deleted_occurrences(request):
+    clear_trash(request.auth)
+    return 204, None
 
 
 @router.post(

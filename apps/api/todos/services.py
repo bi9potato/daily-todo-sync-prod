@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import UUID
 
 from django.db import IntegrityError, transaction
-from django.db.models import Max, Min
+from django.db.models import Count, Max, Min
 from django.http import Http404
 from django.utils import timezone
 
@@ -783,6 +783,30 @@ def list_deleted_occurrences(user, *, limit: int = 50) -> list[TodoOccurrence]:
         if len(deleted) >= limit:
             break
     return deleted
+
+
+@transaction.atomic
+def clear_trash(user) -> int:
+    deleted_roots = set(
+        TodoOccurrence.objects.filter(user=user, deleted_at__isnull=False).values_list(
+            "root_id", flat=True
+        )
+    )
+    if not deleted_roots:
+        return 0
+
+    deleted_count = TodoOccurrence.objects.filter(
+        user=user,
+        root_id__in=deleted_roots,
+        deleted_at__isnull=False,
+    ).delete()[0]
+    Task.objects.filter(
+        user=user,
+        root_id__in=deleted_roots,
+    ).annotate(active_occurrences=Count("occurrences")).filter(
+        active_occurrences=0
+    ).delete()
+    return deleted_count
 
 
 @transaction.atomic

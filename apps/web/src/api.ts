@@ -394,6 +394,16 @@ export function getTrash(accessToken: string) {
   return request<DeletedTodoOccurrence[]>("/trash", {}, accessToken);
 }
 
+export function clearTrash(accessToken: string) {
+  return request<void>(
+    "/trash",
+    {
+      method: "DELETE",
+    },
+    accessToken,
+  );
+}
+
 export function restoreOccurrence(id: string, accessToken: string) {
   return request<TodoOccurrence>(
     `/occurrences/${id}/restore`,
