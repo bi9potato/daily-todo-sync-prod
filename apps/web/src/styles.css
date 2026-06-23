@@ -559,6 +559,7 @@ h2 {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 10px;
   align-items: center;
+  min-height: 58px;
   padding: 12px;
 }
 
@@ -594,7 +595,8 @@ h2 {
 }
 
 .sidebar-nav button.sidebar-subtag {
-  margin-top: -5px;
+  margin-top: 0;
+  min-height: 52px;
   padding-left: 18px;
 }
 
@@ -705,6 +707,51 @@ h2 {
   gap: 16px;
   min-width: 0;
   transition: transform 0.28s var(--ease);
+}
+
+.ai-command-panel {
+  position: sticky;
+  bottom: 14px;
+  z-index: 12;
+  display: grid;
+  gap: 8px;
+  border-color: rgba(44, 87, 69, 0.16);
+  padding: 10px;
+}
+
+.ai-command-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-orb {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.ai-command-form input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--ink);
+  padding: 12px;
+}
+
+.ai-command-reply {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  padding: 0 4px 2px 44px;
 }
 
 .workspace-header {
@@ -2278,6 +2325,10 @@ h2 {
   gap: 12px;
 }
 
+.field-grid .task-type-toggle {
+  grid-column: 1 / -1;
+}
+
 .checkbox-field span {
   display: flex;
   align-items: center;
@@ -2329,8 +2380,15 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
   padding-top: 4px;
+}
+
+.modal-save-status {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .confirm-delete-body {
@@ -2390,6 +2448,62 @@ h2 {
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.58);
   padding: 14px;
+}
+
+.settings-input-row {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.settings-input-row input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--ink);
+  padding: 11px 12px;
+}
+
+.google-account-list {
+  display: grid;
+  gap: 10px;
+}
+
+.google-account-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.62);
+  padding: 10px;
+}
+
+.google-account-row div {
+  display: grid;
+  min-width: 0;
+}
+
+.google-account-row strong,
+.google-account-row small,
+.google-account-row em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.google-account-row small {
+  color: var(--muted);
+}
+
+.google-account-row em {
+  color: var(--danger);
+  font-size: 0.78rem;
+  font-style: normal;
 }
 
 .bound-account {
@@ -3096,6 +3210,37 @@ h2 {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .ai-command-form {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ai-command-form .primary-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .ai-command-reply {
+    padding-left: 0;
+  }
+
+  .google-account-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .google-account-row .ghost-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .toggle-field {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toggle-field .toggle-switch {
+    align-self: flex-start;
   }
 
   .calendar-grid.view-day {

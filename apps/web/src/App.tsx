@@ -22,6 +22,7 @@ import {
   ACCESS_TOKEN_KEY,
   AUTH_TOKENS_UPDATED_EVENT,
   bindGoogleAccount,
+  chatWithAi,
   copyLongTermOccurrenceAsRegular,
   createTask,
   deleteTaskAttachment,
@@ -42,17 +43,20 @@ import {
   setGoogleCalendarSyncEnabled,
   startGoogleAuth,
   syncGoogleCalendarForDays,
+  updateMe,
   updateOccurrence,
   uploadTaskAttachment,
   type DeletedTodoOccurrence,
   type DayTodos,
   type GoogleCalendarStatus,
   type GoogleCalendarSyncResult,
+  type GoogleCalendarAccount,
   type RangeTodos,
   type RepeatKind,
   type RepeatRule,
   type TaskAttachment,
   type TodoOccurrence,
+  type User,
 } from "./api";
 import {
   addDays,
@@ -69,7 +73,7 @@ import {
 
 type AuthMode = "login" | "register";
 type CalendarViewMode = "day" | "week" | "month";
-type ViewMode = CalendarViewMode | "analytics";
+type ViewMode = CalendarViewMode | "my-day" | "analytics";
 type TaskDraftSource = "typed" | "voice" | "ai";
 type TaskSection = "long-term" | "regular" | "low-priority";
 
@@ -523,7 +527,7 @@ function TodoScreen({
 }) {
   const today = useMemo(() => toDateKey(new Date()), []);
   const [selectedDate, setSelectedDate] = useState(today);
-  const [viewMode, setViewMode] = useState<ViewMode>("day");
+  const [viewMode, setViewMode] = useState<ViewMode>("my-day");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
@@ -638,7 +642,7 @@ function TodoScreen({
   const selectedTask = allTasks.find((item) => item.id === selectedTaskId) ?? null;
   const draggedTask =
     dragState?.active ? allTasks.find((item) => item.id === dragState.id) ?? null : null;
-  const isMyDay = viewMode === "day" && selectedDate === today;
+  const isMyDay = viewMode === "my-day";
   const isSidebarExpanded =
     isSidebarPinned || isSidebarHovered || isMobileSidebarOpen;
   const isSidebarCollapsed = !isSidebarExpanded;
@@ -1037,21 +1041,22 @@ function TodoScreen({
   });
 
   const authorizeGoogleCalendarMutation = useMutation({
-    mutationFn: () => authorizeGoogleCalendar(accessToken),
+    mutationFn: (connectionId?: string) => authorizeGoogleCalendar(accessToken, connectionId),
     onSuccess: (payload) => {
       window.location.href = payload.authorizationUrl;
     },
   });
 
   const disconnectGoogleAccountMutation = useMutation({
-    mutationFn: () => disconnectGoogleAccount(accessToken),
+    mutationFn: (connectionId?: string) => disconnectGoogleAccount(accessToken, connectionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
     },
   });
 
   const toggleGoogleCalendarSyncMutation = useMutation({
-    mutationFn: (enabled: boolean) => setGoogleCalendarSyncEnabled(enabled, accessToken),
+    mutationFn: (payload: { enabled: boolean; connectionId?: string }) =>
+      setGoogleCalendarSyncEnabled(payload.enabled, accessToken, payload.connectionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
     },
@@ -1062,6 +1067,21 @@ function TodoScreen({
       syncGoogleCalendarForDays(days, accessToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["google-calendar-status"] });
+    },
+  });
+
+  const updateProfileMutation = useMutation({
+    mutationFn: (displayName: string) => updateMe({ displayName }, accessToken),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["me"], updated);
+    },
+  });
+
+  const aiChatMutation = useMutation({
+    mutationFn: (message: string) =>
+      chatWithAi({ message, date: selectedDate }, accessToken),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
 
@@ -1112,7 +1132,7 @@ function TodoScreen({
 
   function openMyDay() {
     setSelectedDate(today);
-    setViewMode("day");
+    setViewMode("my-day");
     setIsLongTermSectionOpen(false);
     setIsLowPrioritySectionOpen(false);
     setIsMobileSidebarOpen(false);
@@ -1557,7 +1577,7 @@ function TodoScreen({
     if (viewMode === "analytics") {
       return "分析";
     }
-    if (viewMode === "day" && selectedDate === today) {
+    if (viewMode === "my-day") {
       return "我的一天";
     }
     if (viewMode === "day") {
@@ -1628,7 +1648,7 @@ function TodoScreen({
               <span className="brand-mark">D</span>
               <span className="sidebar-label account-copy">
                 <span className="eyebrow">Daily Todo Sync</span>
-                <strong>{meQuery.data?.username ?? "账户"}</strong>
+                <strong>{meQuery.data?.displayName ?? meQuery.data?.username ?? "账户"}</strong>
               </span>
               <ChevronDownIcon expanded={isAccountMenuOpen} />
             </button>
@@ -1672,7 +1692,7 @@ function TodoScreen({
 
         <nav className="sidebar-nav" aria-label="任务视图">
           <button
-            className={selectedDate === today && viewMode === "day" ? "active" : ""}
+            className={viewMode === "my-day" ? "active" : ""}
             type="button"
             onClick={openMyDay}
           >
@@ -1686,7 +1706,7 @@ function TodoScreen({
           </button>
           <button
             className={
-              isMyDay && isLongTermSectionOpen ? "active sidebar-subtag" : "sidebar-subtag"
+              viewMode === "day" && isLongTermSectionOpen ? "active sidebar-subtag" : "sidebar-subtag"
             }
             type="button"
             onClick={openLongTermTasks}
@@ -1699,7 +1719,7 @@ function TodoScreen({
           </button>
           <button
             className={
-              isMyDay && isLowPrioritySectionOpen
+              viewMode === "day" && isLowPrioritySectionOpen
                 ? "active sidebar-subtag"
                 : "sidebar-subtag"
             }
@@ -1764,7 +1784,7 @@ function TodoScreen({
           </button>
           <div>
             <strong>Daily Todo Sync</strong>
-            <small>{meQuery.data?.username ?? "账户"}</small>
+            <small>{meQuery.data?.displayName ?? meQuery.data?.username ?? "账户"}</small>
           </div>
         </div>
 
@@ -1787,7 +1807,7 @@ function TodoScreen({
             </p>
           </div>
 
-          {!isMyDay && !isAnalytics ? (
+        {!isAnalytics ? (
             <nav className="date-controls">
               <button type="button" onClick={() => shiftDate(-1)}>
                 &lt;
@@ -1844,6 +1864,7 @@ function TodoScreen({
                   isSelected={date === selectedDate}
                   isToday={date === today}
                   hideHeading
+                  hideSpecialSections
                   isLongTermSectionOpen={isLongTermSectionOpen}
                   isLowPrioritySectionOpen={isLowPrioritySectionOpen}
                   key={date}
@@ -1886,6 +1907,14 @@ function TodoScreen({
               onStartDrag={startTaskDrag}
             />
           )
+        ) : null}
+
+        {!isAnalytics ? (
+          <AiCommandBar
+            isThinking={aiChatMutation.isPending}
+            lastReply={aiChatMutation.data?.reply ?? ""}
+            onSubmit={(message) => aiChatMutation.mutate(message)}
+          />
         ) : null}
       </section>
 
@@ -1951,6 +1980,7 @@ function TodoScreen({
 
       {isSettingsOpen ? (
         <SettingsModal
+          currentUser={meQuery.data ?? null}
           notice={googleCalendarNotice}
           status={googleCalendarStatusQuery.data ?? null}
           syncResult={syncGoogleCalendarMutation.data ?? null}
@@ -1961,6 +1991,7 @@ function TodoScreen({
           isLoading={googleCalendarStatusQuery.isLoading}
           isSyncing={syncGoogleCalendarMutation.isPending}
           isTogglingSync={toggleGoogleCalendarSyncMutation.isPending}
+          isSavingProfile={updateProfileMutation.isPending}
           error={
             googleCalendarStatusQuery.error ??
             bindGoogleAccountMutation.error ??
@@ -1977,13 +2008,19 @@ function TodoScreen({
             restoreMutation.isPending ? restoreMutation.variables ?? null : null
           }
           onClose={closeSettingsPanel}
-          onAuthorizeCalendar={() => authorizeGoogleCalendarMutation.mutate()}
+          onAuthorizeCalendar={() => authorizeGoogleCalendarMutation.mutate(undefined)}
+          onAuthorizeCalendarAccount={(id) => authorizeGoogleCalendarMutation.mutate(id)}
           onBindGoogle={() => bindGoogleAccountMutation.mutate()}
-          onDisconnect={() => disconnectGoogleAccountMutation.mutate()}
+          onDisconnect={() => disconnectGoogleAccountMutation.mutate(undefined)}
+          onDisconnectAccount={(id) => disconnectGoogleAccountMutation.mutate(id)}
           onRestoreTrash={restoreDeletedTask}
+          onSaveProfile={(displayName) => updateProfileMutation.mutate(displayName)}
           onChangeSyncDays={setGoogleCalendarSyncDays}
           onSync={() => syncGoogleCalendarMutation.mutate(googleCalendarSyncDays)}
-          onToggleSync={(enabled) => toggleGoogleCalendarSyncMutation.mutate(enabled)}
+          onToggleSync={(enabled) => toggleGoogleCalendarSyncMutation.mutate({ enabled })}
+          onToggleAccountSync={(connectionId, enabled) =>
+            toggleGoogleCalendarSyncMutation.mutate({ connectionId, enabled })
+          }
         />
       ) : null}
 
@@ -2500,6 +2537,7 @@ function DayColumn({
   day,
   dragState,
   hideHeading,
+  hideSpecialSections = false,
   isLongTermSectionOpen = false,
   isLowPrioritySectionOpen = false,
   isSelected,
@@ -2523,6 +2561,7 @@ function DayColumn({
   day: DayTodos;
   dragState: DragState | null;
   hideHeading: boolean;
+  hideSpecialSections?: boolean;
   isLongTermSectionOpen?: boolean;
   isLowPrioritySectionOpen?: boolean;
   isSelected: boolean;
@@ -2545,8 +2584,10 @@ function DayColumn({
   onToggleLowPrioritySection?: () => void;
 }) {
   const items = previewDayItems(orderedDayItems(day), dragState, date);
-  const longTermItems = items.filter((item) => item.isLongTerm);
-  const lowPriorityItems = items.filter((item) => !item.isLongTerm && item.isLowPriority);
+  const longTermItems = hideSpecialSections ? [] : items.filter((item) => item.isLongTerm);
+  const lowPriorityItems = hideSpecialSections
+    ? []
+    : items.filter((item) => !item.isLongTerm && item.isLowPriority);
   const regularItems = items.filter((item) => !item.isLongTerm && !item.isLowPriority);
   const isReordering = dragState?.active && dragState.date === date;
   const isLongTermDropTarget =
@@ -2568,6 +2609,7 @@ function DayColumn({
         </button>
       ) : null}
 
+      {!hideSpecialSections ? (
       <section
         className={[
           "long-term-task-section",
@@ -2617,6 +2659,7 @@ function DayColumn({
           </ul>
         ) : null}
       </section>
+      ) : null}
 
       <ul
         className={`todo-list card-list ${isReordering ? "is-reordering" : ""} ${
@@ -2649,6 +2692,7 @@ function DayColumn({
         ))}
       </ul>
 
+      {!hideSpecialSections ? (
       <section
         className={[
           "low-priority-task-section",
@@ -2698,6 +2742,7 @@ function DayColumn({
           </ul>
         ) : null}
       </section>
+      ) : null}
     </article>
   );
 }
@@ -3187,6 +3232,7 @@ function QualityMeter({
 }
 
 function SettingsModal({
+  currentUser,
   error,
   isAuthorizingCalendar,
   isBindingGoogle,
@@ -3195,21 +3241,27 @@ function SettingsModal({
   isSyncing,
   isTrashLoading,
   isTogglingSync,
+  isSavingProfile,
   notice,
   onAuthorizeCalendar,
+  onAuthorizeCalendarAccount,
   onBindGoogle,
   onChangeSyncDays,
   onClose,
   onDisconnect,
+  onDisconnectAccount,
   onRestoreTrash,
+  onSaveProfile,
   onSync,
   onToggleSync,
+  onToggleAccountSync,
   restoringTrashId,
   status,
   syncDays,
   syncResult,
   trashItems,
 }: {
+  currentUser: User | null;
   error: Error | null;
   isAuthorizingCalendar: boolean;
   isBindingGoogle: boolean;
@@ -3218,21 +3270,27 @@ function SettingsModal({
   isSyncing: boolean;
   isTrashLoading: boolean;
   isTogglingSync: boolean;
+  isSavingProfile: boolean;
   notice: GoogleCalendarNotice | null;
   onAuthorizeCalendar: () => void;
+  onAuthorizeCalendarAccount: (connectionId: string) => void;
   onBindGoogle: () => void;
   onChangeSyncDays: (days: GoogleCalendarSyncDays) => void;
   onClose: () => void;
   onDisconnect: () => void;
+  onDisconnectAccount: (connectionId: string) => void;
   onRestoreTrash: (id: string) => void;
+  onSaveProfile: (displayName: string) => void;
   onSync: () => void;
   onToggleSync: (enabled: boolean) => void;
+  onToggleAccountSync: (connectionId: string, enabled: boolean) => void;
   restoringTrashId: string | null;
   status: GoogleCalendarStatus | null;
   syncDays: GoogleCalendarSyncDays;
   syncResult: GoogleCalendarSyncResult | null;
   trashItems: DeletedTodoOccurrence[];
 }) {
+  const [displayName, setDisplayName] = useState(currentUser?.displayName ?? "");
   const isGoogleBound = Boolean(status?.googleBound);
   const isCalendarAuthorized = Boolean(status?.calendarAuthorized);
   const isConfigured = Boolean(status?.configured);
@@ -3260,6 +3318,10 @@ function SettingsModal({
     onToggleSync(!syncEnabled);
   }
 
+  useEffect(() => {
+    setDisplayName(currentUser?.displayName ?? "");
+  }, [currentUser?.displayName]);
+
   return (
     <ModalShell title="Settings" onClose={onClose}>
       <div className="settings-body">
@@ -3274,6 +3336,34 @@ function SettingsModal({
             <span>{busyMessage}</span>
           </div>
         ) : null}
+
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="eyebrow">Profile</p>
+              <h3>修改昵称</h3>
+            </div>
+          </div>
+          <label className="settings-input-row">
+            昵称
+            <input
+              value={displayName}
+              maxLength={150}
+              placeholder={currentUser?.username ?? "账户昵称"}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!displayName.trim() || isSavingProfile}
+              onClick={() => onSaveProfile(displayName)}
+            >
+              {isSavingProfile ? "保存中..." : "保存昵称"}
+            </button>
+          </div>
+        </section>
 
         <section className="settings-card">
           <div className="settings-card-header">
@@ -3344,6 +3434,31 @@ function SettingsModal({
             )}
           </div>
         </section>
+
+        {status?.accounts?.length ? (
+          <section className="settings-card">
+            <div className="settings-card-header">
+              <div>
+                <p className="eyebrow">Google Accounts</p>
+                <h3>已绑定账户</h3>
+              </div>
+            </div>
+            <div className="google-account-list">
+              {status.accounts.map((account) => (
+                <GoogleAccountRow
+                  account={account}
+                  isAuthorizing={isAuthorizingCalendar}
+                  isDisconnecting={isDisconnecting}
+                  isToggling={isTogglingSync}
+                  key={account.id}
+                  onAuthorize={() => onAuthorizeCalendarAccount(account.id)}
+                  onDisconnect={() => onDisconnectAccount(account.id)}
+                  onToggleSync={(enabled) => onToggleAccountSync(account.id, enabled)}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="settings-card">
           <div className="settings-card-header">
@@ -3486,6 +3601,103 @@ function SettingsModal({
         </section>
       </div>
     </ModalShell>
+  );
+}
+
+function GoogleAccountRow({
+  account,
+  isAuthorizing,
+  isDisconnecting,
+  isToggling,
+  onAuthorize,
+  onDisconnect,
+  onToggleSync,
+}: {
+  account: GoogleCalendarAccount;
+  isAuthorizing: boolean;
+  isDisconnecting: boolean;
+  isToggling: boolean;
+  onAuthorize: () => void;
+  onDisconnect: () => void;
+  onToggleSync: (enabled: boolean) => void;
+}) {
+  const canToggle = account.calendarAuthorized && !isToggling;
+  return (
+    <article className="google-account-row">
+      <span className="brand-mark google-mark">G</span>
+      <div>
+        <strong>{account.googleName || "Google 账户"}</strong>
+        <small>{account.googleEmail || "已绑定"}</small>
+        {account.lastError ? <em>{account.lastError}</em> : null}
+      </div>
+      <button
+        className={`toggle-switch ${account.syncEnabled ? "is-on" : ""}`}
+        type="button"
+        aria-label={account.syncEnabled ? "关闭此账户同步" : "开启此账户同步"}
+        aria-pressed={account.syncEnabled}
+        disabled={!canToggle}
+        onClick={() => onToggleSync(!account.syncEnabled)}
+      >
+        <span />
+      </button>
+      {!account.calendarAuthorized ? (
+        <button
+          className="ghost-button"
+          type="button"
+          disabled={isAuthorizing}
+          onClick={onAuthorize}
+        >
+          授权日历
+        </button>
+      ) : null}
+      <button
+        className="ghost-button"
+        type="button"
+        disabled={isDisconnecting}
+        onClick={onDisconnect}
+      >
+        取消绑定
+      </button>
+    </article>
+  );
+}
+
+function AiCommandBar({
+  isThinking,
+  lastReply,
+  onSubmit,
+}: {
+  isThinking: boolean;
+  lastReply: string;
+  onSubmit: (message: string) => void;
+}) {
+  const [message, setMessage] = useState("");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const trimmed = message.trim();
+    if (!trimmed || isThinking) {
+      return;
+    }
+    onSubmit(trimmed);
+    setMessage("");
+  }
+
+  return (
+    <section className="ai-command-panel surface-panel">
+      <form className="ai-command-form" onSubmit={submit}>
+        <span className="ai-orb">AI</span>
+        <input
+          value={message}
+          placeholder="用对话管理任务：添加任务、分析今天、整理待处理..."
+          onChange={(event) => setMessage(event.target.value)}
+        />
+        <button className="primary-button" type="submit" disabled={isThinking || !message.trim()}>
+          {isThinking ? "思考中..." : "发送"}
+        </button>
+      </form>
+      {lastReply ? <p className="ai-command-reply">{lastReply}</p> : null}
+    </section>
   );
 }
 
@@ -3842,7 +4054,6 @@ function TaskDetailsModal({
         {attachmentError ? (
           <p className="settings-error">{attachmentError.message}</p>
         ) : null}
-        {saveMessage ? <p className="settings-note">{saveMessage}</p> : null}
         <div className="field-grid">
           <label>
             日期
@@ -3856,7 +4067,7 @@ function TaskDetailsModal({
             状态
             <input value={item.status === "done" ? "已完成" : "待处理"} disabled />
           </label>
-          <div className="toggle-field">
+          <div className="toggle-field task-type-toggle">
             <span>
               <strong>长期任务</strong>
               <small>内容从当前日期开始同步到之后的任务</small>
@@ -3878,7 +4089,7 @@ function TaskDetailsModal({
               <span />
             </button>
           </div>
-          <div className="toggle-field low-priority-toggle-field">
+          <div className="toggle-field task-type-toggle low-priority-toggle-field">
             <span>
               <strong>低优先级任务</strong>
               <small>收进底部折叠栏，适合不紧急但想保留的任务</small>
@@ -3934,6 +4145,11 @@ function TaskDetailsModal({
           >
             <TrashIcon />
           </button>
+          {saveMessage ? (
+            <span className="modal-save-status" role="status" aria-live="polite">
+              {saveMessage}
+            </span>
+          ) : null}
           <span className="modal-spacer" />
           <button className="ghost-button" type="button" onClick={onClose}>
             关闭

@@ -2,6 +2,7 @@ export type User = {
   id: string;
   username: string;
   email: string;
+  displayName: string;
 };
 
 export type TokenPair = {
@@ -78,6 +79,20 @@ export type TaskCreatePayload = {
   repeat?: RepeatRule;
 };
 
+export type GoogleCalendarAccount = {
+  id: string;
+  googleEmail: string;
+  googleName: string;
+  calendarAuthorized: boolean;
+  syncEnabled: boolean;
+  calendarId: string;
+  calendarName: string;
+  connectedAt: string;
+  lastSyncAt: string | null;
+  lastError: string;
+  isPrimary: boolean;
+};
+
 export type GoogleCalendarStatus = {
   configured: boolean;
   connected: boolean;
@@ -94,6 +109,7 @@ export type GoogleCalendarStatus = {
   lastError: string;
   syncedCount: number;
   failedCount: number;
+  accounts: GoogleCalendarAccount[];
 };
 
 export type GoogleCalendarAuthUrl = {
@@ -108,6 +124,15 @@ export type GoogleCalendarSyncResult = {
   start: string;
   end: string;
   synced: number;
+};
+
+export type AiChatResult = {
+  reply: string;
+  actions: Array<{
+    type: string;
+    label: string;
+    taskId: string | null;
+  }>;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -265,6 +290,17 @@ export function getMe(accessToken: string) {
   return request<User>("/auth/me", {}, accessToken);
 }
 
+export function updateMe(payload: { displayName: string }, accessToken: string) {
+  return request<User>(
+    "/auth/me",
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+    accessToken,
+  );
+}
+
 export function getDay(date: string, accessToken: string) {
   return request<DayTodos>(`/days/${date}`, {}, accessToken);
 }
@@ -386,32 +422,38 @@ export function bindGoogleAccount(accessToken: string) {
   );
 }
 
-export function disconnectGoogleAccount(accessToken: string) {
+export function disconnectGoogleAccount(accessToken: string, connectionId?: string) {
   return request<void>(
     "/integrations/google-account/disconnect",
     {
       method: "POST",
+      body: JSON.stringify({ connectionId: connectionId ?? null }),
     },
     accessToken,
   );
 }
 
-export function authorizeGoogleCalendar(accessToken: string) {
+export function authorizeGoogleCalendar(accessToken: string, connectionId?: string) {
   return request<GoogleCalendarAuthUrl>(
     "/integrations/google-calendar/authorize",
     {
       method: "POST",
+      body: JSON.stringify({ connectionId: connectionId ?? null }),
     },
     accessToken,
   );
 }
 
-export function setGoogleCalendarSyncEnabled(enabled: boolean, accessToken: string) {
+export function setGoogleCalendarSyncEnabled(
+  enabled: boolean,
+  accessToken: string,
+  connectionId?: string,
+) {
   return request<GoogleCalendarStatus>(
     "/integrations/google-calendar/sync-enabled",
     {
       method: "PATCH",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ enabled, connectionId: connectionId ?? null }),
     },
     accessToken,
   );
@@ -426,6 +468,17 @@ export function syncGoogleCalendarForDays(days: number, accessToken: string) {
     `/integrations/google-calendar/sync?days=${encodeURIComponent(String(days))}`,
     {
       method: "POST",
+    },
+    accessToken,
+  );
+}
+
+export function chatWithAi(payload: { message: string; date?: string }, accessToken: string) {
+  return request<AiChatResult>(
+    "/ai/chat",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
     },
     accessToken,
   );

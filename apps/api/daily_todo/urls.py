@@ -3,6 +3,7 @@ from django.urls import path
 from ninja import NinjaAPI
 
 from accounts.api import router as auth_router
+from daily_todo.ai_api import router as ai_router
 from integrations.api import router as integrations_router
 from todos.api import router as todos_router
 
@@ -15,6 +16,7 @@ def health(request):
 
 
 api.add_router("/auth", auth_router)
+api.add_router("/ai", ai_router)
 api.add_router("/integrations", integrations_router)
 api.add_router("", todos_router)
 

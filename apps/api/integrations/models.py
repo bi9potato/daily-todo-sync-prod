@@ -6,7 +6,11 @@ from django.db import models
 
 class GoogleCalendarConnection(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="google_calendar_connections",
+    )
     calendar_id = models.CharField(max_length=255, default="primary")
     google_subject = models.CharField(max_length=255, blank=True, default="")
     google_email = models.EmailField(blank=True, default="")
@@ -17,14 +21,22 @@ class GoogleCalendarConnection(models.Model):
     scope = models.TextField(blank=True, default="")
     calendar_authorized = models.BooleanField(default=False)
     sync_enabled = models.BooleanField(default=False)
+    is_primary = models.BooleanField(default=False)
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True, default="")
     connected_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "google_subject"],
+                name="uniq_google_connection_subject_per_user",
+            )
+        ]
         indexes = [
             models.Index(fields=["user", "sync_enabled"]),
+            models.Index(fields=["user", "is_primary"]),
             models.Index(fields=["google_email"]),
         ]
 
@@ -40,6 +52,13 @@ class GoogleCalendarEventLink(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    connection = models.ForeignKey(
+        GoogleCalendarConnection,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="event_links",
+    )
     task = models.ForeignKey(
         "todos.Task",
         on_delete=models.CASCADE,
@@ -69,8 +88,8 @@ class GoogleCalendarEventLink(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["user", "root_id"],
-                name="uniq_google_calendar_link_per_root",
+                fields=["connection", "root_id"],
+                name="uniq_google_calendar_link_per_connection_root",
             )
         ]
         indexes = [

@@ -58,10 +58,15 @@ class UserOut(Schema):
     id: str
     username: str
     email: str
+    displayName: str
 
 
 class GoogleAuthUrlOut(Schema):
     authorizationUrl: str
+
+
+class ProfileUpdateIn(Schema):
+    displayName: str
 
 
 def frontend_url(request) -> str:
@@ -262,4 +267,27 @@ def logout(request, payload: LogoutIn):
 @router.get("/me", response=UserOut, auth=bearer_auth)
 def me(request):
     user = request.auth
-    return {"id": str(user.id), "username": user.username, "email": user.email}
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "email": user.email,
+        "displayName": user.first_name or user.username,
+    }
+
+
+@router.patch("/me", response=UserOut, auth=bearer_auth)
+def update_me(request, payload: ProfileUpdateIn):
+    display_name = payload.displayName.strip()
+    if not display_name:
+        raise HttpError(400, "Display name is required.")
+    if len(display_name) > 150:
+        raise HttpError(400, "Display name is too long.")
+    user = request.auth
+    user.first_name = display_name
+    user.save(update_fields=["first_name"])
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "email": user.email,
+        "displayName": user.first_name or user.username,
+    }

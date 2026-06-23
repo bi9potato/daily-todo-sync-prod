@@ -21,6 +21,20 @@ from .services import (
 router = Router(tags=["integrations"])
 
 
+class GoogleCalendarAccountOut(Schema):
+    id: str
+    googleEmail: str
+    googleName: str
+    calendarAuthorized: bool
+    syncEnabled: bool
+    calendarId: str
+    calendarName: str
+    connectedAt: str
+    lastSyncAt: str | None
+    lastError: str
+    isPrimary: bool
+
+
 class GoogleCalendarStatusOut(Schema):
     configured: bool
     connected: bool
@@ -37,6 +51,7 @@ class GoogleCalendarStatusOut(Schema):
     lastError: str
     syncedCount: int
     failedCount: int
+    accounts: list[GoogleCalendarAccountOut] = []
 
 
 class GoogleCalendarAuthUrlOut(Schema):
@@ -51,6 +66,11 @@ class GoogleCalendarSyncOut(Schema):
 
 class GoogleCalendarSyncToggleIn(Schema):
     enabled: bool
+    connectionId: str | None = None
+
+
+class GoogleCalendarConnectionIn(Schema):
+    connectionId: str | None = None
 
 
 @router.get("/google-calendar/status", response=GoogleCalendarStatusOut, auth=bearer_auth)
@@ -67,23 +87,35 @@ def bind_google_account(request):
 
 
 @router.post("/google-account/disconnect", response={204: None}, auth=bearer_auth)
-def disconnect_google_account_endpoint(request):
-    disconnect_google_calendar(request.auth)
+def disconnect_google_account_endpoint(request, payload: GoogleCalendarConnectionIn | None = None):
+    disconnect_google_calendar(request.auth, payload.connectionId if payload else None)
     return 204, None
 
 
 @router.post("/google-calendar/connect", response=GoogleCalendarAuthUrlOut, auth=bearer_auth)
-def connect_google_calendar(request):
+def connect_google_calendar(request, payload: GoogleCalendarConnectionIn | None = None):
     try:
-        return {"authorizationUrl": build_google_calendar_auth_url(request.auth, request)}
+        return {
+            "authorizationUrl": build_google_calendar_auth_url(
+                request.auth,
+                request,
+                payload.connectionId if payload else None,
+            )
+        }
     except GoogleCalendarError as exc:
         raise HttpError(400, str(exc)) from exc
 
 
 @router.post("/google-calendar/authorize", response=GoogleCalendarAuthUrlOut, auth=bearer_auth)
-def authorize_google_calendar(request):
+def authorize_google_calendar(request, payload: GoogleCalendarConnectionIn | None = None):
     try:
-        return {"authorizationUrl": build_google_calendar_auth_url(request.auth, request)}
+        return {
+            "authorizationUrl": build_google_calendar_auth_url(
+                request.auth,
+                request,
+                payload.connectionId if payload else None,
+            )
+        }
     except GoogleCalendarError as exc:
         raise HttpError(400, str(exc)) from exc
 
@@ -105,7 +137,11 @@ def sync_google_calendar(request, days: int = 45):
 @router.patch("/google-calendar/sync-enabled", response=GoogleCalendarStatusOut, auth=bearer_auth)
 def set_google_calendar_sync(request, payload: GoogleCalendarSyncToggleIn):
     try:
-        return set_google_calendar_sync_enabled(request.auth, payload.enabled)
+        return set_google_calendar_sync_enabled(
+            request.auth,
+            payload.enabled,
+            payload.connectionId,
+        )
     except GoogleCalendarError as exc:
         raise HttpError(400, str(exc)) from exc
 
