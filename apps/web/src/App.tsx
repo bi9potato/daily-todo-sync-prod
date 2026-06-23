@@ -250,6 +250,11 @@ type CompletionOverride = {
   version: number;
 };
 
+type PinOverride = {
+  pinned: boolean;
+  version: number;
+};
+
 type ReorderPayload = {
   date: string;
   orderedIds: string[];
@@ -542,11 +547,13 @@ function TodoScreen({
   const [completionOverrides, setCompletionOverrides] = useState<
     Record<string, CompletionOverride>
   >({});
+  const [pinOverrides, setPinOverrides] = useState<Record<string, PinOverride>>({});
   const pendingDragRef = useRef<PendingDrag | null>(null);
   const suppressOpenTaskIdRef = useRef<string | null>(null);
   const reorderAnimationFrameRef = useRef<number | null>(null);
   const dragScrollFrameRef = useRef<number | null>(null);
   const completionOverrideVersionRef = useRef(0);
+  const pinOverrideVersionRef = useRef(0);
   const hasScheduledReloadRef = useRef(false);
   const undoDeleteTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
@@ -597,9 +604,14 @@ function TodoScreen({
     enabled: isSettingsOpen,
   });
 
+  const displayRangeData = useMemo(
+    () => applyPinOverridesToRange(rangeQuery.data, pinOverrides),
+    [pinOverrides, rangeQuery.data],
+  );
+
   const daysByDate = useMemo(() => {
-    return new Map(rangeQuery.data?.days.map((day) => [day.date, day]) ?? []);
-  }, [rangeQuery.data]);
+    return new Map(displayRangeData?.days.map((day) => [day.date, day]) ?? []);
+  }, [displayRangeData]);
 
   const todayLongTermCount = useMemo(() => {
     const day = daysByDate.get(today);
@@ -620,8 +632,8 @@ function TodoScreen({
   }, [daysByDate, today]);
 
   const allTasks = useMemo(() => {
-    return rangeQuery.data?.days.flatMap((day) => [...day.pending, ...day.done]) ?? [];
-  }, [rangeQuery.data]);
+    return displayRangeData?.days.flatMap((day) => [...day.pending, ...day.done]) ?? [];
+  }, [displayRangeData]);
 
   const selectedTask = allTasks.find((item) => item.id === selectedTaskId) ?? null;
   const draggedTask =
@@ -782,7 +794,6 @@ function TodoScreen({
         applyServerOccurrenceUpdate(data, updated),
       );
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["range"] }),
   });
 
   const uploadAttachmentMutation = useMutation<
@@ -796,7 +807,6 @@ function TodoScreen({
       queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
         applyAttachmentAdd(data, payload.occurrenceId, attachment),
       );
-      queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
 
@@ -890,7 +900,32 @@ function TodoScreen({
   function updateTaskPinned(id: string, pinned: boolean) {
     const item = allTasks.find((task) => task.id === id);
     const before = item ? measureTaskRects(item.taskDate) : null;
-    updateMutation.mutate({ id, pinned });
+    const version = pinOverrideVersionRef.current + 1;
+    pinOverrideVersionRef.current = version;
+
+    flushSync(() => {
+      setPinOverrides((current) => ({
+        ...current,
+        [id]: { pinned, version },
+      }));
+    });
+
+    updateMutation.mutate(
+      { id, pinned },
+      {
+        onSettled: () => {
+          setPinOverrides((current) => {
+            if (current[id]?.version !== version) {
+              return current;
+            }
+
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+        },
+      },
+    );
     if (item && before) {
       animateReorderFrom(item.taskDate, null, before);
     }
@@ -4065,6 +4100,8 @@ function TaskAttachmentGallery({
   );
 }
 
+const attachmentObjectUrlCache = new Map<string, string>();
+
 function TaskAttachmentThumb({
   accessToken,
   attachment,
@@ -4089,16 +4126,24 @@ function TaskAttachmentThumb({
 
   useEffect(() => {
     let cancelled = false;
-    let nextObjectUrl = "";
+    const cachedObjectUrl = attachmentObjectUrlCache.get(attachment.contentUrl);
 
     setLoadError(false);
+    if (cachedObjectUrl) {
+      setObjectUrl(cachedObjectUrl);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setObjectUrl(null);
     getTaskAttachmentBlob(attachment.contentUrl, accessToken)
       .then((blob) => {
         if (cancelled) {
           return;
         }
-        nextObjectUrl = URL.createObjectURL(blob);
+        const nextObjectUrl = URL.createObjectURL(blob);
+        attachmentObjectUrlCache.set(attachment.contentUrl, nextObjectUrl);
         setObjectUrl(nextObjectUrl);
       })
       .catch(() => {
@@ -4109,9 +4154,6 @@ function TaskAttachmentThumb({
 
     return () => {
       cancelled = true;
-      if (nextObjectUrl) {
-        URL.revokeObjectURL(nextObjectUrl);
-      }
     };
   }, [accessToken, attachment.contentUrl]);
 
@@ -4582,6 +4624,23 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) 
       quality,
     );
   });
+}
+
+
+function applyPinOverridesToRange(
+  data: RangeTodos | undefined,
+  overrides: Record<string, PinOverride>,
+) {
+  const entries = Object.entries(overrides);
+  if (!data || entries.length === 0) {
+    return data;
+  }
+
+  return entries.reduce<RangeTodos | undefined>(
+    (current, [id, override]) =>
+      applyOptimisticOccurrenceUpdate(current, { id, pinned: override.pinned }),
+    data,
+  );
 }
 
 function applyOptimisticOccurrenceUpdate(
