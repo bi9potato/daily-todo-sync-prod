@@ -2770,6 +2770,13 @@ function TodoCard({
   onOpen: () => void;
   onStartDrag: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
+  const checkboxPressRef = useRef<{
+    canceled: boolean;
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
   function isInteractiveTarget(target: EventTarget) {
     return Boolean(
       target instanceof Element &&
@@ -2790,6 +2797,51 @@ function TodoCard({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     onEndDrag();
+  }
+
+  function startCheckboxPress(event: ReactPointerEvent<HTMLInputElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    checkboxPressRef.current = {
+      canceled: false,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+  }
+
+  function moveCheckboxPress(event: ReactPointerEvent<HTMLInputElement>) {
+    const press = checkboxPressRef.current;
+    if (!press || press.pointerId !== event.pointerId) {
+      return;
+    }
+    const deltaX = event.clientX - press.startX;
+    const deltaY = event.clientY - press.startY;
+    if (Math.hypot(deltaX, deltaY) > TOUCH_LONG_PRESS_MOVE_CANCEL_PX) {
+      press.canceled = true;
+    }
+  }
+
+  function finishCheckboxPress(event: ReactPointerEvent<HTMLInputElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const press = checkboxPressRef.current;
+    checkboxPressRef.current = null;
+    if (!press || press.pointerId !== event.pointerId || press.canceled) {
+      return;
+    }
+    onDone(item.id, !done);
+  }
+
+  function cancelCheckboxPress(event: ReactPointerEvent<HTMLInputElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    checkboxPressRef.current = null;
   }
 
   return (
@@ -2819,11 +2871,10 @@ function TodoCard({
         className="round-checkbox"
         type="checkbox"
         checked={done}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          onDone(item.id, !done);
-        }}
+        onPointerCancel={cancelCheckboxPress}
+        onPointerDown={startCheckboxPress}
+        onPointerMove={moveCheckboxPress}
+        onPointerUp={finishCheckboxPress}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
