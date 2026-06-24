@@ -82,6 +82,8 @@ import {
   MenuIcon,
   MicIcon,
   PinIcon,
+  SendIcon,
+  SparklesIcon,
   SunIcon,
   TagIcon,
   TrashIcon,
@@ -1384,7 +1386,10 @@ function TodoScreen({
     id: string,
     event: ReactPointerEvent<HTMLElement>,
   ) {
-    const rect = event.currentTarget.getBoundingClientRect();
+    const dragElement =
+      event.currentTarget.closest<HTMLElement>('[data-task-sortable="true"]') ??
+      event.currentTarget;
+    const rect = dragElement.getBoundingClientRect();
     const day = daysByDate.get(date) ?? emptyDay(date);
     const draggedItem = orderedDayItems(day).find((item) => item.id === id);
     clearPendingDrag();
@@ -1820,16 +1825,6 @@ function TodoScreen({
           ) : null}
         </header>
 
-        {!isAnalytics && !specialTaskSection ? (
-          <div className="workspace-actions">
-            <QuickAddTask
-              date={selectedDate}
-              isSaving={createMutation.isPending}
-              onSubmit={(payload) => createMutation.mutate(payload)}
-            />
-          </div>
-        ) : null}
-
         {rangeQuery.isLoading ? <p className="empty-state is-visible">加载中...</p> : null}
         {rangeQuery.isError ? (
           <p className="empty-state is-visible">加载失败：{String(rangeQuery.error)}</p>
@@ -1924,10 +1919,13 @@ function TodoScreen({
         ) : null}
 
         {!isAnalytics && !specialTaskSection ? (
-          <AiCommandBar
-            isThinking={aiChatMutation.isPending}
-            lastReply={aiChatMutation.data?.reply ?? ""}
-            onSubmit={(message) => aiChatMutation.mutate(message)}
+          <QuickAddTask
+            date={selectedDate}
+            isAiThinking={aiChatMutation.isPending}
+            isSaving={createMutation.isPending}
+            lastAiReply={aiChatMutation.data?.reply ?? ""}
+            onAiSubmit={(message) => aiChatMutation.mutate(message)}
+            onSubmit={(payload) => createMutation.mutate(payload)}
           />
         ) : null}
       </section>
@@ -2592,20 +2590,12 @@ function FilteredTaskView({
   const isReordering = dragState?.active && dragState.date === date;
   const isDropTarget =
     dragState?.active && dragState.date === date && dragState.targetSection === section;
-  const title = section === "long-term" ? "长期任务" : "低优先级任务";
   const emptyText =
     section === "long-term" ? "暂无长期任务" : "暂无低优先级任务";
 
   return (
     <section className="calendar-grid view-day">
       <article className="day-column surface-panel is-selected filtered-task-column">
-        <div className="filtered-task-heading">
-          <span>{weekdayLabel(date)}</span>
-          <strong>{title}</strong>
-          <small>
-            {date} · {items.length} 项
-          </small>
-        </div>
         <section
           className={[
             section === "long-term"
@@ -2943,6 +2933,7 @@ function TodoCard({
       startX: event.clientX,
       startY: event.clientY,
     };
+    onStartDrag(event);
   }
 
   function moveCheckboxPress(event: ReactPointerEvent<HTMLInputElement>) {
@@ -2955,6 +2946,7 @@ function TodoCard({
     if (Math.hypot(deltaX, deltaY) > TOUCH_LONG_PRESS_MOVE_CANCEL_PX) {
       press.canceled = true;
     }
+    onMoveDrag(event);
   }
 
   function finishCheckboxPress(event: ReactPointerEvent<HTMLInputElement>) {
@@ -2965,6 +2957,11 @@ function TodoCard({
     }
     const press = checkboxPressRef.current;
     checkboxPressRef.current = null;
+    if (dragged) {
+      onEndDrag();
+      return;
+    }
+    onEndDrag();
     if (!press || press.pointerId !== event.pointerId || press.canceled) {
       return;
     }
@@ -2976,6 +2973,7 @@ function TodoCard({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     checkboxPressRef.current = null;
+    onCancelDrag();
   }
 
   return (
@@ -3532,52 +3530,19 @@ function GoogleAccountRow({
   );
 }
 
-function AiCommandBar({
-  isThinking,
-  lastReply,
-  onSubmit,
-}: {
-  isThinking: boolean;
-  lastReply: string;
-  onSubmit: (message: string) => void;
-}) {
-  const [message, setMessage] = useState("");
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = message.trim();
-    if (!trimmed || isThinking) {
-      return;
-    }
-    onSubmit(trimmed);
-    setMessage("");
-  }
-
-  return (
-    <section className="ai-command-panel surface-panel">
-      <form className="ai-command-form" onSubmit={submit}>
-        <span className="ai-orb">AI</span>
-        <input
-          value={message}
-          placeholder="用对话管理任务：添加任务、分析今天、整理待处理..."
-          onChange={(event) => setMessage(event.target.value)}
-        />
-        <button className="primary-button" type="submit" disabled={isThinking || !message.trim()}>
-          {isThinking ? "思考中..." : "发送"}
-        </button>
-      </form>
-      {lastReply ? <p className="ai-command-reply">{lastReply}</p> : null}
-    </section>
-  );
-}
-
 function QuickAddTask({
   date,
+  isAiThinking,
   isSaving,
+  lastAiReply,
+  onAiSubmit,
   onSubmit,
 }: {
   date: string;
+  isAiThinking: boolean;
   isSaving: boolean;
+  lastAiReply: string;
+  onAiSubmit: (message: string) => void;
   onSubmit: (payload: {
     date: string;
     text: string;
@@ -3587,6 +3552,7 @@ function QuickAddTask({
   }) => void;
 }) {
   const [text, setText] = useState("");
+  const [mode, setMode] = useState<"task" | "ai">("task");
   const [inputSource, setInputSource] = useState<TaskDraftSource>("typed");
   const [voiceState, setVoiceState] = useState<VoiceCaptureState>({
     status: "idle",
@@ -3604,6 +3570,16 @@ function QuickAddTask({
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    const trimmed = text.trim();
+    if (mode === "ai") {
+      if (!trimmed || isAiThinking) {
+        return;
+      }
+      onAiSubmit(trimmed);
+      setText("");
+      return;
+    }
+
     const draft = createTaskDraftFromInput(text, inputSource, date);
     if (!draft.text || isSaving) {
       return;
@@ -3621,7 +3597,7 @@ function QuickAddTask({
   }
 
   function updateText(value: string) {
-    setInputSource("typed");
+    setInputSource(mode === "ai" ? "ai" : "typed");
     setText(value);
     if (voiceState.status !== "listening") {
       setVoiceState({ status: "idle", message: "语音输入" });
@@ -3689,17 +3665,47 @@ function QuickAddTask({
     recognition.start();
   }
 
+  function changeMode(nextMode: "task" | "ai") {
+    recognitionRef.current?.abort();
+    setInputSource(nextMode === "ai" ? "ai" : "typed");
+    setVoiceState({ status: "idle", message: "语音输入" });
+    setMode(nextMode);
+  }
+
+  const isSubmitting = mode === "ai" ? isAiThinking : isSaving;
+  const placeholder =
+    mode === "ai"
+      ? "用对话管理任务，例如：分析今天、整理待处理、添加明天提醒"
+      : "添加任务，按 Enter 保存";
+
   return (
-    <form className="quick-add-form surface-panel" onSubmit={submit}>
-      <span className="quick-add-title">添加任务</span>
+    <section className={`composer-panel surface-panel ${mode === "ai" ? "is-ai-mode" : ""}`}>
+      <form className="composer-form" onSubmit={submit}>
+        <button
+          className={`composer-mode-button ${mode === "ai" ? "is-active" : ""}`}
+          type="button"
+          aria-label={mode === "ai" ? "切回普通添加任务" : "切换到 AI native 模式"}
+          aria-pressed={mode === "ai"}
+          onClick={() => changeMode(mode === "ai" ? "task" : "ai")}
+          title={mode === "ai" ? "AI native 模式" : "普通添加任务"}
+        >
+          <SparklesIcon />
+        </button>
       <input
-        aria-label="添加任务"
+        aria-label={mode === "ai" ? "AI native 输入" : "添加任务"}
         value={text}
         onChange={(event) => updateText(event.target.value)}
-        placeholder="输入任务，按 Enter 添加"
-        maxLength={280}
-        disabled={isSaving}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            event.currentTarget.form?.requestSubmit();
+          }
+        }}
+        placeholder={placeholder}
+        maxLength={mode === "ai" ? 800 : 280}
+        disabled={isSubmitting}
       />
+        {mode === "task" ? (
       <button
         className={`voice-button ${isListening ? "is-listening" : ""}`}
         type="button"
@@ -3710,15 +3716,21 @@ function QuickAddTask({
       >
         <MicIcon active={isListening} />
       </button>
+        ) : null}
       <button
-        className="quick-add-submit"
+        className="composer-send-button"
         type="submit"
-        aria-label="提交任务"
-        disabled={isSaving || !text.trim()}
+        aria-label={mode === "ai" ? "发送 AI 指令" : "添加任务"}
+        disabled={isSubmitting || !text.trim()}
+        title={mode === "ai" ? "发送" : "添加任务"}
       >
-        +
+        <SendIcon />
       </button>
-    </form>
+      </form>
+      {mode === "ai" && lastAiReply ? (
+        <p className="ai-command-reply">{lastAiReply}</p>
+      ) : null}
+    </section>
   );
 }
 

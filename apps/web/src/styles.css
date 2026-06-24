@@ -333,7 +333,7 @@ h2 {
 }
 
 .is-my-day .workspace-header,
-.is-my-day .workspace-actions,
+.is-my-day .composer-panel,
 .is-my-day .calendar-grid.view-day {
   justify-self: start;
   width: min(760px, 100%);
@@ -709,49 +709,115 @@ h2 {
   transition: transform 0.28s var(--ease);
 }
 
-.ai-command-panel {
+.composer-panel {
   position: sticky;
   bottom: 14px;
   z-index: 12;
   display: grid;
   gap: 8px;
   border-color: rgba(44, 87, 69, 0.16);
-  padding: 10px;
+  padding: 8px;
 }
 
-.ai-command-form {
+.composer-form {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-height: 52px;
+  border: 1px solid rgba(184, 197, 185, 0.76);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 7px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.24s ease,
+    background 0.24s ease;
 }
 
-.ai-orb {
+.composer-panel:focus-within .composer-form {
+  border-color: rgba(44, 87, 69, 0.42);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 0 0 4px rgba(44, 87, 69, 0.08),
+    var(--shadow-soft);
+}
+
+.composer-panel.is-ai-mode .composer-form {
+  border-color: rgba(44, 87, 69, 0.46);
+  background:
+    linear-gradient(180deg, rgba(248, 251, 249, 0.98), rgba(255, 255, 255, 0.96)),
+    #fff;
+}
+
+.composer-form input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  outline: 0;
+  padding: 0 4px;
+}
+
+.composer-form input::placeholder {
+  color: rgba(104, 113, 104, 0.78);
+}
+
+.composer-mode-button,
+.composer-send-button,
+.voice-button {
   display: grid;
   place-items: center;
   width: 34px;
   height: 34px;
+  min-width: 34px;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 0.76rem;
-  font-weight: 900;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  padding: 0;
+  transition:
+    transform 0.2s var(--ease),
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.24s ease;
 }
 
-.ai-command-form input {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.86);
-  color: var(--ink);
-  padding: 12px;
+.composer-mode-button:hover,
+.composer-send-button:hover:not(:disabled),
+.voice-button:hover {
+  border-color: rgba(44, 87, 69, 0.38);
+  background: #fff;
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.composer-mode-button.is-active,
+.voice-button.is-listening {
+  border-color: rgba(44, 87, 69, 0.38);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(44, 87, 69, 0.08);
+}
+
+.composer-send-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.composer-send-button:disabled {
+  cursor: default;
+  opacity: 0.38;
+  transform: none;
 }
 
 .ai-command-reply {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.45;
-  padding: 0 4px 2px 44px;
+  padding: 0 8px 2px 44px;
 }
 
 .workspace-header {
@@ -784,77 +850,6 @@ h2 {
 
 .date-controls input {
   width: 150px;
-}
-
-.workspace-actions {
-  min-width: 0;
-}
-
-.quick-add-form {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 54px;
-  border-radius: var(--radius);
-  padding: 9px 10px 9px 14px;
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.24s ease,
-    transform 0.24s var(--ease);
-}
-
-.quick-add-form:focus-within {
-  border-color: rgba(44, 87, 69, 0.42);
-  box-shadow:
-    0 0 0 4px rgba(44, 87, 69, 0.08),
-    var(--shadow-soft);
-}
-
-.quick-add-title {
-  color: var(--accent);
-  font-size: 0.86rem;
-  font-weight: 850;
-  white-space: nowrap;
-}
-
-.quick-add-form input {
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 8px 0;
-}
-
-.quick-add-form input:focus {
-  outline: none;
-}
-
-.quick-add-submit {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 1.25rem;
-  line-height: 1;
-  transition:
-    transform 0.2s var(--ease),
-    background 0.2s ease,
-    opacity 0.2s ease;
-}
-
-.quick-add-submit:hover:not(:disabled) {
-  background: var(--accent-dark);
-  transform: translateY(-1px);
-}
-
-.quick-add-submit:disabled {
-  cursor: default;
-  opacity: 0.42;
 }
 
 .voice-button {
@@ -1869,6 +1864,27 @@ h2 {
   font-weight: 750;
 }
 
+.long-term-section-header .chevron-icon {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border: 1px solid rgba(184, 197, 185, 0.74);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 4px;
+  transition:
+    transform 0.22s var(--ease),
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.long-term-section-header:hover .chevron-icon {
+  border-color: rgba(44, 87, 69, 0.3);
+  background: #fff;
+  color: var(--accent);
+}
+
 .long-term-task-section.is-drop-target,
 .low-priority-task-section.is-drop-target,
 .todo-list.is-drop-target {
@@ -2046,9 +2062,15 @@ h2 {
   background:
     linear-gradient(180deg, rgba(232, 240, 235, 0.48), rgba(246, 248, 243, 0.52)),
     var(--card-soft);
-  box-shadow: inset 0 0 0 1px rgba(44, 87, 69, 0.08);
-  opacity: 0.72;
+  box-shadow:
+    inset 0 0 0 1px rgba(44, 87, 69, 0.08),
+    inset 0 0 0 999px rgba(255, 255, 255, 0.22);
+  opacity: 1;
   transform: scale(0.985);
+}
+
+.todo-item.is-dragging > * {
+  opacity: 0;
 }
 
 .todo-list.is-reordering .todo-item:not(.is-dragging) {
@@ -3014,7 +3036,7 @@ h2 {
   }
 
   .is-my-day .workspace-header,
-  .is-my-day .workspace-actions,
+  .is-my-day .composer-panel,
   .is-my-day .calendar-grid.view-day {
     justify-self: stretch;
     width: 100%;
@@ -3189,16 +3211,10 @@ h2 {
     padding: 16px;
   }
 
-  .workspace-actions {
-    width: 100%;
-  }
-
-  .quick-add-form {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-
-  .quick-add-title {
-    grid-column: 1 / -1;
+  .composer-form {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    min-height: 50px;
+    padding: 6px;
   }
 
   .calendar-grid.view-week,
@@ -3232,13 +3248,8 @@ h2 {
     white-space: nowrap;
   }
 
-  .ai-command-form {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .ai-command-form .primary-button {
-    grid-column: 1 / -1;
-    width: 100%;
+  .composer-panel.is-ai-mode .composer-form {
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .ai-command-reply {
