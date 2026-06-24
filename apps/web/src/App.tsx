@@ -89,7 +89,8 @@ import {
 
 type AuthMode = "login" | "register";
 type CalendarViewMode = "day" | "week" | "month";
-type ViewMode = CalendarViewMode | "my-day" | "analytics";
+type SpecialTaskViewMode = "long-term" | "low-priority";
+type ViewMode = CalendarViewMode | SpecialTaskViewMode | "my-day" | "analytics";
 type TaskDraftSource = "typed" | "voice" | "ai";
 type TaskSection = "long-term" | "regular" | "low-priority";
 
@@ -533,6 +534,8 @@ function TodoScreen({
   const undoDeleteTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const isAnalytics = viewMode === "analytics";
+  const specialTaskSection: SpecialTaskViewMode | null =
+    viewMode === "long-term" || viewMode === "low-priority" ? viewMode : null;
 
   const visibleRange = useMemo(() => {
     if (viewMode === "analytics") {
@@ -1131,7 +1134,7 @@ function TodoScreen({
 
   function openLongTermTasks() {
     setSelectedDate(today);
-    setViewMode("day");
+    setViewMode("long-term");
     setIsLongTermSectionOpen(true);
     setIsLowPrioritySectionOpen(false);
     setIsMobileSidebarOpen(false);
@@ -1139,7 +1142,7 @@ function TodoScreen({
 
   function openLowPriorityTasks() {
     setSelectedDate(today);
-    setViewMode("day");
+    setViewMode("low-priority");
     setIsLongTermSectionOpen(false);
     setIsLowPrioritySectionOpen(true);
     setIsMobileSidebarOpen(false);
@@ -1571,6 +1574,12 @@ function TodoScreen({
     if (viewMode === "my-day") {
       return "我的一天";
     }
+    if (viewMode === "long-term") {
+      return "长期任务";
+    }
+    if (viewMode === "low-priority") {
+      return "低优先级任务";
+    }
     if (viewMode === "day") {
       return "日视图";
     }
@@ -1695,9 +1704,7 @@ function TodoScreen({
             </small>
           </button>
           <button
-            className={
-              viewMode === "day" && isLongTermSectionOpen ? "active sidebar-subtag" : "sidebar-subtag"
-            }
+            className={viewMode === "long-term" ? "active sidebar-subtag" : "sidebar-subtag"}
             type="button"
             onClick={openLongTermTasks}
           >
@@ -1708,11 +1715,7 @@ function TodoScreen({
             <small className="nav-meta">{todayLongTermCount} 项</small>
           </button>
           <button
-            className={
-              viewMode === "day" && isLowPrioritySectionOpen
-                ? "active sidebar-subtag"
-                : "sidebar-subtag"
-            }
+            className={viewMode === "low-priority" ? "active sidebar-subtag" : "sidebar-subtag"}
             type="button"
             onClick={openLowPriorityTasks}
           >
@@ -1797,7 +1800,7 @@ function TodoScreen({
             </p>
           </div>
 
-        {!isAnalytics && !isMyDay ? (
+        {!isAnalytics && !isMyDay && !specialTaskSection ? (
             <nav className="date-controls">
               <button type="button" onClick={() => shiftDate(-1)}>
                 &lt;
@@ -1817,7 +1820,7 @@ function TodoScreen({
           ) : null}
         </header>
 
-        {!isAnalytics ? (
+        {!isAnalytics && !specialTaskSection ? (
           <div className="workspace-actions">
             <QuickAddTask
               date={selectedDate}
@@ -1876,6 +1879,28 @@ function TodoScreen({
                 />
               ))}
             </section>
+          ) : specialTaskSection ? (
+            <FilteredTaskView
+              completionOverrides={completionOverrides}
+              copyingTaskId={
+                copyLongTermMutation.isPending
+                  ? copyLongTermMutation.variables ?? null
+                  : null
+              }
+              date={selectedDate}
+              day={daysByDate.get(selectedDate) ?? emptyDay(selectedDate)}
+              dragState={dragState}
+              section={specialTaskSection}
+              onCancelDrag={cancelTaskDrag}
+              onCopyAsRegular={(id) => copyLongTermMutation.mutate(id)}
+              onDelete={requestDeleteTask}
+              onDone={updateTaskDone}
+              onPin={updateTaskPinned}
+              onEndDrag={finishTaskDrag}
+              onMoveDrag={moveTaskDrag}
+              onOpenTask={openTaskDetails}
+              onStartDrag={startTaskDrag}
+            />
           ) : (
             <CalendarBoard
               completionOverrides={completionOverrides}
@@ -1898,7 +1923,7 @@ function TodoScreen({
           )
         ) : null}
 
-        {!isAnalytics ? (
+        {!isAnalytics && !specialTaskSection ? (
           <AiCommandBar
             isThinking={aiChatMutation.isPending}
             lastReply={aiChatMutation.data?.reply ?? ""}
@@ -2519,6 +2544,115 @@ function CalendarTaskChip({
         <TrashIcon />
       </button>
     </div>
+  );
+}
+
+function FilteredTaskView({
+  completionOverrides,
+  copyingTaskId,
+  date,
+  day,
+  dragState,
+  section,
+  onCancelDrag,
+  onCopyAsRegular,
+  onDelete,
+  onDone,
+  onPin,
+  onEndDrag,
+  onMoveDrag,
+  onOpenTask,
+  onStartDrag,
+}: {
+  completionOverrides: Record<string, CompletionOverride>;
+  copyingTaskId?: string | null;
+  date: string;
+  day: DayTodos;
+  dragState: DragState | null;
+  section: SpecialTaskViewMode;
+  onCancelDrag: () => void;
+  onCopyAsRegular?: (id: string) => void;
+  onDelete: (id: string) => void;
+  onDone: (id: string, done: boolean) => void;
+  onPin: (id: string, pinned: boolean) => void;
+  onEndDrag: () => void;
+  onMoveDrag: (event: ReactPointerEvent<HTMLElement>) => void;
+  onOpenTask: (id: string) => void;
+  onStartDrag: (
+    date: string,
+    id: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) => void;
+}) {
+  const items = previewDayItems(orderedDayItems(day), dragState, date).filter((item) =>
+    section === "long-term"
+      ? item.isLongTerm
+      : !item.isLongTerm && item.isLowPriority,
+  );
+  const isReordering = dragState?.active && dragState.date === date;
+  const isDropTarget =
+    dragState?.active && dragState.date === date && dragState.targetSection === section;
+  const title = section === "long-term" ? "长期任务" : "低优先级任务";
+  const emptyText =
+    section === "long-term" ? "暂无长期任务" : "暂无低优先级任务";
+
+  return (
+    <section className="calendar-grid view-day">
+      <article className="day-column surface-panel is-selected filtered-task-column">
+        <div className="filtered-task-heading">
+          <span>{weekdayLabel(date)}</span>
+          <strong>{title}</strong>
+          <small>
+            {date} · {items.length} 项
+          </small>
+        </div>
+        <section
+          className={[
+            section === "long-term"
+              ? "long-term-task-section is-open"
+              : "low-priority-task-section is-open",
+            isDropTarget ? "is-drop-target" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          data-day-date={date}
+          data-task-section={section}
+        >
+          <ul
+            className={[
+              "todo-list",
+              section === "long-term" ? "long-term-list" : "low-priority-list",
+              isReordering ? "is-reordering" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {items.length === 0 ? (
+              <li className="empty-state is-visible">{emptyText}</li>
+            ) : null}
+            {items.map((item) => (
+              <TodoCard
+                copying={section === "long-term" && copyingTaskId === item.id}
+                date={date}
+                done={completionOverrides[item.id]?.done ?? item.status === "done"}
+                dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                item={item}
+                key={item.id}
+                onCancelDrag={onCancelDrag}
+                onCopyAsRegular={onCopyAsRegular}
+                onDelete={onDelete}
+                onDone={onDone}
+                onPin={onPin}
+                onEndDrag={onEndDrag}
+                onMoveDrag={onMoveDrag}
+                onOpen={() => onOpenTask(item.id)}
+                onStartDrag={(event) => onStartDrag(date, item.id, event)}
+              />
+            ))}
+          </ul>
+        </section>
+      </article>
+    </section>
   );
 }
 

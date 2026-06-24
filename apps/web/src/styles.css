@@ -1758,6 +1758,26 @@ h2 {
   font-size: 1.12rem;
 }
 
+.filtered-task-heading {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 10px;
+  padding: 4px 2px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filtered-task-heading span,
+.filtered-task-heading small {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.filtered-task-heading strong {
+  color: var(--ink);
+  font-size: 1.16rem;
+}
+
 .today-pill {
   justify-self: end;
   padding: 3px 8px;
