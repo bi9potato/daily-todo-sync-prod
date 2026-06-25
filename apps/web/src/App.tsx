@@ -292,6 +292,31 @@ const REPEAT_OPTIONS: { value: RepeatKind; label: string }[] = [
 
 const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
+function millisecondsUntilNextLocalDay() {
+  const now = new Date();
+  const nextDay = new Date(now);
+  nextDay.setHours(24, 0, 1, 0);
+  return Math.max(1000, nextDay.getTime() - now.getTime());
+}
+
+function useTodayDateKey() {
+  const [today, setToday] = useState(() => toDateKey(new Date()));
+
+  useEffect(() => {
+    let timeoutId: number;
+
+    function refreshToday() {
+      setToday(toDateKey(new Date()));
+      timeoutId = window.setTimeout(refreshToday, millisecondsUntilNextLocalDay());
+    }
+
+    timeoutId = window.setTimeout(refreshToday, millisecondsUntilNextLocalDay());
+    return () => window.clearTimeout(timeoutId);
+  }, []);
+
+  return today;
+}
+
 export function App() {
   const [accessToken, setAccessToken] = useState(() =>
     localStorage.getItem(ACCESS_TOKEN_KEY),
@@ -508,7 +533,7 @@ function TodoScreen({
   accessToken: string;
   onLogout: () => void;
 }) {
-  const today = useMemo(() => toDateKey(new Date()), []);
+  const today = useTodayDateKey();
   const [selectedDate, setSelectedDate] = useState(today);
   const [viewMode, setViewMode] = useState<ViewMode>("my-day");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -547,6 +572,12 @@ function TodoScreen({
   const isAnalytics = viewMode === "analytics";
   const specialTaskSection: SpecialTaskViewMode | null =
     viewMode === "long-term" || viewMode === "low-priority" ? viewMode : null;
+
+  useEffect(() => {
+    if (viewMode === "my-day") {
+      setSelectedDate(today);
+    }
+  }, [today, viewMode]);
 
   const visibleRange = useMemo(() => {
     if (viewMode === "analytics") {
@@ -2797,6 +2828,7 @@ function DayColumn({
         <button
           className="long-term-section-header"
           type="button"
+          aria-expanded={isLongTermSectionOpen}
           onClick={onToggleLongTermSection}
         >
           <span>
@@ -2805,32 +2837,34 @@ function DayColumn({
           </span>
           <ChevronDownIcon expanded={isLongTermSectionOpen} />
         </button>
-        {isLongTermSectionOpen ? (
-          <ul className={`todo-list long-term-list ${isReordering ? "is-reordering" : ""}`}>
-            {longTermItems.length === 0 ? (
-              <li className="empty-state is-visible">把任务拖到这里，就会变成长期任务</li>
-            ) : null}
-            {longTermItems.map((item) => (
-              <TodoCard
-                copying={copyingTaskId === item.id}
-                date={date}
-                done={completionOverrides[item.id]?.done ?? item.status === "done"}
-                dragged={Boolean(dragState?.active && dragState.id === item.id)}
-                item={item}
-                key={item.id}
-                onCancelDrag={onCancelDrag}
-                onCopyAsRegular={onCopyAsRegular}
-                onDelete={onDelete}
-                onDone={onDone}
-                onPin={onPin}
-                onEndDrag={onEndDrag}
-                onMoveDrag={onMoveDrag}
-                onOpen={() => onOpenTask(item.id)}
-                onStartDrag={(event) => onStartDrag(date, item.id, event)}
-              />
-            ))}
-          </ul>
-        ) : null}
+        <div className="collapsible-task-body" aria-hidden={!isLongTermSectionOpen}>
+          <div className="collapsible-task-body-inner">
+            <ul className={`todo-list long-term-list ${isReordering ? "is-reordering" : ""}`}>
+              {longTermItems.length === 0 ? (
+                <li className="empty-state is-visible">把任务拖到这里，就会变成长期任务</li>
+              ) : null}
+              {longTermItems.map((item) => (
+                <TodoCard
+                  copying={copyingTaskId === item.id}
+                  date={date}
+                  done={completionOverrides[item.id]?.done ?? item.status === "done"}
+                  dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                  item={item}
+                  key={item.id}
+                  onCancelDrag={onCancelDrag}
+                  onCopyAsRegular={onCopyAsRegular}
+                  onDelete={onDelete}
+                  onDone={onDone}
+                  onPin={onPin}
+                  onEndDrag={onEndDrag}
+                  onMoveDrag={onMoveDrag}
+                  onOpen={() => onOpenTask(item.id)}
+                  onStartDrag={(event) => onStartDrag(date, item.id, event)}
+                />
+              ))}
+            </ul>
+          </div>
+        </div>
       </section>
       ) : null}
 
@@ -2880,6 +2914,7 @@ function DayColumn({
         <button
           className="long-term-section-header"
           type="button"
+          aria-expanded={isLowPrioritySectionOpen}
           onClick={onToggleLowPrioritySection}
         >
           <span>
@@ -2888,32 +2923,34 @@ function DayColumn({
           </span>
           <ChevronDownIcon expanded={isLowPrioritySectionOpen} />
         </button>
-        {isLowPrioritySectionOpen ? (
-          <ul className={`todo-list low-priority-list ${isReordering ? "is-reordering" : ""}`}>
-            {lowPriorityItems.length === 0 ? (
-              <li className="empty-state is-visible">把任务拖到这里，就会变成低优先级任务</li>
-            ) : null}
-            {lowPriorityItems.map((item) => (
-              <TodoCard
-                copying={false}
-                date={date}
-                done={completionOverrides[item.id]?.done ?? item.status === "done"}
-                dragged={Boolean(dragState?.active && dragState.id === item.id)}
-                item={item}
-                key={item.id}
-                onCancelDrag={onCancelDrag}
-                onCopyAsRegular={onCopyAsRegular}
-                onDelete={onDelete}
-                onDone={onDone}
-                onPin={onPin}
-                onEndDrag={onEndDrag}
-                onMoveDrag={onMoveDrag}
-                onOpen={() => onOpenTask(item.id)}
-                onStartDrag={(event) => onStartDrag(date, item.id, event)}
-              />
-            ))}
-          </ul>
-        ) : null}
+        <div className="collapsible-task-body" aria-hidden={!isLowPrioritySectionOpen}>
+          <div className="collapsible-task-body-inner">
+            <ul className={`todo-list low-priority-list ${isReordering ? "is-reordering" : ""}`}>
+              {lowPriorityItems.length === 0 ? (
+                <li className="empty-state is-visible">把任务拖到这里，就会变成低优先级任务</li>
+              ) : null}
+              {lowPriorityItems.map((item) => (
+                <TodoCard
+                  copying={false}
+                  date={date}
+                  done={completionOverrides[item.id]?.done ?? item.status === "done"}
+                  dragged={Boolean(dragState?.active && dragState.id === item.id)}
+                  item={item}
+                  key={item.id}
+                  onCancelDrag={onCancelDrag}
+                  onCopyAsRegular={onCopyAsRegular}
+                  onDelete={onDelete}
+                  onDone={onDone}
+                  onPin={onPin}
+                  onEndDrag={onEndDrag}
+                  onMoveDrag={onMoveDrag}
+                  onOpen={() => onOpenTask(item.id)}
+                  onStartDrag={(event) => onStartDrag(date, item.id, event)}
+                />
+              ))}
+            </ul>
+          </div>
+        </div>
       </section>
       ) : null}
     </article>
