@@ -242,6 +242,15 @@ type ReorderContext = {
   previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
 };
 
+type CreateTaskContext = {
+  previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
+  optimisticId: string;
+};
+
+type DeleteTaskContext = {
+  previousRanges: Array<[QueryKey, RangeTodos | undefined]>;
+};
+
 type AttachmentUploadPayload = {
   file: File;
   occurrenceId: string;
@@ -690,14 +699,19 @@ function TodoScreen({
     };
   }, []);
 
-  const createMutation = useMutation({
-    mutationFn: (payload: {
+  const createMutation = useMutation<
+    TodoOccurrence,
+    Error,
+    {
       date: string;
       text: string;
       note: string;
       reminderTime: string | null;
       repeat: RepeatRule;
-    }) =>
+    },
+    CreateTaskContext
+  >({
+    mutationFn: (payload) =>
       createTask(
         payload.date,
         {
@@ -708,11 +722,30 @@ function TodoScreen({
         },
         accessToken,
       ),
-    onSuccess: () => {
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
+      const previousRanges = queryClient.getQueriesData<RangeTodos>({
+        queryKey: ["range"],
+      });
+      const optimisticId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOptimisticOccurrenceCreate(data, payload, optimisticId),
+      );
+
+      return { previousRanges, optimisticId };
+    },
+    onSuccess: (created, _payload, context) => {
       setTaskActionMessage(null);
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        replaceOptimisticOccurrence(data, context.optimisticId, created),
+      );
       queryClient.invalidateQueries({ queryKey: ["range"] });
     },
-    onError: (error) => {
+    onError: (error, _payload, context) => {
+      context?.previousRanges.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
       setTaskActionMessage({
         tone: "error",
         message: error.message || "新增任务失败，请稍后再试。",
@@ -750,8 +783,8 @@ function TodoScreen({
       const { id, ...changes } = payload;
       return updateOccurrence(id, changes, accessToken);
     },
-    onMutate: async (payload) => {
-      await queryClient.cancelQueries({ queryKey: ["range"] });
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
       const previousRanges = queryClient.getQueriesData<RangeTodos>({
         queryKey: ["range"],
       });
@@ -859,24 +892,22 @@ function TodoScreen({
       }));
     });
 
-    window.setTimeout(() => {
-      updateMutation.mutate(
-        { id, done },
-        {
-          onSettled: () => {
-            setCompletionOverrides((current) => {
-              if (current[id]?.version !== version) {
-                return current;
-              }
+    updateMutation.mutate(
+      { id, done },
+      {
+        onSettled: () => {
+          setCompletionOverrides((current) => {
+            if (current[id]?.version !== version) {
+              return current;
+            }
 
-              const next = { ...current };
-              delete next[id];
-              return next;
-            });
-          },
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
         },
-      );
-    }, 0);
+      },
+    );
   }
 
   function updateTaskPinned(id: string, pinned: boolean) {
@@ -935,8 +966,20 @@ function TodoScreen({
     restoreMutation.mutate(id);
   }
 
-  const deleteMutation = useMutation<void, Error, DeleteTaskPayload>({
+  const deleteMutation = useMutation<void, Error, DeleteTaskPayload, DeleteTaskContext>({
     mutationFn: (payload) => deleteOccurrence(payload.id, accessToken),
+    onMutate: (payload) => {
+      void queryClient.cancelQueries({ queryKey: ["range"] });
+      const previousRanges = queryClient.getQueriesData<RangeTodos>({
+        queryKey: ["range"],
+      });
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        removeOccurrenceFromRange(data, payload.id),
+      );
+      setSelectedTaskId(null);
+      setPendingDeleteTask(null);
+      return { previousRanges };
+    },
     onSuccess: (_data, payload) => {
       setSelectedTaskId(null);
       setPendingDeleteTask(null);
@@ -954,7 +997,10 @@ function TodoScreen({
       queryClient.invalidateQueries({ queryKey: ["range"] });
       queryClient.invalidateQueries({ queryKey: ["trash"] });
     },
-    onError: (error) => {
+    onError: (error, _payload, context) => {
+      context?.previousRanges.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
       setTaskActionMessage({
         tone: "error",
         message: error.message || "删除失败，请稍后再试。",
@@ -1533,6 +1579,17 @@ function TodoScreen({
 
   async function moveTaskToSectionAndReorder(state: DragState, orderedIds: string[]) {
     try {
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOptimisticOccurrenceUpdate(data, {
+          id: state.id,
+          isLongTerm: state.targetSection === "long-term",
+          isLowPriority: state.targetSection === "low-priority",
+        }),
+      );
+      queryClient.setQueriesData<RangeTodos>({ queryKey: ["range"] }, (data) =>
+        applyOptimisticDayOrder(data, { date: state.date, orderedIds }),
+      );
+
       const updated = await updateOccurrence(
         state.id,
         {
@@ -3581,7 +3638,7 @@ function QuickAddTask({
     }
 
     const draft = createTaskDraftFromInput(text, inputSource, date);
-    if (!draft.text || isSaving) {
+    if (!draft.text) {
       return;
     }
     onSubmit({
@@ -3672,7 +3729,7 @@ function QuickAddTask({
     setMode(nextMode);
   }
 
-  const isSubmitting = mode === "ai" ? isAiThinking : isSaving;
+  const isSubmitting = mode === "ai" ? isAiThinking : false;
   const placeholder =
     mode === "ai"
       ? "用对话管理任务，例如：分析今天、整理待处理、添加明天提醒"
@@ -4323,6 +4380,50 @@ function emptyDay(date: string): DayTodos {
   return { date, pending: [], done: [] };
 }
 
+function createOptimisticOccurrence(
+  payload: {
+    date: string;
+    text: string;
+    note: string;
+    reminderTime: string | null;
+    repeat: RepeatRule;
+  },
+  id: string,
+  existingItems: TodoOccurrence[],
+): TodoOccurrence {
+  const now = new Date().toISOString();
+  const repeat = payload.repeat;
+  const maxSortOrder = existingItems.reduce(
+    (max, item) => Math.max(max, item.sortOrder),
+    0,
+  );
+
+  return {
+    id,
+    taskId: id,
+    rootId: id,
+    taskDate: payload.date,
+    text: payload.text,
+    note: payload.note,
+    status: "pending",
+    source: "manual",
+    sortOrder: maxSortOrder + 1000,
+    isPinned: false,
+    isLowPriority: false,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+    carryoverFromOccurrenceId: null,
+    firstCreatedAt: now,
+    reminderTime: payload.reminderTime,
+    reminderAt: null,
+    isRecurring: repeat.kind !== "none",
+    isLongTerm: false,
+    repeat,
+    attachments: [],
+  };
+}
+
 function orderedDayItems(day: DayTodos) {
   return [...day.pending, ...day.done].sort(compareOccurrences);
 }
@@ -4655,6 +4756,96 @@ function applyServerOccurrenceUpdate(
         .filter((item) => item.status === "done")
         .sort(compareOccurrences),
     };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
+function applyOptimisticOccurrenceCreate(
+  data: RangeTodos | undefined,
+  payload: {
+    date: string;
+    text: string;
+    note: string;
+    reminderTime: string | null;
+    repeat: RepeatRule;
+  },
+  optimisticId: string,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const days = data.days.map((day) => {
+    if (day.date !== payload.date) {
+      return day;
+    }
+
+    changed = true;
+    const optimisticOccurrence = createOptimisticOccurrence(
+      payload,
+      optimisticId,
+      [...day.pending, ...day.done],
+    );
+    return {
+      ...day,
+      pending: [...day.pending, optimisticOccurrence].sort(compareOccurrences),
+    };
+  });
+
+  return changed ? { ...data, days } : data;
+}
+
+function replaceOptimisticOccurrence(
+  data: RangeTodos | undefined,
+  optimisticId: string,
+  created: TodoOccurrence,
+) {
+  if (!data) {
+    return data;
+  }
+
+  let replaced = false;
+  const days = data.days.map((day) => {
+    const items = [...day.pending, ...day.done];
+    if (!items.some((item) => item.id === optimisticId)) {
+      return day;
+    }
+
+    replaced = true;
+    const nextItems = items.map((item) =>
+      item.id === optimisticId ? created : item,
+    );
+    return {
+      ...day,
+      pending: nextItems
+        .filter((item) => item.status === "pending")
+        .sort(compareOccurrences),
+      done: nextItems
+        .filter((item) => item.status === "done")
+        .sort(compareOccurrences),
+    };
+  });
+
+  return replaced ? { ...data, days } : applyOccurrenceInsert(data, created);
+}
+
+function removeOccurrenceFromRange(data: RangeTodos | undefined, id: string) {
+  if (!data) {
+    return data;
+  }
+
+  let changed = false;
+  const days = data.days.map((day) => {
+    const pending = day.pending.filter((item) => item.id !== id);
+    const done = day.done.filter((item) => item.id !== id);
+    if (pending.length === day.pending.length && done.length === day.done.length) {
+      return day;
+    }
+
+    changed = true;
+    return { ...day, pending, done };
   });
 
   return changed ? { ...data, days } : data;
