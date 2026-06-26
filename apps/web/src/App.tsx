@@ -1144,7 +1144,7 @@ function TodoScreen({
   });
 
   const updateProfileMutation = useMutation({
-    mutationFn: (displayName: string) => updateMe({ displayName }, accessToken),
+    mutationFn: (accountName: string) => updateMe({ displayName: accountName }, accessToken),
     onSuccess: (updated) => {
       queryClient.setQueryData(["me"], updated);
     },
@@ -3215,7 +3215,7 @@ function SettingsModal({
   onDisconnect: () => void;
   onDisconnectAccount: (connectionId: string) => void;
   onRestoreTrash: (id: string) => void;
-  onSaveProfile: (displayName: string) => void;
+  onSaveProfile: (accountName: string) => void;
   onSync: () => void;
   onToggleSync: (enabled: boolean) => void;
   onToggleAccountSync: (connectionId: string, enabled: boolean) => void;
@@ -3225,7 +3225,7 @@ function SettingsModal({
   syncResult: GoogleCalendarSyncResult | null;
   trashItems: DeletedTodoOccurrence[];
 }) {
-  const [displayName, setDisplayName] = useState(currentUser?.displayName ?? "");
+  const [accountName, setAccountName] = useState(currentUser?.username ?? "");
   const isGoogleBound = Boolean(status?.googleBound);
   const isCalendarAuthorized = Boolean(status?.calendarAuthorized);
   const isConfigured = Boolean(status?.configured);
@@ -3254,8 +3254,8 @@ function SettingsModal({
   }
 
   useEffect(() => {
-    setDisplayName(currentUser?.displayName ?? "");
-  }, [currentUser?.displayName]);
+    setAccountName(currentUser?.username ?? "");
+  }, [currentUser?.username]);
 
   return (
     <ModalShell title="Settings" onClose={onClose}>
@@ -3276,26 +3276,26 @@ function SettingsModal({
           <div className="settings-card-header">
             <div>
               <p className="eyebrow">Profile</p>
-              <h3>修改昵称</h3>
+              <h3>修改账户名称</h3>
             </div>
           </div>
           <label className="settings-input-row">
-            昵称
+            昵称与登录 ID
             <input
-              value={displayName}
+              value={accountName}
               maxLength={150}
-              placeholder={currentUser?.username ?? "账户昵称"}
-              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder="账户名称"
+              onChange={(event) => setAccountName(event.target.value)}
             />
           </label>
           <div className="settings-actions">
             <button
               className="primary-button"
               type="button"
-              disabled={!displayName.trim() || isSavingProfile}
-              onClick={() => onSaveProfile(displayName)}
+              disabled={!accountName.trim() || isSavingProfile}
+              onClick={() => onSaveProfile(accountName)}
             >
-              {isSavingProfile ? "保存中..." : "保存昵称"}
+              {isSavingProfile ? "保存中..." : "保存账户名称"}
             </button>
           </div>
         </section>

@@ -9,6 +9,9 @@ from django.db import IntegrityError
 from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.utils import timezone
+from ninja import Router, Schema
+from ninja.errors import HttpError
+
 from integrations.google_calendar import (
     GOOGLE_ACCOUNT_SCOPE,
     GoogleCalendarError,
@@ -17,8 +20,6 @@ from integrations.google_calendar import (
     fetch_google_userinfo,
 )
 from integrations.models import GoogleCalendarConnection
-from ninja import Router, Schema
-from ninja.errors import HttpError
 
 from .authentication import bearer_auth
 from .models import RefreshToken
@@ -97,7 +98,19 @@ def register(request, payload: RegisterIn):
         raise HttpError(400, "Username, email, and password are required.")
 
     User = get_user_model()
-    user = User(username=username, email=email)
+    try:
+        User._meta.get_field("username").run_validators(username)
+    except ValidationError as exc:
+        raise HttpError(400, " ".join(exc.messages)) from exc
+    if User.objects.filter(
+        Q(username__iexact=username)
+        | Q(email__iexact=username)
+        | Q(username__iexact=email)
+        | Q(email__iexact=email)
+    ).exists():
+        raise HttpError(400, "Username or email already exists.")
+
+    user = User(username=username, email=email, first_name=username)
     try:
         validate_password(password, user)
     except ValidationError as exc:
@@ -183,7 +196,6 @@ def google_auth_callback(
 
     subject = str(userinfo.get("sub") or "").strip()
     email = str(userinfo.get("email") or "").strip().lower()
-    name = str(userinfo.get("name") or "").strip()
     if not email:
         return HttpResponseRedirect(
             callback_redirect_url(
@@ -209,7 +221,7 @@ def google_auth_callback(
         while User.objects.filter(username=username).exists():
             suffix += 1
             username = f"{base_username}-{suffix}"[:150]
-        user = User(username=username, email=email, first_name=name[:150])
+        user = User(username=username, email=email, first_name=username)
         user.set_unusable_password()
         user.save()
     if not user.is_active:
@@ -271,23 +283,41 @@ def me(request):
         "id": str(user.id),
         "username": user.username,
         "email": user.email,
-        "displayName": user.first_name or user.username,
+        "displayName": user.username,
     }
 
 
 @router.patch("/me", response=UserOut, auth=bearer_auth)
 def update_me(request, payload: ProfileUpdateIn):
-    display_name = payload.displayName.strip()
-    if not display_name:
-        raise HttpError(400, "Display name is required.")
-    if len(display_name) > 150:
-        raise HttpError(400, "Display name is too long.")
+    account_name = payload.displayName.strip()
+    if not account_name:
+        raise HttpError(400, "Account name is required.")
+
     user = request.auth
-    user.first_name = display_name
-    user.save(update_fields=["first_name"])
+    User = get_user_model()
+    try:
+        User._meta.get_field("username").run_validators(account_name)
+    except ValidationError as exc:
+        raise HttpError(400, " ".join(exc.messages)) from exc
+
+    conflict_exists = (
+        User.objects.exclude(id=user.id)
+        .filter(Q(username__iexact=account_name) | Q(email__iexact=account_name))
+        .exists()
+    )
+    if conflict_exists:
+        raise HttpError(400, "Account name is already in use.")
+
+    user.username = account_name
+    user.first_name = account_name
+    try:
+        user.save(update_fields=["username", "first_name", "updated_at"])
+    except IntegrityError as exc:
+        raise HttpError(400, "Account name is already in use.") from exc
+
     return {
         "id": str(user.id),
         "username": user.username,
         "email": user.email,
-        "displayName": user.first_name or user.username,
+        "displayName": user.username,
     }
