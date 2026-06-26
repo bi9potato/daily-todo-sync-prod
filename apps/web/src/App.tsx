@@ -2835,7 +2835,7 @@ function DayColumn({
             <strong>长期任务</strong>
             {isLongTermSectionOpen ? <small>{longTermItems.length} 项</small> : null}
           </span>
-          <ChevronDownIcon expanded={isLongTermSectionOpen} />
+          <ChevronDownIcon expanded={isLongTermSectionOpen} variant="sideways" />
         </button>
         <div className="collapsible-task-body" aria-hidden={!isLongTermSectionOpen}>
           <div className="collapsible-task-body-inner">
@@ -2921,7 +2921,7 @@ function DayColumn({
             <strong>低优先级任务</strong>
             {isLowPrioritySectionOpen ? <small>{lowPriorityItems.length} 项</small> : null}
           </span>
-          <ChevronDownIcon expanded={isLowPrioritySectionOpen} />
+          <ChevronDownIcon expanded={isLowPrioritySectionOpen} variant="sideways" />
         </button>
         <div className="collapsible-task-body" aria-hidden={!isLowPrioritySectionOpen}>
           <div className="collapsible-task-body-inner">

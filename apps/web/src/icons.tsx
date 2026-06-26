@@ -111,10 +111,18 @@ export function CloseIcon() {
   );
 }
 
-export function ChevronDownIcon({ expanded }: { expanded: boolean }) {
+export function ChevronDownIcon({
+  expanded,
+  variant = "vertical",
+}: {
+  expanded: boolean;
+  variant?: "vertical" | "sideways";
+}) {
   return (
     <svg
-      className={`mini-icon chevron-icon ${expanded ? "is-expanded" : ""}`}
+      className={`mini-icon chevron-icon ${
+        expanded ? "is-expanded" : ""
+      } ${variant === "sideways" ? "is-sideways" : ""}`}
       aria-hidden="true"
       viewBox="0 0 24 24"
       fill="none"
@@ -123,7 +131,7 @@ export function ChevronDownIcon({ expanded }: { expanded: boolean }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="m6 9 6 6 6-6" />
+      <path className="chevron-mark" d="m6 9 6 6 6-6" />
     </svg>
   );
 }

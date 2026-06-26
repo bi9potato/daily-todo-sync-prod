@@ -418,14 +418,28 @@ h2 {
 }
 
 .chevron-icon {
+  --chevron-collapsed-rotation: 0deg;
+  --chevron-expanded-rotation: 180deg;
   color: var(--muted);
-  transform-box: fill-box;
-  transform-origin: center;
-  transition: transform 0.22s var(--ease);
+  transform: none;
+  transition: color 0.2s ease;
 }
 
-.chevron-icon.is-expanded {
-  transform: rotate(180deg);
+.chevron-mark {
+  transform: rotate(var(--chevron-collapsed-rotation));
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    transform 0.24s var(--ease-out);
+}
+
+.chevron-icon.is-expanded .chevron-mark {
+  transform: rotate(var(--chevron-expanded-rotation));
+}
+
+.chevron-icon.is-sideways {
+  --chevron-collapsed-rotation: -90deg;
+  --chevron-expanded-rotation: 0deg;
 }
 
 .account-dropdown {
@@ -1874,16 +1888,10 @@ h2 {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.72);
   padding: 4px;
-  transform: rotate(-90deg);
   transition:
-    transform 0.22s var(--ease),
     border-color 0.2s ease,
     background 0.2s ease,
     color 0.2s ease;
-}
-
-.long-term-section-header .chevron-icon.is-expanded {
-  transform: rotate(0deg);
 }
 
 .long-term-section-header:hover .chevron-icon {
