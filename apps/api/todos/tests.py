@@ -365,7 +365,7 @@ class CarryoverTests(TestCase):
             )
             attachment.file.close()
 
-    def test_turning_long_term_recurring_task_regular_preserves_future_content(self):
+    def test_turning_long_term_recurring_task_regular_stops_future_recurrence(self):
         start = create_task_for_day(
             self.user,
             date(2026, 6, 20),
@@ -388,13 +388,30 @@ class CarryoverTests(TestCase):
             update_occurrence(self.user, middle.id, is_long_term=False)
 
             middle.refresh_from_db()
-            future = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 22))
-            future.task.refresh_from_db()
+            middle.task.refresh_from_db()
             self.assertEqual(middle.note, "try black frame")
-            self.assertEqual(future.note, "try black frame")
-            self.assertEqual(future.task.content_mode, Task.ContentMode.OCCURRENCE)
+            self.assertEqual(middle.task.content_mode, Task.ContentMode.OCCURRENCE)
+            self.assertEqual(middle.task.recurrence_kind, Task.RecurrenceKind.NONE)
+            self.assertIsNone(middle.task.recurrence_start_date)
             self.assertTrue(TaskAttachment.objects.filter(occurrence=middle).exists())
-            self.assertTrue(TaskAttachment.objects.filter(occurrence=future).exists())
+            self.assertFalse(
+                TodoOccurrence.objects.filter(
+                    root_id=start.root_id,
+                    task_date=date(2026, 6, 22),
+                    deleted_at__isnull=True,
+                ).exists()
+            )
+
+            update_occurrence(self.user, middle.id, done=True)
+            ensure_day(self.user, date(2026, 6, 22), today=date(2026, 6, 22))
+
+            self.assertFalse(
+                TodoOccurrence.objects.filter(
+                    root_id=start.root_id,
+                    task_date=date(2026, 6, 22),
+                    deleted_at__isnull=True,
+                ).exists()
+            )
             attachment.file.close()
 
     def test_regular_task_changed_to_long_term_carries_content_forward(self):

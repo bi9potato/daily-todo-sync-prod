@@ -576,12 +576,24 @@ def update_occurrence(
         _ensure_future_content_task(user, occurrence)
     elif is_long_term is False and _uses_future_content(occurrence.task):
         task, _ = _split_task_for_future(user, occurrence)
-        _copy_future_content_to_occurrences(user, task, occurrence.task_date)
         occurrence.note = task.note
+        _copy_task_attachments_to_occurrence(user, task, occurrence)
         converted_to_occurrence_content = True
         task.note = ""
         task.content_mode = Task.ContentMode.OCCURRENCE
-        task.save(update_fields=["note", "content_mode", "updated_at"])
+        task.recurrence_kind = Task.RecurrenceKind.NONE
+        task.recurrence_interval = 1
+        task.recurrence_days_of_week = []
+        task.recurrence_until = None
+        task.recurrence_start_date = None
+        now = timezone.now()
+        TodoOccurrence.objects.filter(
+            user=user,
+            root_id=occurrence.root_id,
+            task_date__gt=occurrence.task_date,
+            source=TodoOccurrence.Source.RECURRING,
+            deleted_at__isnull=True,
+        ).update(deleted_at=now, updated_at=now)
 
     use_future_content = _uses_future_content(occurrence.task)
     occurrence_changed_fields = []

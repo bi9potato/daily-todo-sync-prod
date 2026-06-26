@@ -4057,6 +4057,9 @@ function TaskDetailsModal({
                   const next = !value;
                   if (next) {
                     setIsLowPriority(false);
+                    setRepeatKind("daily");
+                  } else {
+                    setRepeatKind("none");
                   }
                   return next;
                 });
@@ -4079,6 +4082,7 @@ function TaskDetailsModal({
                   const next = !value;
                   if (next) {
                     setIsLongTerm(false);
+                    setRepeatKind("none");
                   }
                   return next;
                 });
