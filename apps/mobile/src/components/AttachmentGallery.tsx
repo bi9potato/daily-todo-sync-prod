@@ -157,6 +157,7 @@ export function AttachmentGallery({
           {preview ? (
             <AuthenticatedImage
               contentUrl={preview.contentUrl}
+              resizeMode="contain"
               style={styles.previewImage}
             />
           ) : null}

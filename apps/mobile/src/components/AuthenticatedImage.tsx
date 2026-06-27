@@ -5,34 +5,38 @@ import {
   StyleSheet,
   View,
   type ImageStyle,
+  type ImageSourcePropType,
+  type ImageResizeMode,
   type StyleProp,
 } from "react-native";
 
 import { AppIcon } from "./AppIcon";
-import { getAuthenticatedMediaSource } from "@/lib/api";
+import { getCachedAuthenticatedMediaUri } from "@/lib/media";
 import { colors } from "@/theme";
 
 type AuthenticatedImageProps = {
   contentUrl: string;
+  resizeMode?: ImageResizeMode;
   style?: StyleProp<ImageStyle>;
 };
 
 export function AuthenticatedImage({
   contentUrl,
+  resizeMode = "cover",
   style,
 }: AuthenticatedImageProps) {
-  type MediaSource = Awaited<ReturnType<typeof getAuthenticatedMediaSource>>;
   const [resolved, setResolved] = useState<{
     contentUrl: string;
-    source: MediaSource;
+    source: ImageSourcePropType;
   } | null>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const source = resolved?.contentUrl === contentUrl ? resolved.source : null;
+  const source =
+    resolved?.contentUrl === contentUrl ? resolved.source : null;
   const failed = failedUrl === contentUrl;
 
   useEffect(() => {
     let active = true;
-    void getAuthenticatedMediaSource(contentUrl)
+    void getCachedAuthenticatedMediaUri(contentUrl)
       .then((nextSource) => {
         if (active) {
           setResolved({ contentUrl, source: nextSource });
@@ -67,7 +71,7 @@ export function AuthenticatedImage({
   return (
     <Image
       onError={() => setFailedUrl(contentUrl)}
-      resizeMode="cover"
+      resizeMode={resizeMode}
       source={source}
       style={style}
     />

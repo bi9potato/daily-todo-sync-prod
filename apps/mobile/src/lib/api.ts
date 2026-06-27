@@ -259,21 +259,34 @@ export function reorderTaskAttachments(
   });
 }
 
-export async function getAuthenticatedMediaSource(contentUrl: string) {
-  const tokens = getMemoryTokens() ?? (await loadTokens());
-  if (!tokens) {
-    throw new Error("请先登录。");
-  }
+function resolveMediaUrl(contentUrl: string) {
   const origin = API_BASE_URL.replace(/\/api\/?$/, "");
-  const uri = /^https?:\/\//i.test(contentUrl)
+  return /^https?:\/\//i.test(contentUrl)
     ? contentUrl
     : contentUrl.startsWith("/api/")
       ? `${origin}${contentUrl}`
       : `${API_BASE_URL}/${contentUrl.replace(/^\//, "")}`;
-  return {
-    uri,
+}
+
+export async function getAuthenticatedMediaBlob(
+  contentUrl: string,
+  canRetry = true,
+) {
+  const tokens = getMemoryTokens() ?? (await loadTokens());
+  if (!tokens) {
+    throw new Error("请先登录。");
+  }
+  const response = await fetch(resolveMediaUrl(contentUrl), {
     headers: { Authorization: `Bearer ${tokens.accessToken}` },
-  };
+  });
+  if (response.status === 401 && canRetry) {
+    await refreshAccessToken();
+    return getAuthenticatedMediaBlob(contentUrl, false);
+  }
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.blob();
 }
 
 export function chatWithAi(message: string, date?: string) {

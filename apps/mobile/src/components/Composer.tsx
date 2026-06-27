@@ -127,19 +127,20 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
 
 const styles = StyleSheet.create({
   wrapper: {
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    marginHorizontal: spacing.md,
   },
   container: {
-    ...shadows.panel,
+    ...shadows.floating,
     alignItems: "center",
-    backgroundColor: colors.surfaceStrong,
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
     borderRadius: radius.full,
+    borderWidth: 1,
     flexDirection: "row",
     gap: spacing.sm,
-    minHeight: 58,
-    paddingHorizontal: spacing.sm,
+    minHeight: 56,
+    paddingHorizontal: 7,
   },
   addButton: {
     alignItems: "center",

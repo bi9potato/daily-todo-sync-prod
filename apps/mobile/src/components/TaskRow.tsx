@@ -32,7 +32,14 @@ export function TaskRow({
       accessibilityHint="打开任务详情"
       accessibilityRole="button"
       onPress={() => onPress(task)}
-      style={({ pressed }) => [styles.container, pressed && styles.pressed]}>
+      style={({ pressed }) => [
+        styles.container,
+        task.isLongTerm && styles.longTermContainer,
+        task.isLowPriority && !task.isLongTerm && styles.lowPriorityContainer,
+        task.isPinned && styles.pinnedContainer,
+        done && styles.doneContainer,
+        pressed && styles.pressed,
+      ]}>
       <AppIcon name="reorder-two-outline" color={colors.textMuted} size={18} />
       <Pressable
         accessibilityLabel={done ? "标记为未完成" : "标记为已完成"}
@@ -63,7 +70,7 @@ export function TaskRow({
         ) : null}
         {task.isPinned ? (
           <View style={styles.pinnedTag}>
-            <AppIcon name="pin-outline" color={colors.accent} size={12} />
+            <AppIcon name="bookmark" color={colors.accent} size={12} />
             <Text style={styles.pinnedText}>置顶</Text>
           </View>
         ) : null}
@@ -97,9 +104,9 @@ export function TaskRow({
           pressed && styles.pressed,
         ]}>
         <AppIcon
-          name="pin-outline"
+          name={task.isPinned ? "bookmark" : "bookmark-outline"}
           color={task.isPinned ? colors.accent : colors.textMuted}
-          size={19}
+          size={18}
         />
       </Pressable>
       <Pressable
@@ -130,6 +137,27 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minHeight: 68,
     padding: spacing.sm,
+  },
+  pinnedContainer: {
+    backgroundColor: "#F1F7F2",
+    borderColor: "#789382",
+    borderTopWidth: 3,
+    elevation: 3,
+  },
+  longTermContainer: {
+    backgroundColor: "#FFF9EC",
+    borderColor: "#C4A45D",
+    borderLeftWidth: 4,
+  },
+  lowPriorityContainer: {
+    backgroundColor: "#EEF5F6",
+    borderColor: "#8299A1",
+    borderLeftWidth: 4,
+  },
+  doneContainer: {
+    backgroundColor: "#F5F7F3",
+    elevation: 0,
+    opacity: 0.76,
   },
   pressed: {
     opacity: 0.64,
@@ -173,9 +201,9 @@ const styles = StyleSheet.create({
   pinnedTag: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: colors.surfaceMuted,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
+    backgroundColor: "#E3EEE5",
+    borderColor: "#A9BDAE",
+    borderRadius: radius.full,
     borderWidth: 1,
     flexDirection: "row",
     gap: 2,
@@ -198,8 +226,9 @@ const styles = StyleSheet.create({
     width: 40,
   },
   actionButtonActive: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.borderStrong,
+    backgroundColor: "#DDEBE1",
+    borderColor: "#789382",
+    borderWidth: 1.5,
   },
   attachmentPreview: {
     borderColor: colors.border,

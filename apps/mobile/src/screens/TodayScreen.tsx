@@ -1,6 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Alert,
+  KeyboardAvoidingView,
+  LayoutAnimation,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -43,6 +46,36 @@ type TodayScreenProps = {
   viewMode?: "my-day" | "long-term" | "low-priority";
 };
 
+type DragPreview = {
+  orderedIds: string[];
+  section: "long-term" | "regular" | "low-priority";
+};
+
+function compareOccurrences(left: TodoOccurrence, right: TodoOccurrence) {
+  if (left.isPinned !== right.isPinned) {
+    return left.isPinned ? -1 : 1;
+  }
+  if (left.sortOrder !== right.sortOrder) {
+    return left.sortOrder - right.sortOrder;
+  }
+  return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+}
+
+function applyPreviewOrder(
+  tasks: TodoOccurrence[],
+  preview: DragPreview | null,
+  section: DragPreview["section"],
+) {
+  if (preview?.section !== section) {
+    return tasks;
+  }
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const ordered = preview.orderedIds
+    .map((id) => taskById.get(id))
+    .filter((task): task is TodoOccurrence => Boolean(task));
+  return ordered.length === tasks.length ? ordered : tasks;
+}
+
 function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
   if (!data) {
     return data;
@@ -81,6 +114,8 @@ export function TodayScreen({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [longTermOpen, setLongTermOpen] = useState(false);
   const [lowPriorityOpen, setLowPriorityOpen] = useState(false);
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const dragPreviewRef = useRef<DragPreview | null>(null);
 
   const dayQuery = useQuery({
     queryKey: ["day", selectedDate],
@@ -270,33 +305,44 @@ export function TodayScreen({
     },
   });
 
-  const groups = useMemo(() => {
-    const pending = dayQuery.data?.pending ?? [];
+  const baseGroups = useMemo(() => {
+    const all = [
+      ...(dayQuery.data?.pending ?? []),
+      ...(dayQuery.data?.done ?? []),
+    ].sort(compareOccurrences);
     return {
-      pinned: pending.filter(
-        (task) => task.isPinned && !task.isLongTerm && !task.isLowPriority,
-      ),
-      regular: pending.filter(
-        (task) => !task.isPinned && !task.isLongTerm && !task.isLowPriority,
-      ),
-      longTerm: pending.filter((task) => task.isLongTerm),
-      lowPriority: pending.filter((task) => task.isLowPriority),
-      done: dayQuery.data?.done ?? [],
-      doneLongTerm: (dayQuery.data?.done ?? []).filter(
-        (task) => task.isLongTerm,
-      ),
-      doneLowPriority: (dayQuery.data?.done ?? []).filter(
-        (task) => task.isLowPriority,
+      regular: all.filter((task) => !task.isLongTerm && !task.isLowPriority),
+      longTerm: all.filter((task) => task.isLongTerm),
+      lowPriority: all.filter(
+        (task) => !task.isLongTerm && task.isLowPriority,
       ),
     };
   }, [dayQuery.data]);
+  const groups = useMemo(
+    () => ({
+      regular: applyPreviewOrder(baseGroups.regular, dragPreview, "regular"),
+      longTerm: applyPreviewOrder(
+        baseGroups.longTerm,
+        dragPreview,
+        "long-term",
+      ),
+      lowPriority: applyPreviewOrder(
+        baseGroups.lowPriority,
+        dragPreview,
+        "low-priority",
+      ),
+    }),
+    [baseGroups, dragPreview],
+  );
 
   const total =
     viewMode === "long-term"
-      ? groups.longTerm.length + groups.doneLongTerm.length
+      ? groups.longTerm.length
       : viewMode === "low-priority"
-        ? groups.lowPriority.length + groups.doneLowPriority.length
-        : (dayQuery.data?.pending.length ?? 0) + groups.done.length;
+        ? groups.lowPriority.length
+        : groups.longTerm.length +
+          groups.regular.length +
+          groups.lowPriority.length;
   function toggle(task: TodoOccurrence) {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateMutation.mutate({
@@ -324,24 +370,55 @@ export function TodayScreen({
     ]);
   }
 
-  function moveTasks(tasks: TodoOccurrence[], fromIndex: number, toIndex: number) {
-    const current = dayQuery.data;
-    if (!current || fromIndex === toIndex) {
+  function previewTaskOrder(
+    section: DragPreview["section"],
+    tasks: TodoOccurrence[],
+    taskId: string,
+    toIndex: number,
+  ) {
+    const fromIndex = tasks.findIndex((task) => task.id === taskId);
+    if (fromIndex === -1 || fromIndex === toIndex) {
+      return;
+    }
+    if (tasks[toIndex]?.isPinned !== tasks[fromIndex]?.isPinned) {
       return;
     }
     const reordered = [...tasks];
     const [moved] = reordered.splice(fromIndex, 1);
     reordered.splice(toIndex, 0, moved);
-    const visibleIds = new Set(tasks.map((task) => task.id));
-    let visibleIndex = 0;
-    const pending = current.pending.map((task) =>
-      visibleIds.has(task.id) ? reordered[visibleIndex++] : task,
+    const next = { section, orderedIds: reordered.map((task) => task.id) };
+    if (
+      dragPreviewRef.current?.section === next.section &&
+      dragPreviewRef.current.orderedIds.join("|") === next.orderedIds.join("|")
+    ) {
+      return;
+    }
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    dragPreviewRef.current = next;
+    setDragPreview(next);
+  }
+
+  function finishTaskDrag() {
+    const preview = dragPreviewRef.current;
+    const current = dayQuery.data;
+    if (!preview || !current) {
+      return;
+    }
+    const orderById = new Map(
+      preview.orderedIds.map((id, index) => [id, (index + 1) * 1000]),
     );
+    const updateSortOrder = (task: TodoOccurrence) =>
+      orderById.has(task.id)
+        ? { ...task, sortOrder: orderById.get(task.id) ?? task.sortOrder }
+        : task;
     queryClient.setQueryData<DayTodos>(["day", selectedDate], {
       ...current,
-      pending,
+      pending: current.pending.map(updateSortOrder).sort(compareOccurrences),
+      done: current.done.map(updateSortOrder).sort(compareOccurrences),
     });
-    reorderMutation.mutate(pending.map((task) => task.id));
+    reorderMutation.mutate(preview.orderedIds);
+    dragPreviewRef.current = null;
+    setDragPreview(null);
   }
 
   const content = dayQuery.isPending ? (
@@ -354,6 +431,8 @@ export function TodayScreen({
   ) : (
     <ScrollView
       contentContainerStyle={styles.scrollContent}
+      keyboardDismissMode="interactive"
+      keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
           colors={[colors.accent]}
@@ -377,9 +456,12 @@ export function TodayScreen({
             count={groups.longTerm.length}
             isOpen={longTermOpen}
             onDelete={confirmDelete}
-            onMove={(from, to) => moveTasks(groups.longTerm, from, to)}
+            onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
+            onPreviewMove={(id, to) =>
+              previewTaskOrder("long-term", groups.longTerm, id, to)
+            }
             onToggle={toggle}
             onToggleOpen={() => setLongTermOpen((current) => !current)}
             tasks={groups.longTerm}
@@ -387,80 +469,63 @@ export function TodayScreen({
           />
           <TaskGroup
             onDelete={confirmDelete}
-            onMove={(from, to) =>
-              moveTasks([...groups.pinned, ...groups.regular], from, to)
-            }
+            onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
+            onPreviewMove={(id, to) =>
+              previewTaskOrder("regular", groups.regular, id, to)
+            }
             onToggle={toggle}
-            tasks={[...groups.pinned, ...groups.regular]}
+            tasks={groups.regular}
             title=""
           />
           <CollapsibleTaskGroup
             count={groups.lowPriority.length}
             isOpen={lowPriorityOpen}
             onDelete={confirmDelete}
-            onMove={(from, to) => moveTasks(groups.lowPriority, from, to)}
+            onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
+            onPreviewMove={(id, to) =>
+              previewTaskOrder("low-priority", groups.lowPriority, id, to)
+            }
             onToggle={toggle}
             onToggleOpen={() => setLowPriorityOpen((current) => !current)}
             tasks={groups.lowPriority}
             title="低优先级"
           />
-          <TaskGroup
-            draggable={false}
-            onDelete={confirmDelete}
-            onMove={() => undefined}
-            onPin={togglePin}
-            onPress={(task) => setSelectedTaskId(task.id)}
-            onToggle={toggle}
-            tasks={groups.done}
-            title={groups.done.length ? "已完成" : ""}
-          />
         </>
       ) : (
-        <>
-          <TaskGroup
-            onDelete={confirmDelete}
-            onMove={(from, to) =>
-              moveTasks(
-                viewMode === "long-term"
-                  ? groups.longTerm
-                  : groups.lowPriority,
-                from,
-                to,
-              )
-            }
-            onPin={togglePin}
-            onPress={(task) => setSelectedTaskId(task.id)}
-            onToggle={toggle}
-            tasks={
-              viewMode === "long-term" ? groups.longTerm : groups.lowPriority
-            }
-            title="待处理"
-          />
-          <TaskGroup
-            draggable={false}
-            onDelete={confirmDelete}
-            onMove={() => undefined}
-            onPin={togglePin}
-            onPress={(task) => setSelectedTaskId(task.id)}
-            onToggle={toggle}
-            tasks={
+        <TaskGroup
+          onDelete={confirmDelete}
+          onDrop={finishTaskDrag}
+          onPin={togglePin}
+          onPress={(task) => setSelectedTaskId(task.id)}
+          onPreviewMove={(id, to) =>
+            previewTaskOrder(
+              viewMode === "long-term" ? "long-term" : "low-priority",
               viewMode === "long-term"
-                ? groups.doneLongTerm
-                : groups.doneLowPriority
-            }
-            title="已完成"
-          />
-        </>
+                ? groups.longTerm
+                : groups.lowPriority,
+              id,
+              to,
+            )
+          }
+          onToggle={toggle}
+          tasks={
+            viewMode === "long-term" ? groups.longTerm : groups.lowPriority
+          }
+          title=""
+        />
       )}
     </ScrollView>
   );
 
   return (
-    <View style={styles.page}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={0}
+      style={styles.page}>
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>
@@ -516,27 +581,27 @@ export function TodayScreen({
         }}
         task={selectedTask}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 function TaskGroup({
-  draggable = true,
   title,
   tasks,
   onDelete,
-  onMove,
+  onDrop,
   onPin,
   onPress,
+  onPreviewMove,
   onToggle,
 }: {
-  draggable?: boolean;
   title: string;
   tasks: TodoOccurrence[];
   onDelete: (task: TodoOccurrence) => void;
-  onMove: (fromIndex: number, toIndex: number) => void;
+  onDrop: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
+  onPreviewMove: (id: string, toIndex: number) => void;
   onToggle: (task: TodoOccurrence) => void;
 }) {
   if (!tasks.length) {
@@ -545,32 +610,23 @@ function TaskGroup({
   return (
     <View style={styles.group}>
       {title ? <Text style={styles.groupTitle}>{title}</Text> : null}
-      {tasks.map((task, index) =>
-        draggable ? (
-          <DraggableTaskItem
-            index={index}
-            key={task.id}
-            onMove={onMove}
-            total={tasks.length}>
-            <TaskRow
-              onDelete={onDelete}
-              onPin={onPin}
-              onPress={onPress}
-              onToggle={onToggle}
-              task={task}
-            />
-          </DraggableTaskItem>
-        ) : (
+      {tasks.map((task, index) => (
+        <DraggableTaskItem
+          id={task.id}
+          index={index}
+          key={task.id}
+          onDrop={onDrop}
+          onPreviewMove={onPreviewMove}
+          total={tasks.length}>
           <TaskRow
-            key={task.id}
             onDelete={onDelete}
             onPin={onPin}
             onPress={onPress}
             onToggle={onToggle}
             task={task}
           />
-        ),
-      )}
+        </DraggableTaskItem>
+      ))}
     </View>
   );
 }
@@ -579,9 +635,10 @@ function CollapsibleTaskGroup({
   count,
   isOpen,
   onDelete,
-  onMove,
+  onDrop,
   onPin,
   onPress,
+  onPreviewMove,
   onToggle,
   onToggleOpen,
   tasks,
@@ -590,9 +647,10 @@ function CollapsibleTaskGroup({
   count: number;
   isOpen: boolean;
   onDelete: (task: TodoOccurrence) => void;
-  onMove: (fromIndex: number, toIndex: number) => void;
+  onDrop: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
+  onPreviewMove: (id: string, toIndex: number) => void;
   onToggle: (task: TodoOccurrence) => void;
   onToggleOpen: () => void;
   tasks: TodoOccurrence[];
@@ -614,9 +672,11 @@ function CollapsibleTaskGroup({
       {isOpen
         ? tasks.map((task, index) => (
             <DraggableTaskItem
+              id={task.id}
               index={index}
               key={task.id}
-              onMove={onMove}
+              onDrop={onDrop}
+              onPreviewMove={onPreviewMove}
               total={tasks.length}>
               <TaskRow
                 onDelete={onDelete}

@@ -7,15 +7,19 @@ const ESTIMATED_ROW_HEIGHT = 84;
 
 type DraggableTaskItemProps = {
   children: ReactNode;
+  id: string;
   index: number;
-  onMove: (fromIndex: number, toIndex: number) => void;
+  onDrop: () => void;
+  onPreviewMove: (id: string, toIndex: number) => void;
   total: number;
 };
 
 export function DraggableTaskItem({
   children,
+  id,
   index,
-  onMove,
+  onDrop,
+  onPreviewMove,
   total,
 }: DraggableTaskItemProps) {
   const [translateY] = useState(() => new Animated.Value(0));
@@ -32,14 +36,13 @@ export function DraggableTaskItem({
         })
         .onUpdate((event) => {
           translateY.setValue(event.translationY);
-        })
-        .onEnd((event) => {
           const offset = Math.round(event.translationY / ESTIMATED_ROW_HEIGHT);
           const target = Math.max(0, Math.min(total - 1, index + offset));
           if (target !== index) {
-            onMove(index, target);
+            onPreviewMove(id, target);
           }
         })
+        .onEnd(onDrop)
         .onFinalize(() => {
           Animated.spring(translateY, {
             damping: 18,
@@ -49,7 +52,7 @@ export function DraggableTaskItem({
             useNativeDriver: true,
           }).start(() => setActive(false));
         }),
-    [index, onMove, total, translateY],
+    [id, index, onDrop, onPreviewMove, total, translateY],
   );
 
   return (
