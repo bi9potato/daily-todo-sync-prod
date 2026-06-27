@@ -1,0 +1,112 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/mobile/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  EXPO_NO_TELEMETRY: "1"
+  EXPO_PUBLIC_API_BASE_URL: ${{ vars.MOBILE_API_BASE_URL || 'https://68.183.180.19.sslip.io/api' }}
+
+jobs:
+  build:
+    name: Build installable debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore stable debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: ${{ runner.os }}-daily-todo-debug-keystore-v1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck mobile app
+        run: pnpm check:mobile
+
+      - name: Lint mobile app
+        run: pnpm --filter @daily-todo-sync/mobile lint
+
+      - name: Validate Expo project
+        run: pnpm --filter @daily-todo-sync/mobile doctor
+
+      - name: Generate Android project
+        run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean
+
+      - name: Build debug APK
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare artifact and checksum
+        run: |
+          mkdir -p artifacts
+          cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk artifacts/daily-todo-debug.apk
+          sha256sum artifacts/daily-todo-debug.apk > artifacts/daily-todo-debug.apk.sha256
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-todo-android-debug
+          path: |
+            artifacts/daily-todo-debug.apk
+            artifacts/daily-todo-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Add download instructions
+        run: |
+          {
+            echo "### Android test APK"
+            echo
+            echo "Download **daily-todo-android-debug** from the Artifacts section below."
+            echo "Unzip it, verify the SHA-256 file, then install **daily-todo-debug.apk**."
+            echo
+            echo "> This is a debug-signed APK for internal testing, not a Play Store release."
+          } >> "$GITHUB_STEP_SUMMARY"

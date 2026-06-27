@@ -28,8 +28,29 @@ EXPO_PUBLIC_API_BASE_URL=https://example.com/api
 ```bash
 pnpm check:mobile
 pnpm --filter @daily-todo-sync/mobile lint
-pnpm --filter @daily-todo-sync/mobile exec expo-doctor
+pnpm --filter @daily-todo-sync/mobile doctor
 ```
+
+## 下载 Android 测试 APK
+
+移动端相关文件推送到 `main` 后，GitHub Actions 会运行 `Android APK`：
+
+1. 打开仓库的 `Actions` 页面。
+2. 在左侧选择 `Android APK`。
+3. 打开最新的成功运行。
+4. 在页面底部 `Artifacts` 下载 `daily-todo-android-debug`。
+5. 解压后安装 `daily-todo-debug.apk`。
+
+压缩包同时包含 `daily-todo-debug.apk.sha256`。Windows 可用以下命令校验：
+
+```powershell
+Get-FileHash .\daily-todo-debug.apk -Algorithm SHA256
+```
+
+APK 使用稳定缓存的 Android Debug 签名，仅用于内部测试。正式发布需要独立的生产签名和 AAB。
+
+如需更换 APK 内置的 API 地址，在仓库 `Settings → Secrets and variables → Actions →
+Variables` 中设置 `MOBILE_API_BASE_URL`。
 
 ## 目录
 

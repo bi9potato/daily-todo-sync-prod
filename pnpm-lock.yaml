@@ -74,6 +74,9 @@ importers:
       eslint-config-expo:
         specifier: ~56.0.4
         version: 56.0.4(eslint@9.39.4)(typescript@6.0.3)
+      expo-doctor:
+        specifier: 1.19.10
+        version: 1.19.10
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -2354,6 +2357,11 @@ packages:
     peerDependencies:
       expo: '*'
       react-native: '*'
+
+  expo-doctor@1.19.10:
+    resolution: {integrity: sha512-cU9bzKzAggjQRY0P1JbGgB5G5FiQ4Rf4pNzGlx4sDDK4sCMowLWxzkIwk2pbiKLE+4+09iY5CsysWnidPLz+FA==}
+    engines: {node: ^20.19.4 || ^22.13.0 || ^24.3.0 || >= 25.0.0}
+    hasBin: true
 
   expo-file-system@56.0.8:
     resolution: {integrity: sha512-NrH41/8snGIBSbYicwVLB4txPdgCATd7ZYhMAGS3YJZ9GbnduhlAoV4/YCbGayjrbpE9bJb/6wegPL/zmvRMnQ==}
@@ -6952,6 +6960,8 @@ snapshots:
       react-native: 0.85.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
     transitivePeerDependencies:
       - supports-color
+
+  expo-doctor@1.19.10: {}
 
   expo-file-system@56.0.8(expo@56.0.12)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)):
     dependencies:
