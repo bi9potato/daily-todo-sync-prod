@@ -1,4 +1,4 @@
-import { getAuthenticatedMediaBlob } from "./api";
+import { getAuthenticatedMediaBlob, getAuthenticatedMediaSource } from "./api";
 
 type CachedMediaSource = {
   uri: string;
@@ -19,6 +19,10 @@ function blobToDataUri(blob: Blob) {
 }
 
 async function downloadAuthenticatedMedia(contentUrl: string) {
+  return getAuthenticatedMediaSource(contentUrl);
+}
+
+export async function getCachedAuthenticatedMediaDataUri(contentUrl: string) {
   return { uri: await blobToDataUri(await getAuthenticatedMediaBlob(contentUrl)) };
 }
 
