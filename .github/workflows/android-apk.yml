@@ -72,7 +72,7 @@ jobs:
         run: pnpm --filter @daily-todo-sync/mobile lint
 
       - name: Validate Expo project
-        run: pnpm --filter @daily-todo-sync/mobile doctor
+        run: pnpm --dir apps/mobile run doctor
 
       - name: Generate Android project
         run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean
