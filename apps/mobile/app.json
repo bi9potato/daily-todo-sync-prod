@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Daily Todo",
+    "slug": "daily-todo-sync",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/app-icon.png",
+    "scheme": "daily-todo",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "icon": "./assets/images/app-icon.png",
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dailytodosync.app"
+    },
+    "android": {
+      "package": "com.dailytodosync.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFEFA",
+        "foregroundImage": "./assets/images/app-icon.png"
+      },
+      "predictiveBackGestureEnabled": true
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/app-icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFEFA",
+          "image": "./assets/images/app-icon.png",
+          "imageWidth": 112,
+          "android": {
+            "image": "./assets/images/app-icon.png",
+            "imageWidth": 112
+          }
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
