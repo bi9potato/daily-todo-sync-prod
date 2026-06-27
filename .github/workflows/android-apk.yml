@@ -13,7 +13,7 @@ on:
       - ".github/workflows/android-apk.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-apk-${{ github.ref }}
@@ -98,13 +98,58 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      - name: Publish latest Android test release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: android-latest
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" > /dev/null 2>&1; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" \
+              -F force=true > /dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" > /dev/null
+          fi
+
+          {
+            echo "Automated Android test build from \`main\`."
+            echo
+            echo "- Commit: [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})"
+            echo "- Architecture: \`arm64-v8a\`"
+            echo "- Signing: test key (internal testing only)"
+          } > release-notes.md
+
+          if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" \
+              --title "Latest Android Test Build" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "${RELEASE_TAG}" \
+              --title "Latest Android Test Build" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
+
+          gh release upload "${RELEASE_TAG}" \
+            artifacts/daily-todo-arm64-v8a.apk \
+            artifacts/daily-todo-arm64-v8a.apk.sha256 \
+            --clobber
+
       - name: Add download instructions
         run: |
           {
             echo "### Android test APK"
             echo
-            echo "Download **daily-todo-android-arm64-v8a** from the Artifacts section below."
-            echo "Unzip it, verify the SHA-256 file, then install **daily-todo-arm64-v8a.apk**."
+            echo "Download the APK directly from the [Latest Android Test Build release](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/android-latest)."
+            echo
+            echo "Direct APK: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/android-latest/daily-todo-arm64-v8a.apk"
             echo
             echo "> This is a standalone, test-signed arm64-v8a APK for internal testing, not a Play Store release."
           } >> "$GITHUB_STEP_SUMMARY"
