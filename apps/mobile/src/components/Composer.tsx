@@ -9,20 +9,31 @@ import {
   Keyboard,
   Pressable,
   StyleSheet,
+  Text,
   TextInput,
   View,
 } from "react-native";
 
 import { AppIcon } from "./AppIcon";
-import { colors, radius, shadows, spacing } from "@/theme";
+import { colors, radius, spacing } from "@/theme";
+
+type ComposerMode = "task" | "ai";
 
 type ComposerProps = {
   isPending: boolean;
+  lastAiReply?: string;
+  onAiSubmit?: (text: string) => Promise<void>;
   onSubmit: (text: string) => Promise<void>;
 };
 
-export function Composer({ isPending, onSubmit }: ComposerProps) {
+export function Composer({
+  isPending,
+  lastAiReply,
+  onAiSubmit,
+  onSubmit,
+}: ComposerProps) {
   const [text, setText] = useState("");
+  const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
@@ -64,17 +75,30 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
     if (!value || isPending) {
       return;
     }
-    await onSubmit(value);
+    if (mode === "ai") {
+      await onAiSubmit?.(value);
+    } else {
+      await onSubmit(value);
+    }
     setText("");
     Keyboard.dismiss();
   }
 
   return (
     <View style={styles.wrapper}>
-      <View style={styles.container}>
-        <View style={styles.addButton}>
-          <AppIcon name="add" color={colors.textMuted} size={22} />
-        </View>
+      <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
+        <Pressable
+          accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
+          accessibilityRole="button"
+          accessibilityState={{ selected: mode === "ai" }}
+          onPress={() => setMode((current) => (current === "ai" ? "task" : "ai"))}
+          style={[styles.addButton, mode === "ai" && styles.aiButton]}>
+          <AppIcon
+            name={mode === "ai" ? "sparkles" : "add"}
+            color={mode === "ai" ? colors.white : colors.textMuted}
+            size={22}
+          />
+        </Pressable>
         <TextInput
           accessibilityLabel="添加任务"
           autoCapitalize="sentences"
@@ -82,12 +106,17 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
           editable={!isPending}
           onChangeText={setText}
           onSubmitEditing={submit}
-          placeholder="添加任务，按 Enter 保存"
+          placeholder={
+            mode === "ai"
+              ? "用 AI 管理任务，例如：整理今天"
+              : "添加任务，按 Enter 保存"
+          }
           placeholderTextColor={colors.textMuted}
           returnKeyType="done"
           style={styles.input}
           value={text}
         />
+        {mode === "task" ? (
         <Pressable
           accessibilityLabel={isListening ? "停止语音输入" : "语音输入"}
           accessibilityRole="button"
@@ -104,8 +133,9 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
             size={18}
           />
         </Pressable>
+        ) : null}
         <Pressable
-          accessibilityLabel="保存任务"
+          accessibilityLabel={mode === "ai" ? "发送 AI 指令" : "保存任务"}
           accessibilityRole="button"
           disabled={!text.trim() || isPending}
           onPress={submit}
@@ -117,10 +147,16 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
           {isPending ? (
             <ActivityIndicator color={colors.white} size="small" />
           ) : (
-            <AppIcon name="arrow-up" color={colors.white} size={20} />
+            <AppIcon name={mode === "ai" ? "send" : "arrow-up"} color={colors.white} size={20} />
           )}
         </Pressable>
       </View>
+      {mode === "ai" && lastAiReply ? (
+        <View style={styles.aiReply}>
+          <AppIcon name="sparkles" color={colors.accent} size={14} />
+          <Text style={styles.aiReplyText}>{lastAiReply}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -129,9 +165,9 @@ const styles = StyleSheet.create({
   wrapper: {
     marginBottom: spacing.sm,
     marginHorizontal: spacing.md,
+    pointerEvents: "box-none",
   },
   container: {
-    ...shadows.floating,
     alignItems: "center",
     backgroundColor: colors.surface,
     borderColor: colors.borderStrong,
@@ -142,6 +178,9 @@ const styles = StyleSheet.create({
     minHeight: 56,
     paddingHorizontal: 7,
   },
+  aiContainer: {
+    borderColor: colors.accent,
+  },
   addButton: {
     alignItems: "center",
     borderRadius: radius.full,
@@ -149,6 +188,9 @@ const styles = StyleSheet.create({
     height: 40,
     justifyContent: "center",
     width: 40,
+  },
+  aiButton: {
+    backgroundColor: colors.accent,
   },
   input: {
     color: colors.text,
@@ -183,5 +225,23 @@ const styles = StyleSheet.create({
   },
   submitPressed: {
     backgroundColor: colors.accentPressed,
+  },
+  aiReply: {
+    alignItems: "flex-start",
+    alignSelf: "stretch",
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+    padding: spacing.sm,
+  },
+  aiReplyText: {
+    color: colors.text,
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

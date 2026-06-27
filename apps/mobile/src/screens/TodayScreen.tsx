@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
+  UIManager,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -11,6 +12,7 @@ import {
   Text,
   View,
 } from "react-native";
+
 import * as Haptics from "expo-haptics";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -21,6 +23,7 @@ import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
 import {
+  chatWithAi,
   copyLongTermOccurrenceAsRegular,
   createTask,
   deleteTaskAttachment,
@@ -40,6 +43,10 @@ import type {
   TaskUpdatePayload,
   TodoOccurrence,
 } from "@/types";
+
+if (Platform.OS === "android") {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
 
 type TodayScreenProps = {
   selectedDate: string;
@@ -294,6 +301,15 @@ export function TodayScreen({
     },
   });
 
+  const aiChatMutation = useMutation({
+    mutationFn: (message: string) => chatWithAi(message, selectedDate),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["day", selectedDate] });
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+    onError: (error) => Alert.alert("AI 请求失败", error.message),
+  });
+
   const reorderMutation = useMutation({
     mutationFn: (orderedIds: string[]) => reorderDay(selectedDate, orderedIds),
     onError: (error) => {
@@ -540,7 +556,9 @@ export function TodayScreen({
       </View>
       {content}
       <Composer
-        isPending={createMutation.isPending}
+        isPending={createMutation.isPending || aiChatMutation.isPending}
+        lastAiReply={aiChatMutation.data?.reply}
+        onAiSubmit={(text) => aiChatMutation.mutateAsync(text).then(() => undefined)}
         onSubmit={(text) => createMutation.mutateAsync(text).then(() => undefined)}
       />
       <TaskEditor

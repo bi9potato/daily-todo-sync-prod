@@ -28,7 +28,9 @@ export function DraggableTaskItem({
   const gesture = useMemo(
     () =>
       Gesture.Pan()
-        .activateAfterLongPress(280)
+        .activateAfterLongPress(220)
+        .averageTouches(true)
+        .shouldCancelWhenOutside(false)
         .runOnJS(true)
         .onStart(() => {
           setActive(true);
@@ -42,7 +44,9 @@ export function DraggableTaskItem({
             onPreviewMove(id, target);
           }
         })
-        .onEnd(onDrop)
+        .onEnd(() => {
+          onDrop();
+        })
         .onFinalize(() => {
           Animated.spring(translateY, {
             damping: 18,
