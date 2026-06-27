@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,8 +15,15 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
+import { AttachmentGallery } from "./AttachmentGallery";
 import { colors, radius, spacing, typography } from "@/theme";
-import type { RepeatKind, TaskUpdatePayload, TodoOccurrence } from "@/types";
+import type {
+  LocalAttachmentFile,
+  RepeatKind,
+  TaskAttachment,
+  TaskUpdatePayload,
+  TodoOccurrence,
+} from "@/types";
 
 const repeatOptions: { value: RepeatKind; label: string }[] = [
   { value: "none", label: "不重复" },
@@ -29,18 +36,28 @@ const repeatOptions: { value: RepeatKind; label: string }[] = [
 
 type TaskEditorProps = {
   task: TodoOccurrence | null;
+  isAttachmentMutating: boolean;
   isSaving: boolean;
   onClose: () => void;
+  onCopyAsRegular: (task: TodoOccurrence) => void;
   onDelete: (task: TodoOccurrence) => void;
+  onDeleteAttachment: (attachment: TaskAttachment) => void;
+  onReorderAttachments: (orderedIds: string[]) => void;
   onSave: (task: TodoOccurrence, payload: TaskUpdatePayload) => void;
+  onUploadAttachment: (file: LocalAttachmentFile) => void;
 };
 
 export function TaskEditor({
   task,
+  isAttachmentMutating,
   isSaving,
   onClose,
+  onCopyAsRegular,
   onDelete,
+  onDeleteAttachment,
+  onReorderAttachments,
   onSave,
+  onUploadAttachment,
 }: TaskEditorProps) {
   const insets = useSafeAreaInsets();
   const [text, setText] = useState(task?.text ?? "");
@@ -203,12 +220,37 @@ export function TaskEditor({
           </Field>
 
           {task ? (
-            <Pressable
-              onPress={() => onDelete(task)}
-              style={({ pressed }) => [styles.deleteButton, pressed && styles.pressed]}>
-              <AppIcon name="trash-outline" color={colors.danger} size={20} />
-              <Text style={styles.deleteText}>删除任务</Text>
-            </Pressable>
+            <>
+              <AttachmentGallery
+                isMutating={isAttachmentMutating}
+                onDelete={onDeleteAttachment}
+                onReorder={onReorderAttachments}
+                onUpload={onUploadAttachment}
+                task={task}
+              />
+              <View style={styles.footerActions}>
+                {task.isLongTerm ? (
+                  <Pressable
+                    onPress={() => onCopyAsRegular(task)}
+                    style={({ pressed }) => [
+                      styles.copyButton,
+                      pressed && styles.pressed,
+                    ]}>
+                    <AppIcon name="copy-outline" color={colors.accent} size={20} />
+                    <Text style={styles.copyText}>复制为普通任务</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => onDelete(task)}
+                  style={({ pressed }) => [
+                    styles.deleteButton,
+                    pressed && styles.pressed,
+                  ]}>
+                  <AppIcon name="trash-outline" color={colors.danger} size={20} />
+                  <Text style={styles.deleteText}>删除任务</Text>
+                </Pressable>
+              </View>
+            </>
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -216,7 +258,7 @@ export function TaskEditor({
   );
 }
 
-function Field({ children, label }: { children: React.ReactNode; label: string }) {
+function Field({ children, label }: { children: ReactNode; label: string }) {
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
@@ -409,5 +451,19 @@ const styles = StyleSheet.create({
   deleteText: {
     ...typography.label,
     color: colors.danger,
+  },
+  footerActions: {
+    alignItems: "flex-start",
+    gap: spacing.sm,
+  },
+  copyButton: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 44,
+  },
+  copyText: {
+    ...typography.label,
+    color: colors.accent,
   },
 });

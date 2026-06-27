@@ -41,6 +41,23 @@
       ],
       "expo-secure-store",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 Daily Todo 选择任务图片。",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "允许 Daily Todo 使用麦克风添加任务。",
+          "speechRecognitionPermission": "允许 Daily Todo 将语音转换为任务文字。",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

@@ -1,6 +1,11 @@
 import { useState } from "react";
 import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from "expo-speech-recognition";
+import {
   ActivityIndicator,
+  Alert,
   Keyboard,
   Pressable,
   StyleSheet,
@@ -18,6 +23,41 @@ type ComposerProps = {
 
 export function Composer({ isPending, onSubmit }: ComposerProps) {
   const [text, setText] = useState("");
+  const [isListening, setIsListening] = useState(false);
+
+  useSpeechRecognitionEvent("start", () => setIsListening(true));
+  useSpeechRecognitionEvent("end", () => setIsListening(false));
+  useSpeechRecognitionEvent("result", (event) => {
+    const transcript = event.results[0]?.transcript?.trim();
+    if (transcript) {
+      setText(transcript);
+    }
+  });
+  useSpeechRecognitionEvent("error", (event) => {
+    setIsListening(false);
+    if (event.error !== "no-speech" && event.error !== "aborted") {
+      Alert.alert("语音输入不可用", event.message || "请检查麦克风和语音识别权限。");
+    }
+  });
+
+  async function toggleSpeechRecognition() {
+    if (isListening) {
+      ExpoSpeechRecognitionModule.stop();
+      return;
+    }
+
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("需要权限", "请允许麦克风和语音识别权限后再使用语音输入。");
+      return;
+    }
+
+    ExpoSpeechRecognitionModule.start({
+      continuous: false,
+      interimResults: true,
+      lang: "zh-CN",
+    });
+  }
 
   async function submit() {
     const value = text.trim();
@@ -48,6 +88,22 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
           style={styles.input}
           value={text}
         />
+        <Pressable
+          accessibilityLabel={isListening ? "停止语音输入" : "语音输入"}
+          accessibilityRole="button"
+          disabled={isPending}
+          onPress={toggleSpeechRecognition}
+          style={({ pressed }) => [
+            styles.voice,
+            isListening && styles.voiceListening,
+            pressed && styles.voicePressed,
+          ]}>
+          <AppIcon
+            name={isListening ? "stop" : "mic-outline"}
+            color={isListening ? colors.white : colors.textMuted}
+            size={18}
+          />
+        </Pressable>
         <Pressable
           accessibilityLabel="保存任务"
           accessibilityRole="button"
@@ -106,6 +162,20 @@ const styles = StyleSheet.create({
     height: 38,
     justifyContent: "center",
     width: 38,
+  },
+  voice: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
+  },
+  voiceListening: {
+    backgroundColor: colors.accent,
+  },
+  voicePressed: {
+    opacity: 0.72,
   },
   submitDisabled: {
     opacity: 0.38,

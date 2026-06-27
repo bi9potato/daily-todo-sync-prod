@@ -5,24 +5,38 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
+  TextInput,
   View,
 } from "react-native";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Constants from "expo-constants";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import {
+  authorizeGoogleCalendar,
+  bindGoogleAccount,
+  clearTrash,
+  disconnectGoogleAccount,
   getGoogleCalendarStatus,
   getLatestMobileRelease,
   getMe,
+  getTrash,
+  restoreOccurrence,
+  setGoogleCalendarSyncEnabled,
   syncGoogleCalendar,
+  updateMe,
 } from "@/lib/api";
 import { useSession } from "@/session";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
-import type { MobileRelease } from "@/types";
+import type {
+  DeletedTodoOccurrence,
+  GoogleCalendarStatus,
+  MobileRelease,
+} from "@/types";
 
 const currentVersion = Constants.expoConfig?.version ?? "1.0.0";
 const currentVersionCode = Constants.expoConfig?.android?.versionCode ?? 1;
@@ -39,6 +53,10 @@ export function ProfileScreen() {
     queryFn: getGoogleCalendarStatus,
     retry: false,
   });
+  const trashQuery = useQuery({
+    queryKey: ["trash"],
+    queryFn: getTrash,
+  });
   const releaseQuery = useQuery({
     queryKey: ["mobile-release"],
     queryFn: getLatestMobileRelease,
@@ -54,6 +72,42 @@ export function ProfileScreen() {
       Alert.alert("同步完成", `已同步 ${result.synced} 个日历事件。`);
     },
     onError: (error) => Alert.alert("同步失败", error.message),
+  });
+  const updateProfileMutation = useMutation({
+    mutationFn: updateMe,
+    onSuccess: (user) => queryClient.setQueryData(["me"], user),
+    onError: (error) => Alert.alert("账户名称保存失败", error.message),
+  });
+  const restoreMutation = useMutation({
+    mutationFn: restoreOccurrence,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["trash"] });
+      void queryClient.invalidateQueries({ queryKey: ["day"] });
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+  });
+  const clearTrashMutation = useMutation({
+    mutationFn: clearTrash,
+    onSuccess: () => queryClient.setQueryData(["trash"], []),
+  });
+  const toggleSyncMutation = useMutation({
+    mutationFn: ({
+      enabled,
+      connectionId,
+    }: {
+      enabled: boolean;
+      connectionId?: string;
+    }) => setGoogleCalendarSyncEnabled(enabled, connectionId),
+    onSuccess: (status) =>
+      queryClient.setQueryData(["google-calendar-status"], status),
+    onError: (error) => Alert.alert("同步设置失败", error.message),
+  });
+  const disconnectMutation = useMutation({
+    mutationFn: disconnectGoogleAccount,
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: ["google-calendar-status"],
+      }),
   });
 
   if (meQuery.isPending) {
@@ -79,6 +133,11 @@ export function ProfileScreen() {
   const calendar = calendarQuery.data;
   const displayName = user.displayName || user.username;
   const initial = displayName.slice(0, 1).toUpperCase();
+  const accountSubtitle = user.email.includes("@")
+    ? user.email
+    : calendar?.googleEmail.includes("@")
+      ? calendar.googleEmail
+      : "Daily Todo Sync 账户";
 
   return (
     <View style={styles.page}>
@@ -96,10 +155,18 @@ export function ProfileScreen() {
           <View style={styles.profileCopy}>
             <Text style={styles.name}>{displayName}</Text>
             <Text numberOfLines={1} style={styles.email}>
-              {user.email}
+              {accountSubtitle}
             </Text>
           </View>
         </View>
+
+        <ProfileNameEditor
+          displayName={displayName}
+          isSaving={updateProfileMutation.isPending}
+          onSave={(nextName) =>
+            updateProfileMutation.mutate({ displayName: nextName })
+          }
+        />
 
         <Section title="同步">
           <SettingRow
@@ -140,6 +207,34 @@ export function ProfileScreen() {
               )}
             </Pressable>
           ) : null}
+          <CalendarAccounts
+            calendar={calendar}
+            isBusy={
+              toggleSyncMutation.isPending || disconnectMutation.isPending
+            }
+            onAuthorize={async (connectionId) => {
+              const result = await authorizeGoogleCalendar(connectionId);
+              await Linking.openURL(result.authorizationUrl);
+            }}
+            onBind={async () => {
+              const result = await bindGoogleAccount();
+              await Linking.openURL(result.authorizationUrl);
+            }}
+            onDisconnect={(connectionId) =>
+              Alert.alert("断开 Google 账户？", "该账户将停止同步日历。", [
+                { text: "取消", style: "cancel" },
+                {
+                  text: "断开",
+                  style: "destructive",
+                  onPress: () => disconnectMutation.mutate(connectionId),
+                },
+              ])
+            }
+            onRefresh={() => calendarQuery.refetch()}
+            onToggle={(enabled, connectionId) =>
+              toggleSyncMutation.mutate({ enabled, connectionId })
+            }
+          />
         </Section>
 
         <Section title="应用更新">
@@ -168,6 +263,28 @@ export function ProfileScreen() {
           />
         </Section>
 
+        <Section title="回收站">
+          <TrashPanel
+            isBusy={
+              trashQuery.isFetching ||
+              restoreMutation.isPending ||
+              clearTrashMutation.isPending
+            }
+            items={trashQuery.data ?? []}
+            onClear={() =>
+              Alert.alert("清空回收站？", "已删除的任务将无法恢复。", [
+                { text: "取消", style: "cancel" },
+                {
+                  text: "清空",
+                  style: "destructive",
+                  onPress: () => clearTrashMutation.mutate(),
+                },
+              ])
+            }
+            onRestore={(id) => restoreMutation.mutate(id)}
+          />
+        </Section>
+
         <Pressable
           onPress={() =>
             Alert.alert("退出登录？", "本机的登录信息将被清除。", [
@@ -180,6 +297,167 @@ export function ProfileScreen() {
           <Text style={styles.logoutText}>退出登录</Text>
         </Pressable>
       </ScrollView>
+    </View>
+  );
+}
+
+function ProfileNameEditor({
+  displayName,
+  isSaving,
+  onSave,
+}: {
+  displayName: string;
+  isSaving: boolean;
+  onSave: (displayName: string) => void;
+}) {
+  const [value, setValue] = useState(displayName);
+  const changed = value.trim() !== displayName && Boolean(value.trim());
+
+  return (
+    <View style={styles.nameEditor}>
+      <Text style={styles.sectionTitle}>账户名称</Text>
+      <View style={styles.nameEditorRow}>
+        <TextInput
+          accessibilityLabel="账户名称"
+          editable={!isSaving}
+          onChangeText={setValue}
+          placeholder="账户名称"
+          placeholderTextColor={colors.textMuted}
+          style={styles.nameInput}
+          value={value}
+        />
+        <Pressable
+          disabled={!changed || isSaving}
+          onPress={() => onSave(value.trim())}
+          style={[
+            styles.compactPrimaryButton,
+            (!changed || isSaving) && styles.disabled,
+          ]}>
+          {isSaving ? (
+            <ActivityIndicator color={colors.white} size="small" />
+          ) : (
+            <Text style={styles.compactPrimaryText}>保存</Text>
+          )}
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function CalendarAccounts({
+  calendar,
+  isBusy,
+  onAuthorize,
+  onBind,
+  onDisconnect,
+  onRefresh,
+  onToggle,
+}: {
+  calendar: GoogleCalendarStatus | undefined;
+  isBusy: boolean;
+  onAuthorize: (connectionId?: string) => Promise<void>;
+  onBind: () => Promise<void>;
+  onDisconnect: (connectionId?: string) => void;
+  onRefresh: () => unknown;
+  onToggle: (enabled: boolean, connectionId?: string) => void;
+}) {
+  const accounts = calendar?.accounts ?? [];
+
+  return (
+    <View style={styles.calendarAccounts}>
+      {accounts.map((account) => (
+        <View key={account.id} style={styles.calendarAccount}>
+          <View style={styles.calendarAccountHeader}>
+            <View style={styles.googleMark}>
+              <Text style={styles.googleMarkText}>G</Text>
+            </View>
+            <View style={styles.calendarAccountCopy}>
+              <Text numberOfLines={1} style={styles.calendarAccountName}>
+                {account.googleName || account.googleEmail}
+              </Text>
+              <Text numberOfLines={1} style={styles.calendarAccountEmail}>
+                {account.googleEmail}
+              </Text>
+            </View>
+            <Switch
+              disabled={!account.calendarAuthorized || isBusy}
+              onValueChange={(enabled) => onToggle(enabled, account.id)}
+              trackColor={{ false: colors.border, true: colors.accent }}
+              value={account.syncEnabled}
+            />
+          </View>
+          <View style={styles.inlineActions}>
+            {!account.calendarAuthorized ? (
+              <Pressable
+                onPress={() => void onAuthorize(account.id)}
+                style={styles.textAction}>
+                <Text style={styles.textActionLabel}>授权 Calendar</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => onDisconnect(account.id)}
+              style={styles.textAction}>
+              <Text style={styles.dangerActionLabel}>断开</Text>
+            </Pressable>
+          </View>
+        </View>
+      ))}
+      <View style={styles.settingsActions}>
+        <Pressable onPress={() => void onBind()} style={styles.outlineButton}>
+          <AppIcon name="add" color={colors.accent} size={18} />
+          <Text style={styles.outlineButtonText}>绑定 Google 账户</Text>
+        </Pressable>
+        <Pressable onPress={onRefresh} style={styles.refreshButton}>
+          <AppIcon name="refresh" color={colors.textMuted} size={18} />
+          <Text style={styles.refreshButtonText}>刷新状态</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function TrashPanel({
+  isBusy,
+  items,
+  onClear,
+  onRestore,
+}: {
+  isBusy: boolean;
+  items: DeletedTodoOccurrence[];
+  onClear: () => void;
+  onRestore: (id: string) => void;
+}) {
+  return (
+    <View style={styles.trashPanel}>
+      {items.length ? (
+        items.map((item) => (
+          <View key={item.id} style={styles.trashRow}>
+            <View style={styles.trashCopy}>
+              <Text numberOfLines={1} style={styles.trashTitle}>
+                {item.text}
+              </Text>
+              <Text style={styles.trashMeta}>{item.taskDate}</Text>
+            </View>
+            <Pressable
+              disabled={isBusy}
+              onPress={() => onRestore(item.id)}
+              style={styles.restoreButton}>
+              <Text style={styles.restoreText}>恢复</Text>
+            </Pressable>
+          </View>
+        ))
+      ) : (
+        <Text style={styles.emptySetting}>回收站为空。</Text>
+      )}
+      {items.length ? (
+        <Pressable
+          disabled={isBusy}
+          onPress={onClear}
+          style={styles.clearTrashButton}>
+          <AppIcon name="trash-outline" color={colors.danger} size={18} />
+          <Text style={styles.clearTrashText}>清空回收站</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -370,6 +648,47 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textMuted,
   },
+  nameEditor: {
+    ...shadows.panel,
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  nameEditorRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  nameInput: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    color: colors.text,
+    flex: 1,
+    fontSize: 16,
+    minHeight: 46,
+    paddingHorizontal: spacing.md,
+  },
+  compactPrimaryButton: {
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    justifyContent: "center",
+    minHeight: 46,
+    minWidth: 64,
+    paddingHorizontal: spacing.md,
+  },
+  compactPrimaryText: {
+    ...typography.label,
+    color: colors.white,
+  },
+  disabled: {
+    opacity: 0.42,
+  },
   section: {
     ...shadows.panel,
     backgroundColor: colors.panel,
@@ -426,6 +745,147 @@ const styles = StyleSheet.create({
     color: colors.accent,
     flex: 1,
     fontWeight: "600",
+  },
+  calendarAccounts: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+  },
+  calendarAccount: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.sm,
+    gap: spacing.sm,
+    padding: spacing.sm,
+  },
+  calendarAccountHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  googleMark: {
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
+  },
+  googleMarkText: {
+    color: colors.accent,
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  calendarAccountCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  calendarAccountName: {
+    ...typography.label,
+    color: colors.text,
+  },
+  calendarAccountEmail: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  inlineActions: {
+    flexDirection: "row",
+    gap: spacing.md,
+    justifyContent: "flex-end",
+  },
+  textAction: {
+    justifyContent: "center",
+    minHeight: 36,
+  },
+  textActionLabel: {
+    ...typography.label,
+    color: colors.accent,
+  },
+  dangerActionLabel: {
+    ...typography.label,
+    color: colors.danger,
+  },
+  settingsActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  outlineButton: {
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 42,
+    paddingHorizontal: spacing.md,
+  },
+  outlineButtonText: {
+    ...typography.label,
+    color: colors.accent,
+  },
+  refreshButton: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 42,
+    paddingHorizontal: spacing.sm,
+  },
+  refreshButtonText: {
+    ...typography.label,
+    color: colors.textMuted,
+  },
+  trashPanel: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+  },
+  trashRow: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.sm,
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 54,
+    padding: spacing.sm,
+  },
+  trashCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  trashTitle: {
+    ...typography.label,
+    color: colors.text,
+  },
+  trashMeta: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  restoreButton: {
+    alignItems: "center",
+    minHeight: 40,
+    justifyContent: "center",
+    paddingHorizontal: spacing.sm,
+  },
+  restoreText: {
+    ...typography.label,
+    color: colors.accent,
+  },
+  clearTrashButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 42,
+  },
+  clearTrashText: {
+    ...typography.label,
+    color: colors.danger,
+  },
+  emptySetting: {
+    ...typography.body,
+    color: colors.textMuted,
+    padding: spacing.sm,
   },
   updatePanel: {
     backgroundColor: colors.surfaceMuted,

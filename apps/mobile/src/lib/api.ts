@@ -2,10 +2,14 @@ import { clearTokens, getMemoryTokens, loadTokens, saveTokens } from "./auth-sto
 import type {
   AiChatResult,
   DayTodos,
+  DeletedTodoOccurrence,
+  GoogleCalendarAuthUrl,
   GoogleCalendarStatus,
   GoogleCalendarSyncResult,
+  LocalAttachmentFile,
   MobileRelease,
   RangeTodos,
+  TaskAttachment,
   TaskCreatePayload,
   TaskUpdatePayload,
   TodoOccurrence,
@@ -157,6 +161,13 @@ export function getMe() {
   return request<User>("/auth/me");
 }
 
+export function updateMe(payload: { displayName: string }) {
+  return request<User>("/auth/me", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getLatestMobileRelease() {
   return request<MobileRelease>("/mobile/releases/latest", {}, false);
 }
@@ -183,8 +194,86 @@ export function updateOccurrence(id: string, payload: TaskUpdatePayload) {
   });
 }
 
+export function copyLongTermOccurrenceAsRegular(id: string) {
+  return request<TodoOccurrence>(`/occurrences/${id}/copy-regular`, {
+    method: "POST",
+  });
+}
+
+export function reorderDay(date: string, orderedIds: string[]) {
+  return request<void>(`/days/${date}/reorder`, {
+    method: "PATCH",
+    body: JSON.stringify({ orderedIds }),
+  });
+}
+
 export function deleteOccurrence(id: string) {
   return request<void>(`/occurrences/${id}`, { method: "DELETE" });
+}
+
+export function getTrash() {
+  return request<DeletedTodoOccurrence[]>("/trash");
+}
+
+export function clearTrash() {
+  return request<void>("/trash", { method: "DELETE" });
+}
+
+export function restoreOccurrence(id: string) {
+  return request<TodoOccurrence>(`/occurrences/${id}/restore`, {
+    method: "POST",
+  });
+}
+
+export function uploadTaskAttachment(
+  occurrenceId: string,
+  file: LocalAttachmentFile,
+) {
+  const formData = new FormData();
+  formData.append("file", file as unknown as Blob);
+  return request<TaskAttachment>(
+    `/occurrences/${occurrenceId}/attachments`,
+    { method: "POST", body: formData },
+  );
+}
+
+export function deleteTaskAttachment(
+  attachmentId: string,
+  occurrenceId?: string,
+) {
+  const query = occurrenceId
+    ? `?occurrenceId=${encodeURIComponent(occurrenceId)}`
+    : "";
+  return request<void>(`/attachments/${attachmentId}${query}`, {
+    method: "DELETE",
+  });
+}
+
+export function reorderTaskAttachments(
+  occurrenceId: string,
+  orderedIds: string[],
+) {
+  return request<void>(`/occurrences/${occurrenceId}/attachments/reorder`, {
+    method: "PATCH",
+    body: JSON.stringify({ orderedIds }),
+  });
+}
+
+export async function getAuthenticatedMediaSource(contentUrl: string) {
+  const tokens = getMemoryTokens() ?? (await loadTokens());
+  if (!tokens) {
+    throw new Error("请先登录。");
+  }
+  const origin = API_BASE_URL.replace(/\/api\/?$/, "");
+  const uri = /^https?:\/\//i.test(contentUrl)
+    ? contentUrl
+    : contentUrl.startsWith("/api/")
+      ? `${origin}${contentUrl}`
+      : `${API_BASE_URL}/${contentUrl.replace(/^\//, "")}`;
+  return {
+    uri,
+    headers: { Authorization: `Bearer ${tokens.accessToken}` },
+  };
 }
 
 export function chatWithAi(message: string, date?: string) {
@@ -196,6 +285,42 @@ export function chatWithAi(message: string, date?: string) {
 
 export function getGoogleCalendarStatus() {
   return request<GoogleCalendarStatus>("/integrations/google-calendar/status");
+}
+
+export function bindGoogleAccount() {
+  return request<GoogleCalendarAuthUrl>("/integrations/google-account/bind", {
+    method: "POST",
+  });
+}
+
+export function disconnectGoogleAccount(connectionId?: string) {
+  return request<void>("/integrations/google-account/disconnect", {
+    method: "POST",
+    body: JSON.stringify({ connectionId: connectionId ?? null }),
+  });
+}
+
+export function authorizeGoogleCalendar(connectionId?: string) {
+  return request<GoogleCalendarAuthUrl>(
+    "/integrations/google-calendar/authorize",
+    {
+      method: "POST",
+      body: JSON.stringify({ connectionId: connectionId ?? null }),
+    },
+  );
+}
+
+export function setGoogleCalendarSyncEnabled(
+  enabled: boolean,
+  connectionId?: string,
+) {
+  return request<GoogleCalendarStatus>(
+    "/integrations/google-calendar/sync-enabled",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ enabled, connectionId: connectionId ?? null }),
+    },
+  );
 }
 
 export function syncGoogleCalendar(days = 45) {

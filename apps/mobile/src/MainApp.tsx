@@ -8,6 +8,7 @@ import { AppIcon } from "@/components/AppIcon";
 import { getMe } from "@/lib/api";
 import { toDateKey } from "@/lib/date";
 import { AiScreen } from "@/screens/AiScreen";
+import { AnalyticsScreen } from "@/screens/AnalyticsScreen";
 import {
   CalendarScreen,
   type CalendarViewMode,
@@ -55,6 +56,15 @@ export function MainApp() {
           <TodayScreen
             selectedDate={selectedDate}
           />
+        ) : null}
+        {activeSection === "long-term" ? (
+          <TodayScreen selectedDate={today} viewMode="long-term" />
+        ) : null}
+        {activeSection === "low-priority" ? (
+          <TodayScreen selectedDate={today} viewMode="low-priority" />
+        ) : null}
+        {activeSection === "analytics" ? (
+          <AnalyticsScreen today={today} />
         ) : null}
         {activeSection === "calendar" ? (
           <CalendarScreen

@@ -13,25 +13,34 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { Composer } from "@/components/Composer";
+import { DraggableTaskItem } from "@/components/DraggableTaskItem";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
 import {
+  copyLongTermOccurrenceAsRegular,
   createTask,
+  deleteTaskAttachment,
   deleteOccurrence,
   getDay,
+  reorderDay,
+  reorderTaskAttachments,
   updateOccurrence,
+  uploadTaskAttachment,
 } from "@/lib/api";
 import { formatLongDate } from "@/lib/date";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
   DayTodos,
+  LocalAttachmentFile,
+  TaskAttachment,
   TaskUpdatePayload,
   TodoOccurrence,
 } from "@/types";
 
 type TodayScreenProps = {
   selectedDate: string;
+  viewMode?: "my-day" | "long-term" | "low-priority";
 };
 
 function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
@@ -48,9 +57,28 @@ function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
   };
 }
 
-export function TodayScreen({ selectedDate }: TodayScreenProps) {
+function updateTaskAttachments(
+  data: DayTodos | undefined,
+  occurrenceId: string,
+  update: (attachments: TaskAttachment[]) => TaskAttachment[],
+) {
+  if (!data) {
+    return data;
+  }
+  const task = [...data.pending, ...data.done].find(
+    (item) => item.id === occurrenceId,
+  );
+  return task
+    ? replaceTask(data, { ...task, attachments: update(task.attachments) })
+    : data;
+}
+
+export function TodayScreen({
+  selectedDate,
+  viewMode = "my-day",
+}: TodayScreenProps) {
   const queryClient = useQueryClient();
-  const [selectedTask, setSelectedTask] = useState<TodoOccurrence | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [longTermOpen, setLongTermOpen] = useState(false);
   const [lowPriorityOpen, setLowPriorityOpen] = useState(false);
 
@@ -59,8 +87,21 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
     queryFn: () => getDay(selectedDate),
   });
 
+  const selectedTask = useMemo(
+    () =>
+      [...(dayQuery.data?.pending ?? []), ...(dayQuery.data?.done ?? [])].find(
+        (task) => task.id === selectedTaskId,
+      ) ?? null,
+    [dayQuery.data, selectedTaskId],
+  );
+
   const createMutation = useMutation({
-    mutationFn: (text: string) => createTask(selectedDate, { text }),
+    mutationFn: (text: string) =>
+      createTask(selectedDate, {
+        text,
+        isLongTerm: viewMode === "long-term",
+        isLowPriority: viewMode === "low-priority",
+      }),
     onSuccess: (task) => {
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
         current ? { ...current, pending: [...current.pending, task] } : current,
@@ -118,7 +159,7 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
         replaceTask(current, task),
       );
-      setSelectedTask(null);
+      setSelectedTaskId(null);
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["range"] });
@@ -137,7 +178,94 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
             }
           : current,
       );
-      setSelectedTask(null);
+      setSelectedTaskId(null);
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+  });
+
+  const copyMutation = useMutation({
+    mutationFn: copyLongTermOccurrenceAsRegular,
+    onSuccess: (task) => {
+      queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
+        current ? { ...current, pending: [...current.pending, task] } : current,
+      );
+      setSelectedTaskId(task.id);
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+  });
+
+  const uploadAttachmentMutation = useMutation({
+    mutationFn: ({
+      occurrenceId,
+      file,
+    }: {
+      occurrenceId: string;
+      file: LocalAttachmentFile;
+    }) => uploadTaskAttachment(occurrenceId, file),
+    onSuccess: (attachment, variables) => {
+      queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
+        updateTaskAttachments(current, variables.occurrenceId, (attachments) => [
+          ...attachments,
+          attachment,
+        ]),
+      );
+    },
+    onError: (error) => Alert.alert("图片上传失败", error.message),
+  });
+
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: ({
+      attachmentId,
+      occurrenceId,
+    }: {
+      attachmentId: string;
+      occurrenceId: string;
+    }) => deleteTaskAttachment(attachmentId, occurrenceId),
+    onSuccess: (_result, variables) => {
+      queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
+        updateTaskAttachments(current, variables.occurrenceId, (attachments) =>
+          attachments.filter(
+            (attachment) => attachment.id !== variables.attachmentId,
+          ),
+        ),
+      );
+    },
+    onError: (error) => Alert.alert("图片删除失败", error.message),
+  });
+
+  const reorderAttachmentsMutation = useMutation({
+    mutationFn: ({
+      occurrenceId,
+      orderedIds,
+    }: {
+      occurrenceId: string;
+      orderedIds: string[];
+    }) => reorderTaskAttachments(occurrenceId, orderedIds),
+    onMutate: ({ occurrenceId, orderedIds }) => {
+      queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
+        updateTaskAttachments(current, occurrenceId, (attachments) => {
+          const byId = new Map(
+            attachments.map((attachment) => [attachment.id, attachment]),
+          );
+          return orderedIds
+            .map((id) => byId.get(id))
+            .filter((item): item is TaskAttachment => Boolean(item));
+        }),
+      );
+    },
+    onError: (error) => {
+      Alert.alert("图片排序失败", error.message);
+      void queryClient.invalidateQueries({ queryKey: ["day", selectedDate] });
+    },
+  });
+
+  const reorderMutation = useMutation({
+    mutationFn: (orderedIds: string[]) => reorderDay(selectedDate, orderedIds),
+    onError: (error) => {
+      Alert.alert("任务排序失败", error.message);
+      void queryClient.invalidateQueries({ queryKey: ["day", selectedDate] });
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
@@ -154,10 +282,21 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
       longTerm: pending.filter((task) => task.isLongTerm),
       lowPriority: pending.filter((task) => task.isLowPriority),
       done: dayQuery.data?.done ?? [],
+      doneLongTerm: (dayQuery.data?.done ?? []).filter(
+        (task) => task.isLongTerm,
+      ),
+      doneLowPriority: (dayQuery.data?.done ?? []).filter(
+        (task) => task.isLowPriority,
+      ),
     };
   }, [dayQuery.data]);
 
-  const total = (dayQuery.data?.pending.length ?? 0) + groups.done.length;
+  const total =
+    viewMode === "long-term"
+      ? groups.longTerm.length + groups.doneLongTerm.length
+      : viewMode === "low-priority"
+        ? groups.lowPriority.length + groups.doneLowPriority.length
+        : (dayQuery.data?.pending.length ?? 0) + groups.done.length;
   function toggle(task: TodoOccurrence) {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateMutation.mutate({
@@ -183,6 +322,26 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
         onPress: () => deleteMutation.mutate(task.id),
       },
     ]);
+  }
+
+  function moveTasks(tasks: TodoOccurrence[], fromIndex: number, toIndex: number) {
+    const current = dayQuery.data;
+    if (!current || fromIndex === toIndex) {
+      return;
+    }
+    const reordered = [...tasks];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+    const visibleIds = new Set(tasks.map((task) => task.id));
+    let visibleIndex = 0;
+    const pending = current.pending.map((task) =>
+      visibleIds.has(task.id) ? reordered[visibleIndex++] : task,
+    );
+    queryClient.setQueryData<DayTodos>(["day", selectedDate], {
+      ...current,
+      pending,
+    });
+    reorderMutation.mutate(pending.map((task) => task.id));
   }
 
   const content = dayQuery.isPending ? (
@@ -212,44 +371,91 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
         </View>
       ) : null}
 
-      <CollapsibleTaskGroup
-        count={groups.longTerm.length}
-        isOpen={longTermOpen}
-        onDelete={confirmDelete}
-        onPin={togglePin}
-        onPress={setSelectedTask}
-        onToggle={toggle}
-        onToggleOpen={() => setLongTermOpen((current) => !current)}
-        tasks={groups.longTerm}
-        title="长期任务"
-      />
-      <TaskGroup
-        onDelete={confirmDelete}
-        onPin={togglePin}
-        onPress={setSelectedTask}
-        onToggle={toggle}
-        tasks={[...groups.pinned, ...groups.regular]}
-        title=""
-      />
-      <CollapsibleTaskGroup
-        count={groups.lowPriority.length}
-        isOpen={lowPriorityOpen}
-        onDelete={confirmDelete}
-        onPin={togglePin}
-        onPress={setSelectedTask}
-        onToggle={toggle}
-        onToggleOpen={() => setLowPriorityOpen((current) => !current)}
-        tasks={groups.lowPriority}
-        title="低优先级"
-      />
-      <TaskGroup
-        onDelete={confirmDelete}
-        onPin={togglePin}
-        onPress={setSelectedTask}
-        onToggle={toggle}
-        tasks={groups.done}
-        title={groups.done.length ? "已完成" : ""}
-      />
+      {viewMode === "my-day" ? (
+        <>
+          <CollapsibleTaskGroup
+            count={groups.longTerm.length}
+            isOpen={longTermOpen}
+            onDelete={confirmDelete}
+            onMove={(from, to) => moveTasks(groups.longTerm, from, to)}
+            onPin={togglePin}
+            onPress={(task) => setSelectedTaskId(task.id)}
+            onToggle={toggle}
+            onToggleOpen={() => setLongTermOpen((current) => !current)}
+            tasks={groups.longTerm}
+            title="长期任务"
+          />
+          <TaskGroup
+            onDelete={confirmDelete}
+            onMove={(from, to) =>
+              moveTasks([...groups.pinned, ...groups.regular], from, to)
+            }
+            onPin={togglePin}
+            onPress={(task) => setSelectedTaskId(task.id)}
+            onToggle={toggle}
+            tasks={[...groups.pinned, ...groups.regular]}
+            title=""
+          />
+          <CollapsibleTaskGroup
+            count={groups.lowPriority.length}
+            isOpen={lowPriorityOpen}
+            onDelete={confirmDelete}
+            onMove={(from, to) => moveTasks(groups.lowPriority, from, to)}
+            onPin={togglePin}
+            onPress={(task) => setSelectedTaskId(task.id)}
+            onToggle={toggle}
+            onToggleOpen={() => setLowPriorityOpen((current) => !current)}
+            tasks={groups.lowPriority}
+            title="低优先级"
+          />
+          <TaskGroup
+            draggable={false}
+            onDelete={confirmDelete}
+            onMove={() => undefined}
+            onPin={togglePin}
+            onPress={(task) => setSelectedTaskId(task.id)}
+            onToggle={toggle}
+            tasks={groups.done}
+            title={groups.done.length ? "已完成" : ""}
+          />
+        </>
+      ) : (
+        <>
+          <TaskGroup
+            onDelete={confirmDelete}
+            onMove={(from, to) =>
+              moveTasks(
+                viewMode === "long-term"
+                  ? groups.longTerm
+                  : groups.lowPriority,
+                from,
+                to,
+              )
+            }
+            onPin={togglePin}
+            onPress={(task) => setSelectedTaskId(task.id)}
+            onToggle={toggle}
+            tasks={
+              viewMode === "long-term" ? groups.longTerm : groups.lowPriority
+            }
+            title="待处理"
+          />
+          <TaskGroup
+            draggable={false}
+            onDelete={confirmDelete}
+            onMove={() => undefined}
+            onPin={togglePin}
+            onPress={(task) => setSelectedTaskId(task.id)}
+            onToggle={toggle}
+            tasks={
+              viewMode === "long-term"
+                ? groups.doneLongTerm
+                : groups.doneLowPriority
+            }
+            title="已完成"
+          />
+        </>
+      )}
     </ScrollView>
   );
 
@@ -257,7 +463,13 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
     <View style={styles.page}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.title}>我的一天</Text>
+          <Text style={styles.title}>
+            {viewMode === "long-term"
+              ? "长期任务"
+              : viewMode === "low-priority"
+                ? "低优先级任务"
+                : "我的一天"}
+          </Text>
           <Text style={styles.date}>{formatLongDate(selectedDate)}</Text>
         </View>
       </View>
@@ -268,10 +480,40 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
       />
       <TaskEditor
         key={selectedTask?.id ?? "empty-editor"}
+        isAttachmentMutating={
+          uploadAttachmentMutation.isPending ||
+          deleteAttachmentMutation.isPending ||
+          reorderAttachmentsMutation.isPending
+        }
         isSaving={updateMutation.isPending}
-        onClose={() => setSelectedTask(null)}
+        onClose={() => setSelectedTaskId(null)}
+        onCopyAsRegular={(task) => copyMutation.mutate(task.id)}
         onDelete={confirmDelete}
+        onDeleteAttachment={(attachment) => {
+          if (selectedTask) {
+            deleteAttachmentMutation.mutate({
+              attachmentId: attachment.id,
+              occurrenceId: selectedTask.id,
+            });
+          }
+        }}
+        onReorderAttachments={(orderedIds) => {
+          if (selectedTask) {
+            reorderAttachmentsMutation.mutate({
+              occurrenceId: selectedTask.id,
+              orderedIds,
+            });
+          }
+        }}
         onSave={(task, payload) => updateMutation.mutate({ id: task.id, payload })}
+        onUploadAttachment={(file) => {
+          if (selectedTask) {
+            uploadAttachmentMutation.mutate({
+              occurrenceId: selectedTask.id,
+              file,
+            });
+          }
+        }}
         task={selectedTask}
       />
     </View>
@@ -279,16 +521,20 @@ export function TodayScreen({ selectedDate }: TodayScreenProps) {
 }
 
 function TaskGroup({
+  draggable = true,
   title,
   tasks,
   onDelete,
+  onMove,
   onPin,
   onPress,
   onToggle,
 }: {
+  draggable?: boolean;
   title: string;
   tasks: TodoOccurrence[];
   onDelete: (task: TodoOccurrence) => void;
+  onMove: (fromIndex: number, toIndex: number) => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
@@ -299,16 +545,32 @@ function TaskGroup({
   return (
     <View style={styles.group}>
       {title ? <Text style={styles.groupTitle}>{title}</Text> : null}
-      {tasks.map((task) => (
-        <TaskRow
-          key={task.id}
-          onDelete={onDelete}
-          onPin={onPin}
-          onPress={onPress}
-          onToggle={onToggle}
-          task={task}
-        />
-      ))}
+      {tasks.map((task, index) =>
+        draggable ? (
+          <DraggableTaskItem
+            index={index}
+            key={task.id}
+            onMove={onMove}
+            total={tasks.length}>
+            <TaskRow
+              onDelete={onDelete}
+              onPin={onPin}
+              onPress={onPress}
+              onToggle={onToggle}
+              task={task}
+            />
+          </DraggableTaskItem>
+        ) : (
+          <TaskRow
+            key={task.id}
+            onDelete={onDelete}
+            onPin={onPin}
+            onPress={onPress}
+            onToggle={onToggle}
+            task={task}
+          />
+        ),
+      )}
     </View>
   );
 }
@@ -317,6 +579,7 @@ function CollapsibleTaskGroup({
   count,
   isOpen,
   onDelete,
+  onMove,
   onPin,
   onPress,
   onToggle,
@@ -327,6 +590,7 @@ function CollapsibleTaskGroup({
   count: number;
   isOpen: boolean;
   onDelete: (task: TodoOccurrence) => void;
+  onMove: (fromIndex: number, toIndex: number) => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
@@ -348,15 +612,20 @@ function CollapsibleTaskGroup({
         />
       </Pressable>
       {isOpen
-        ? tasks.map((task) => (
-            <TaskRow
+        ? tasks.map((task, index) => (
+            <DraggableTaskItem
+              index={index}
               key={task.id}
-              onDelete={onDelete}
-              onPin={onPin}
-              onPress={onPress}
-              onToggle={onToggle}
-              task={task}
-            />
+              onMove={onMove}
+              total={tasks.length}>
+              <TaskRow
+                onDelete={onDelete}
+                onPin={onPin}
+                onPress={onPress}
+                onToggle={onToggle}
+                task={task}
+              />
+            </DraggableTaskItem>
           ))
         : null}
     </View>

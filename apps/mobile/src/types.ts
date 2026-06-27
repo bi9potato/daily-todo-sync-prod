@@ -5,6 +5,10 @@ export type User = {
   displayName: string;
 };
 
+export type DeletedTodoOccurrence = TodoOccurrence & {
+  deletedAt: string | null;
+};
+
 export type TokenPair = {
   accessToken: string;
   refreshToken: string;
@@ -117,6 +121,31 @@ export type GoogleCalendarStatus = {
   lastError: string;
   syncedCount: number;
   failedCount: number;
+  accounts: GoogleCalendarAccount[];
+};
+
+export type GoogleCalendarAccount = {
+  id: string;
+  googleEmail: string;
+  googleName: string;
+  calendarAuthorized: boolean;
+  syncEnabled: boolean;
+  calendarId: string;
+  calendarName: string;
+  connectedAt: string;
+  lastSyncAt: string | null;
+  lastError: string;
+  isPrimary: boolean;
+};
+
+export type GoogleCalendarAuthUrl = {
+  authorizationUrl: string;
+};
+
+export type LocalAttachmentFile = {
+  uri: string;
+  name: string;
+  type: string;
 };
 
 export type GoogleCalendarSyncResult = {

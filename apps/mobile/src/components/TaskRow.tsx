@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppIcon } from "./AppIcon";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type { TodoOccurrence } from "@/types";
 
@@ -67,6 +68,22 @@ export function TaskRow({
           </View>
         ) : null}
       </View>
+
+      {task.attachments[0] ? (
+        <View style={styles.attachmentPreview}>
+          <AuthenticatedImage
+            contentUrl={task.attachments[0].contentUrl}
+            style={styles.attachmentImage}
+          />
+          {task.attachments.length > 1 ? (
+            <View style={styles.attachmentCount}>
+              <Text style={styles.attachmentCountText}>
+                {task.attachments.length}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
 
       <Pressable
         accessibilityLabel={task.isPinned ? "取消置顶任务" : "置顶任务"}
@@ -183,5 +200,35 @@ const styles = StyleSheet.create({
   actionButtonActive: {
     backgroundColor: colors.accentSoft,
     borderColor: colors.borderStrong,
+  },
+  attachmentPreview: {
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    height: 42,
+    overflow: "hidden",
+    position: "relative",
+    width: 42,
+  },
+  attachmentImage: {
+    height: "100%",
+    width: "100%",
+  },
+  attachmentCount: {
+    alignItems: "center",
+    backgroundColor: "rgba(22, 27, 24, 0.74)",
+    borderRadius: radius.full,
+    bottom: 2,
+    height: 17,
+    justifyContent: "center",
+    minWidth: 17,
+    paddingHorizontal: 3,
+    position: "absolute",
+    right: 2,
+  },
+  attachmentCountText: {
+    color: colors.white,
+    fontSize: 9,
+    fontWeight: "800",
   },
 });

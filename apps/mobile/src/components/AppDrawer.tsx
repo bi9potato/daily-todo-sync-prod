@@ -5,7 +5,14 @@ import { AppIcon } from "./AppIcon";
 import type { CalendarViewMode } from "@/screens/CalendarScreen";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
-export type AppSection = "today" | "calendar" | "ai" | "profile";
+export type AppSection =
+  | "today"
+  | "long-term"
+  | "low-priority"
+  | "analytics"
+  | "calendar"
+  | "ai"
+  | "profile";
 
 type AppDrawerProps = {
   activeSection: AppSection;
@@ -24,6 +31,24 @@ const navItems = [
     label: "我的一天",
     meta: "今日任务",
     icon: "sunny-outline",
+  },
+  {
+    key: "long-term",
+    label: "长期任务",
+    meta: "每天持续显示",
+    icon: "pricetag-outline",
+  },
+  {
+    key: "low-priority",
+    label: "低优先级",
+    meta: "稍后处理",
+    icon: "leaf-outline",
+  },
+  {
+    key: "analytics",
+    label: "分析",
+    meta: "今日复盘",
+    icon: "analytics-outline",
   },
   {
     key: "calendar",
