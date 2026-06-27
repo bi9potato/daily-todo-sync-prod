@@ -1,23 +1,34 @@
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import type { ReactNode } from "react";
+import Constants from "expo-constants";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import {
   getGoogleCalendarStatus,
+  getLatestMobileRelease,
   getMe,
   syncGoogleCalendar,
 } from "@/lib/api";
 import { useSession } from "@/session";
-import { colors, radius, spacing, typography } from "@/theme";
+import { colors, radius, shadows, spacing, typography } from "@/theme";
+import type { MobileRelease } from "@/types";
+
+const currentVersion = Constants.expoConfig?.version ?? "1.0.0";
+const currentVersionCode = Constants.expoConfig?.android?.versionCode ?? 1;
+const currentBuildSha = String(
+  Constants.expoConfig?.extra?.buildSha ?? "development",
+);
 
 export function ProfileScreen() {
   const { signOut } = useSession();
@@ -27,6 +38,12 @@ export function ProfileScreen() {
     queryKey: ["google-calendar-status"],
     queryFn: getGoogleCalendarStatus,
     retry: false,
+  });
+  const releaseQuery = useQuery({
+    queryKey: ["mobile-release"],
+    queryFn: getLatestMobileRelease,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
   });
   const syncMutation = useMutation({
     mutationFn: () => syncGoogleCalendar(45),
@@ -42,7 +59,7 @@ export function ProfileScreen() {
   if (meQuery.isPending) {
     return (
       <View style={styles.page}>
-        <LoadingState label="正在读取账号…" />
+        <LoadingState label="正在读取账户…" />
       </View>
     );
   }
@@ -51,7 +68,7 @@ export function ProfileScreen() {
     return (
       <View style={styles.page}>
         <ErrorState
-          message={meQuery.error.message || "账号信息加载失败"}
+          message={meQuery.error.message || "账户信息加载失败"}
           onRetry={() => meQuery.refetch()}
         />
       </View>
@@ -68,19 +85,23 @@ export function ProfileScreen() {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>我的</Text>
+        <View style={styles.titlePanel}>
+          <Text style={styles.title}>我的</Text>
+        </View>
+
         <View style={styles.profile}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{initial}</Text>
           </View>
           <View style={styles.profileCopy}>
             <Text style={styles.name}>{displayName}</Text>
-            <Text style={styles.email}>{user.email}</Text>
+            <Text numberOfLines={1} style={styles.email}>
+              {user.email}
+            </Text>
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>同步</Text>
-        <View style={styles.settingsGroup}>
+        <Section title="同步">
           <SettingRow
             icon="cloud-outline"
             label="云端数据"
@@ -113,24 +134,39 @@ export function ProfileScreen() {
               ) : (
                 <AppIcon
                   name="chevron-forward"
-                  color={colors.borderStrong}
+                  color={colors.textMuted}
                   size={18}
                 />
               )}
             </Pressable>
           ) : null}
-        </View>
-        {!calendarQuery.isPending && !calendar?.connected ? (
-          <Text style={styles.help}>
-            Google Calendar 授权暂在网页版完成；连接后可在此直接同步。
-          </Text>
-        ) : null}
+        </Section>
 
-        <Text style={styles.sectionTitle}>关于</Text>
-        <View style={styles.settingsGroup}>
-          <SettingRow icon="phone-portrait-outline" label="客户端" value="Expo · Android" />
-          <SettingRow icon="shield-checkmark-outline" label="登录凭据" value="安全存储" />
-        </View>
+        <Section title="应用更新">
+          <SettingRow
+            icon="information-circle-outline"
+            label="当前版本"
+            value={`${currentVersion} (${currentVersionCode})`}
+          />
+          <UpdatePanel
+            isChecking={releaseQuery.isFetching}
+            latest={releaseQuery.data}
+            onCheck={() => releaseQuery.refetch()}
+          />
+        </Section>
+
+        <Section title="关于">
+          <SettingRow
+            icon="phone-portrait-outline"
+            label="客户端"
+            value="Expo · Android"
+          />
+          <SettingRow
+            icon="shield-checkmark-outline"
+            label="登录凭据"
+            value="安全存储"
+          />
+        </Section>
 
         <Pressable
           onPress={() =>
@@ -144,6 +180,109 @@ export function ProfileScreen() {
           <Text style={styles.logoutText}>退出登录</Text>
         </Pressable>
       </ScrollView>
+    </View>
+  );
+}
+
+function UpdatePanel({
+  isChecking,
+  latest,
+  onCheck,
+}: {
+  isChecking: boolean;
+  latest: MobileRelease | undefined;
+  onCheck: () => unknown;
+}) {
+  const developmentBuild = currentBuildSha === "development";
+  const hasUpdate =
+    Boolean(latest) && (developmentBuild || latest?.buildSha !== currentBuildSha);
+
+  async function download() {
+    if (!latest) {
+      return;
+    }
+    try {
+      await Linking.openURL(latest.apkUrl);
+    } catch {
+      Alert.alert("无法打开下载地址", "请稍后重试，或前往 GitHub Release 下载。");
+    }
+  }
+
+  return (
+    <View style={styles.updatePanel}>
+      <View style={styles.updateHeader}>
+        <View style={styles.updateIcon}>
+          {isChecking ? (
+            <ActivityIndicator color={colors.accent} size="small" />
+          ) : (
+            <AppIcon
+              name={hasUpdate ? "download-outline" : "checkmark"}
+              color={colors.white}
+              size={21}
+            />
+          )}
+        </View>
+        <View style={styles.updateCopy}>
+          <Text style={styles.updateTitle}>
+            {isChecking
+              ? "正在检查更新"
+              : hasUpdate
+                ? "发现新版本"
+                : latest
+                  ? "已是最新版"
+                  : "暂时无法检查"}
+          </Text>
+          <Text style={styles.updateMeta}>
+            {latest
+              ? `${latest.versionName} (${latest.versionCode}) · ${latest.architecture}`
+              : `Build ${currentBuildSha.slice(0, 7)}`}
+          </Text>
+          {hasUpdate ? (
+            <Text style={styles.updateHint}>下载后由 Android 确认安装</Text>
+          ) : null}
+        </View>
+      </View>
+
+      {hasUpdate ? (
+        <Pressable
+          accessibilityRole="link"
+          onPress={download}
+          style={({ pressed }) => [
+            styles.downloadButton,
+            pressed && styles.pressed,
+          ]}>
+          <AppIcon name="download-outline" color={colors.white} size={19} />
+          <Text style={styles.downloadText}>下载并安装</Text>
+        </Pressable>
+      ) : null}
+
+      <Pressable
+        disabled={isChecking}
+        onPress={onCheck}
+        style={({ pressed }) => [
+          styles.checkButton,
+          pressed && styles.pressed,
+        ]}>
+        <Text style={styles.checkButtonText}>重新检查</Text>
+      </Pressable>
+      <Text style={styles.privateReleaseHint}>
+        私有仓库下载时，浏览器可能要求登录 GitHub。
+      </Text>
+    </View>
+  );
+}
+
+function Section({
+  children,
+  title,
+}: {
+  children: ReactNode;
+  title: string;
+}) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      <View style={styles.settingsGroup}>{children}</View>
     </View>
   );
 }
@@ -178,33 +317,45 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: spacing.lg,
+    gap: spacing.md,
+    padding: spacing.md,
     paddingBottom: spacing.xxl,
+  },
+  titlePanel: {
+    ...shadows.panel,
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    padding: spacing.lg,
   },
   title: {
     ...typography.title,
     color: colors.text,
   },
   profile: {
+    ...shadows.panel,
     alignItems: "center",
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    backgroundColor: colors.surfaceStrong,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
     flexDirection: "row",
     gap: spacing.lg,
-    paddingVertical: spacing.xl,
+    padding: spacing.lg,
   },
   avatar: {
     alignItems: "center",
     backgroundColor: colors.accent,
-    borderRadius: 32,
-    height: 64,
+    borderRadius: radius.full,
+    height: 60,
     justifyContent: "center",
-    width: 64,
+    width: 60,
   },
   avatarText: {
     color: colors.white,
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 23,
+    fontWeight: "800",
   },
   profileCopy: {
     flex: 1,
@@ -213,22 +364,31 @@ const styles = StyleSheet.create({
   name: {
     color: colors.text,
     fontSize: 20,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   email: {
     ...typography.body,
     color: colors.textMuted,
   },
+  section: {
+    ...shadows.panel,
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.sm,
+  },
   sectionTitle: {
-    ...typography.label,
-    color: colors.textMuted,
-    marginBottom: spacing.sm,
-    marginTop: spacing.xl,
+    ...typography.section,
+    color: colors.accent,
+    paddingHorizontal: spacing.xs,
+    paddingTop: spacing.xs,
   },
   settingsGroup: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.sm,
     borderWidth: 1,
     overflow: "hidden",
   },
@@ -249,7 +409,7 @@ const styles = StyleSheet.create({
   settingValue: {
     ...typography.label,
     color: colors.textMuted,
-    maxWidth: "45%",
+    maxWidth: "48%",
   },
   accentValue: {
     color: colors.accent,
@@ -267,19 +427,81 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: "600",
   },
-  help: {
+  updatePanel: {
+    backgroundColor: colors.surfaceMuted,
+    gap: spacing.md,
+    margin: spacing.sm,
+    padding: spacing.md,
+  },
+  updateHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+  updateIcon: {
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  updateCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  updateTitle: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  updateMeta: {
+    ...typography.label,
+    color: colors.textMuted,
+  },
+  updateHint: {
     ...typography.caption,
     color: colors.textMuted,
-    lineHeight: 19,
-    marginTop: spacing.sm,
+  },
+  downloadButton: {
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "center",
+    minHeight: 48,
+  },
+  downloadText: {
+    ...typography.label,
+    color: colors.white,
+    fontWeight: "800",
+  },
+  checkButton: {
+    alignItems: "center",
+    minHeight: 42,
+    justifyContent: "center",
+  },
+  checkButtonText: {
+    ...typography.label,
+    color: colors.accent,
+  },
+  privateReleaseHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: "center",
   },
   logout: {
     alignItems: "center",
-    alignSelf: "flex-start",
+    alignSelf: "stretch",
+    backgroundColor: colors.surfaceStrong,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
     flexDirection: "row",
     gap: spacing.sm,
-    marginTop: spacing.xxl,
-    minHeight: 44,
+    justifyContent: "center",
+    minHeight: 50,
   },
   logoutText: {
     ...typography.label,

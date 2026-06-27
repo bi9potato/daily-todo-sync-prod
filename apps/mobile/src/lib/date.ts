@@ -53,3 +53,31 @@ export function getWeekRange(center: string) {
   const start = addDays(center, mondayOffset);
   return { start, end: addDays(start, 6) };
 }
+
+export function addMonths(key: string, amount: number) {
+  const date = fromDateKey(key);
+  const originalDay = date.getDate();
+  date.setDate(1);
+  date.setMonth(date.getMonth() + amount);
+  const lastDay = new Date(
+    date.getFullYear(),
+    date.getMonth() + 1,
+    0,
+  ).getDate();
+  date.setDate(Math.min(originalDay, lastDay));
+  return toDateKey(date);
+}
+
+export function getMonthRange(center: string) {
+  const date = fromDateKey(center);
+  const monthStart = toDateKey(
+    new Date(date.getFullYear(), date.getMonth(), 1),
+  );
+  const monthEnd = toDateKey(
+    new Date(date.getFullYear(), date.getMonth() + 1, 0),
+  );
+  const firstDate = fromDateKey(monthStart);
+  const mondayOffset = firstDate.getDay() === 0 ? -6 : 1 - firstDate.getDay();
+  const start = addDays(monthStart, mondayOffset);
+  return { start, end: addDays(start, 41), monthStart, monthEnd };
+}

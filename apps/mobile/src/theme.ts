@@ -1,7 +1,9 @@
 export const colors = {
-  background: "#FFFEFA",
+  background: "#E9ECE7",
+  panel: "#F9FAF7",
   surface: "#FFFFFF",
-  surfaceMuted: "#F4F7F3",
+  surfaceStrong: "#FFFEFA",
+  surfaceMuted: "#F6F8F3",
   accent: "#2C5745",
   accentPressed: "#214635",
   accentSoft: "#E8F0EB",
@@ -25,9 +27,33 @@ export const spacing = {
 
 export const radius = {
   sm: 8,
-  md: 12,
-  lg: 16,
+  md: 10,
+  lg: 12,
   full: 999,
+} as const;
+
+export const shadows = {
+  panel: {
+    elevation: 2,
+    shadowColor: "#161B18",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.07,
+    shadowRadius: 20,
+  },
+  card: {
+    elevation: 1,
+    shadowColor: "#161B18",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+  },
+  floating: {
+    elevation: 12,
+    shadowColor: "#161B18",
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.2,
+    shadowRadius: 34,
+  },
 } as const;
 
 export const typography = {

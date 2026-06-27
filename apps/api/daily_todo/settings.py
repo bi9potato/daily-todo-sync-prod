@@ -91,6 +91,12 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_ROOT = BASE_DIR / "media"
+MOBILE_RELEASE_MANIFEST_PATH = Path(
+    os.getenv(
+        "MOBILE_RELEASE_MANIFEST_PATH",
+        MEDIA_ROOT / "mobile" / "android-latest.json",
+    )
+)
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",

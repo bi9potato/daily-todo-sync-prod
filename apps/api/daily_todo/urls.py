@@ -1,4 +1,8 @@
+import json
+
+from django.conf import settings
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path
 from ninja import NinjaAPI
 
@@ -13,6 +17,21 @@ api = NinjaAPI(title="Daily Todo Sync API", version="0.1.0")
 @api.get("/health")
 def health(request):
     return {"status": "ok"}
+
+
+@api.get("/mobile/releases/latest")
+def latest_mobile_release(request):
+    try:
+        payload = json.loads(settings.MOBILE_RELEASE_MANIFEST_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return JsonResponse(
+            {"detail": "Android release manifest is not available yet."},
+            status=503,
+        )
+
+    response = JsonResponse(payload)
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 api.add_router("/auth", auth_router)

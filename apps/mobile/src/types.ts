@@ -124,3 +124,13 @@ export type GoogleCalendarSyncResult = {
   end: string;
   synced: number;
 };
+
+export type MobileRelease = {
+  versionName: string;
+  versionCode: number;
+  buildSha: string;
+  architecture: "arm64-v8a";
+  apkUrl: string;
+  releaseUrl: string;
+  publishedAt: string;
+};

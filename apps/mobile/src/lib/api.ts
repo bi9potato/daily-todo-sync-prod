@@ -4,6 +4,7 @@ import type {
   DayTodos,
   GoogleCalendarStatus,
   GoogleCalendarSyncResult,
+  MobileRelease,
   RangeTodos,
   TaskCreatePayload,
   TaskUpdatePayload,
@@ -154,6 +155,10 @@ export function register(payload: {
 
 export function getMe() {
   return request<User>("/auth/me");
+}
+
+export function getLatestMobileRelease() {
+  return request<MobileRelease>("/mobile/releases/latest", {}, false);
 }
 
 export function getDay(date: string) {

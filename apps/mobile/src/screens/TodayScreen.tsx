@@ -13,7 +13,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { Composer } from "@/components/Composer";
-import { DateStrip } from "@/components/DateStrip";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
@@ -24,7 +23,7 @@ import {
   updateOccurrence,
 } from "@/lib/api";
 import { formatLongDate } from "@/lib/date";
-import { colors, spacing, typography } from "@/theme";
+import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
   DayTodos,
   TaskUpdatePayload,
@@ -33,9 +32,6 @@ import type {
 
 type TodayScreenProps = {
   selectedDate: string;
-  today: string;
-  onOpenProfile: () => void;
-  onSelectDate: (date: string) => void;
 };
 
 function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
@@ -52,12 +48,7 @@ function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
   };
 }
 
-export function TodayScreen({
-  selectedDate,
-  today,
-  onOpenProfile,
-  onSelectDate,
-}: TodayScreenProps) {
+export function TodayScreen({ selectedDate }: TodayScreenProps) {
   const queryClient = useQueryClient();
   const [selectedTask, setSelectedTask] = useState<TodoOccurrence | null>(null);
   const [longTermOpen, setLongTermOpen] = useState(false);
@@ -167,13 +158,19 @@ export function TodayScreen({
   }, [dayQuery.data]);
 
   const total = (dayQuery.data?.pending.length ?? 0) + groups.done.length;
-  const progress = total ? groups.done.length / total : 0;
-
   function toggle(task: TodoOccurrence) {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateMutation.mutate({
       id: task.id,
       payload: { done: task.status !== "done" },
+    });
+  }
+
+  function togglePin(task: TodoOccurrence) {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateMutation.mutate({
+      id: task.id,
+      payload: { pinned: !task.isPinned },
     });
   }
 
@@ -207,22 +204,6 @@ export function TodayScreen({
         />
       }
       showsVerticalScrollIndicator={false}>
-      <DateStrip
-        onSelect={onSelectDate}
-        selectedDate={selectedDate}
-        today={today}
-      />
-
-      <View style={styles.progressRow}>
-        <Text style={styles.progressText}>
-          <Text style={styles.progressStrong}>{groups.done.length}</Text>
-          {` / ${total} 已完成`}
-        </Text>
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-        </View>
-      </View>
-
       {total === 0 ? (
         <View style={styles.empty}>
           <AppIcon name="sunny-outline" color={colors.accent} size={34} />
@@ -231,30 +212,30 @@ export function TodayScreen({
         </View>
       ) : null}
 
-      <TaskGroup
-        onPress={setSelectedTask}
-        onToggle={toggle}
-        tasks={groups.pinned}
-        title="置顶"
-      />
-      <TaskGroup
-        onPress={setSelectedTask}
-        onToggle={toggle}
-        tasks={groups.regular}
-        title="待处理"
-      />
       <CollapsibleTaskGroup
         count={groups.longTerm.length}
         isOpen={longTermOpen}
+        onDelete={confirmDelete}
+        onPin={togglePin}
         onPress={setSelectedTask}
         onToggle={toggle}
         onToggleOpen={() => setLongTermOpen((current) => !current)}
         tasks={groups.longTerm}
         title="长期任务"
       />
+      <TaskGroup
+        onDelete={confirmDelete}
+        onPin={togglePin}
+        onPress={setSelectedTask}
+        onToggle={toggle}
+        tasks={[...groups.pinned, ...groups.regular]}
+        title=""
+      />
       <CollapsibleTaskGroup
         count={groups.lowPriority.length}
         isOpen={lowPriorityOpen}
+        onDelete={confirmDelete}
+        onPin={togglePin}
         onPress={setSelectedTask}
         onToggle={toggle}
         onToggleOpen={() => setLowPriorityOpen((current) => !current)}
@@ -262,6 +243,8 @@ export function TodayScreen({
         title="低优先级"
       />
       <TaskGroup
+        onDelete={confirmDelete}
+        onPin={togglePin}
         onPress={setSelectedTask}
         onToggle={toggle}
         tasks={groups.done}
@@ -277,12 +260,6 @@ export function TodayScreen({
           <Text style={styles.title}>我的一天</Text>
           <Text style={styles.date}>{formatLongDate(selectedDate)}</Text>
         </View>
-        <Pressable
-          accessibilityLabel="打开个人设置"
-          onPress={onOpenProfile}
-          style={({ pressed }) => [styles.avatar, pressed && styles.pressed]}>
-          <AppIcon name="person-outline" color={colors.accent} size={22} />
-        </Pressable>
       </View>
       {content}
       <Composer
@@ -304,11 +281,15 @@ export function TodayScreen({
 function TaskGroup({
   title,
   tasks,
+  onDelete,
+  onPin,
   onPress,
   onToggle,
 }: {
   title: string;
   tasks: TodoOccurrence[];
+  onDelete: (task: TodoOccurrence) => void;
+  onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
 }) {
@@ -319,7 +300,14 @@ function TaskGroup({
     <View style={styles.group}>
       {title ? <Text style={styles.groupTitle}>{title}</Text> : null}
       {tasks.map((task) => (
-        <TaskRow key={task.id} onPress={onPress} onToggle={onToggle} task={task} />
+        <TaskRow
+          key={task.id}
+          onDelete={onDelete}
+          onPin={onPin}
+          onPress={onPress}
+          onToggle={onToggle}
+          task={task}
+        />
       ))}
     </View>
   );
@@ -328,6 +316,8 @@ function TaskGroup({
 function CollapsibleTaskGroup({
   count,
   isOpen,
+  onDelete,
+  onPin,
   onPress,
   onToggle,
   onToggleOpen,
@@ -336,29 +326,37 @@ function CollapsibleTaskGroup({
 }: {
   count: number;
   isOpen: boolean;
+  onDelete: (task: TodoOccurrence) => void;
+  onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
   onToggleOpen: () => void;
   tasks: TodoOccurrence[];
   title: string;
 }) {
-  if (!count) {
-    return null;
-  }
   return (
     <View style={styles.collapsible}>
       <Pressable onPress={onToggleOpen} style={styles.collapsibleHeader}>
+        <View style={styles.collapsibleCopy}>
+          <Text style={styles.collapsibleTitle}>{title}</Text>
+          <Text style={styles.collapsibleCount}>{count} 个任务</Text>
+        </View>
         <AppIcon
           name={isOpen ? "chevron-down" : "chevron-forward"}
-          color={colors.text}
+          color={colors.accent}
           size={20}
         />
-        <Text style={styles.collapsibleTitle}>{title}</Text>
-        <Text style={styles.collapsibleCount}>{count}</Text>
       </Pressable>
       {isOpen
         ? tasks.map((task) => (
-            <TaskRow key={task.id} onPress={onPress} onToggle={onToggle} task={task} />
+            <TaskRow
+              key={task.id}
+              onDelete={onDelete}
+              onPin={onPin}
+              onPress={onPress}
+              onToggle={onToggle}
+              task={task}
+            />
           ))
         : null}
     </View>
@@ -371,11 +369,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    ...shadows.panel,
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    padding: spacing.lg,
   },
   title: {
     ...typography.title,
@@ -386,49 +387,14 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: spacing.xs,
   },
-  avatar: {
-    alignItems: "center",
-    backgroundColor: colors.accentSoft,
-    borderRadius: 22,
-    height: 44,
-    justifyContent: "center",
-    width: 44,
-  },
   pressed: {
     opacity: 0.64,
   },
   scrollContent: {
     flexGrow: 1,
     paddingBottom: spacing.xl,
-    paddingHorizontal: spacing.lg,
-  },
-  progressRow: {
-    alignItems: "center",
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row",
-    gap: spacing.lg,
-    paddingVertical: spacing.lg,
-  },
-  progressText: {
-    ...typography.body,
-    color: colors.textMuted,
-  },
-  progressStrong: {
-    color: colors.accent,
-    fontWeight: "700",
-  },
-  progressTrack: {
-    backgroundColor: colors.border,
-    borderRadius: 3,
-    flex: 1,
-    height: 5,
-    overflow: "hidden",
-  },
-  progressFill: {
-    backgroundColor: colors.accent,
-    borderRadius: 3,
-    height: 5,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
   },
   empty: {
     alignItems: "center",
@@ -447,7 +413,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   group: {
-    marginTop: spacing.xl,
+    gap: spacing.sm,
+    marginTop: spacing.md,
   },
   groupTitle: {
     ...typography.section,
@@ -455,23 +422,32 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   collapsible: {
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    marginTop: spacing.lg,
+    ...shadows.card,
+    backgroundColor: colors.surfaceStrong,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    overflow: "hidden",
+    padding: spacing.sm,
   },
   collapsibleHeader: {
     alignItems: "center",
     flexDirection: "row",
-    gap: spacing.md,
-    minHeight: 56,
+    justifyContent: "space-between",
+    minHeight: 58,
+    paddingHorizontal: spacing.sm,
+  },
+  collapsibleCopy: {
+    gap: 2,
   },
   collapsibleTitle: {
     ...typography.section,
-    color: colors.text,
-    flex: 1,
+    color: colors.accent,
   },
   collapsibleCount: {
-    ...typography.body,
+    ...typography.caption,
     color: colors.textMuted,
   },
 });

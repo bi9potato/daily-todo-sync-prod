@@ -1,16 +1,24 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppIcon } from "./AppIcon";
-import { colors, spacing, typography } from "@/theme";
+import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type { TodoOccurrence } from "@/types";
 
 type TaskRowProps = {
   task: TodoOccurrence;
+  onDelete: (task: TodoOccurrence) => void;
+  onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
 };
 
-export function TaskRow({ task, onPress, onToggle }: TaskRowProps) {
+export function TaskRow({
+  task,
+  onDelete,
+  onPin,
+  onPress,
+  onToggle,
+}: TaskRowProps) {
   const done = task.status === "done";
   const metadata = [
     task.reminderTime,
@@ -24,6 +32,7 @@ export function TaskRow({ task, onPress, onToggle }: TaskRowProps) {
       accessibilityRole="button"
       onPress={() => onPress(task)}
       style={({ pressed }) => [styles.container, pressed && styles.pressed]}>
+      <AppIcon name="reorder-two-outline" color={colors.textMuted} size={18} />
       <Pressable
         accessibilityLabel={done ? "标记为未完成" : "标记为已完成"}
         accessibilityRole="checkbox"
@@ -51,28 +60,59 @@ export function TaskRow({ task, onPress, onToggle }: TaskRowProps) {
             </Text>
           </View>
         ) : null}
+        {task.isPinned ? (
+          <View style={styles.pinnedTag}>
+            <AppIcon name="pin-outline" color={colors.accent} size={12} />
+            <Text style={styles.pinnedText}>置顶</Text>
+          </View>
+        ) : null}
       </View>
 
-      {task.isPinned ? (
-        <AppIcon name="pin-outline" color={colors.accent} size={20} />
-      ) : task.reminderTime ? (
-        <AppIcon name="notifications-outline" color={colors.textMuted} size={20} />
-      ) : (
-        <AppIcon name="chevron-forward" color={colors.borderStrong} size={18} />
-      )}
+      <Pressable
+        accessibilityLabel={task.isPinned ? "取消置顶任务" : "置顶任务"}
+        onPress={(event) => {
+          event.stopPropagation();
+          onPin(task);
+        }}
+        style={({ pressed }) => [
+          styles.actionButton,
+          task.isPinned && styles.actionButtonActive,
+          pressed && styles.pressed,
+        ]}>
+        <AppIcon
+          name="pin-outline"
+          color={task.isPinned ? colors.accent : colors.textMuted}
+          size={19}
+        />
+      </Pressable>
+      <Pressable
+        accessibilityLabel="删除任务"
+        onPress={(event) => {
+          event.stopPropagation();
+          onDelete(task);
+        }}
+        style={({ pressed }) => [
+          styles.actionButton,
+          pressed && styles.pressed,
+        ]}>
+        <AppIcon name="trash-outline" color={colors.textMuted} size={19} />
+      </Pressable>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    ...shadows.card,
     alignItems: "center",
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
     flexDirection: "row",
-    gap: spacing.md,
-    minHeight: 72,
-    paddingVertical: spacing.md,
+    gap: spacing.sm,
+    minHeight: 68,
+    padding: spacing.sm,
   },
   pressed: {
     opacity: 0.64,
@@ -80,18 +120,18 @@ const styles = StyleSheet.create({
   checkbox: {
     alignItems: "center",
     borderColor: colors.accent,
-    borderRadius: 7,
+    borderRadius: radius.full,
     borderWidth: 1.5,
-    height: 28,
+    height: 30,
     justifyContent: "center",
-    width: 28,
+    width: 30,
   },
   checkboxDone: {
     backgroundColor: colors.accent,
   },
   content: {
     flex: 1,
-    gap: 4,
+    gap: 3,
     minWidth: 0,
   },
   text: {
@@ -112,5 +152,36 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     flexShrink: 1,
+  },
+  pinnedTag: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  pinnedText: {
+    color: colors.accent,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  actionButton: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceStrong,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
+  },
+  actionButtonActive: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.borderStrong,
   },
 });

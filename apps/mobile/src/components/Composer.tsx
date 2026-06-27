@@ -9,7 +9,7 @@ import {
 } from "react-native";
 
 import { AppIcon } from "./AppIcon";
-import { colors, radius, spacing } from "@/theme";
+import { colors, radius, shadows, spacing } from "@/theme";
 
 type ComposerProps = {
   isPending: boolean;
@@ -32,7 +32,9 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
   return (
     <View style={styles.wrapper}>
       <View style={styles.container}>
-        <AppIcon name="add-circle-outline" color={colors.accent} size={27} />
+        <View style={styles.addButton}>
+          <AppIcon name="add" color={colors.textMuted} size={22} />
+        </View>
         <TextInput
           accessibilityLabel="添加任务"
           autoCapitalize="sentences"
@@ -40,7 +42,7 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
           editable={!isPending}
           onChangeText={setText}
           onSubmitEditing={submit}
-          placeholder="添加任务…"
+          placeholder="添加任务，按 Enter 保存"
           placeholderTextColor={colors.textMuted}
           returnKeyType="done"
           style={styles.input}
@@ -70,21 +72,26 @@ export function Composer({ isPending, onSubmit }: ComposerProps) {
 const styles = StyleSheet.create({
   wrapper: {
     backgroundColor: colors.background,
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   container: {
+    ...shadows.panel,
     alignItems: "center",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
+    backgroundColor: colors.surfaceStrong,
+    borderRadius: radius.full,
     flexDirection: "row",
     gap: spacing.sm,
-    minHeight: 52,
-    paddingHorizontal: spacing.md,
+    minHeight: 58,
+    paddingHorizontal: spacing.sm,
+  },
+  addButton: {
+    alignItems: "center",
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceMuted,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
   },
   input: {
     color: colors.text,

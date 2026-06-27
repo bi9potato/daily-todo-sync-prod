@@ -23,6 +23,8 @@ env:
   CI: "true"
   EXPO_NO_TELEMETRY: "1"
   EXPO_PUBLIC_API_BASE_URL: ${{ vars.MOBILE_API_BASE_URL || 'https://68.183.180.19.sslip.io/api' }}
+  EXPO_PUBLIC_BUILD_NUMBER: ${{ github.run_number }}
+  EXPO_PUBLIC_BUILD_SHA: ${{ github.sha }}
 
 jobs:
   build:
@@ -71,6 +73,12 @@ jobs:
       - name: Generate Android project
         run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean
 
+      - name: Restore stable internal signing key
+        uses: actions/cache@v4
+        with:
+          path: apps/mobile/android/app/debug.keystore
+          key: android-internal-signing-v1
+
       - name: Build standalone arm64 APK
         working-directory: apps/mobile/android
         run: |
@@ -86,6 +94,19 @@ jobs:
           mkdir -p artifacts
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk artifacts/daily-todo-arm64-v8a.apk
           sha256sum artifacts/daily-todo-arm64-v8a.apk > artifacts/daily-todo-arm64-v8a.apk.sha256
+          published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          version_name="$(node -p "require('./apps/mobile/package.json').version")"
+          cat > artifacts/daily-todo-android-update.json <<EOF
+          {
+            "versionName": "${version_name}",
+            "versionCode": ${{ github.run_number }},
+            "buildSha": "${GITHUB_SHA}",
+            "architecture": "arm64-v8a",
+            "apkUrl": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/android-latest/daily-todo-arm64-v8a.apk",
+            "releaseUrl": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/android-latest",
+            "publishedAt": "${published_at}"
+          }
+          EOF
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
@@ -94,6 +115,7 @@ jobs:
           path: |
             artifacts/daily-todo-arm64-v8a.apk
             artifacts/daily-todo-arm64-v8a.apk.sha256
+            artifacts/daily-todo-android-update.json
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -140,7 +162,34 @@ jobs:
           gh release upload "${RELEASE_TAG}" \
             artifacts/daily-todo-arm64-v8a.apk \
             artifacts/daily-todo-arm64-v8a.apk.sha256 \
+            artifacts/daily-todo-android-update.json \
             --clobber
+
+      - name: Copy update manifest to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: ${{ secrets.DROPLET_PORT || 22 }}
+          source: "artifacts/daily-todo-android-update.json"
+          target: "/opt/daily-todo-sync"
+
+      - name: Publish update manifest
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: ${{ secrets.DROPLET_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            cd /opt/daily-todo-sync
+            docker compose -f compose.yml exec -T api mkdir -p /app/media/mobile
+            docker compose -f compose.yml cp \
+              artifacts/daily-todo-android-update.json \
+              api:/app/media/mobile/android-latest.json
 
       - name: Add download instructions
         run: |
