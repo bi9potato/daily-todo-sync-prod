@@ -26,9 +26,9 @@ env:
 
 jobs:
   build:
-    name: Build installable debug APK
+    name: Build standalone arm64 APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -56,12 +56,6 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Restore stable debug signing key
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: ${{ runner.os }}-daily-todo-debug-keystore-v1
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -77,25 +71,29 @@ jobs:
       - name: Generate Android project
         run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean
 
-      - name: Build debug APK
+      - name: Build standalone arm64 APK
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          ./gradlew :app:assembleRelease \
+            -PreactNativeArchitectures=arm64-v8a \
+            --build-cache \
+            --no-daemon \
+            --stacktrace
 
       - name: Prepare artifact and checksum
         run: |
           mkdir -p artifacts
-          cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk artifacts/daily-todo-debug.apk
-          sha256sum artifacts/daily-todo-debug.apk > artifacts/daily-todo-debug.apk.sha256
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk artifacts/daily-todo-arm64-v8a.apk
+          sha256sum artifacts/daily-todo-arm64-v8a.apk > artifacts/daily-todo-arm64-v8a.apk.sha256
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: daily-todo-android-debug
+          name: daily-todo-android-arm64-v8a
           path: |
-            artifacts/daily-todo-debug.apk
-            artifacts/daily-todo-debug.apk.sha256
+            artifacts/daily-todo-arm64-v8a.apk
+            artifacts/daily-todo-arm64-v8a.apk.sha256
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -105,8 +103,8 @@ jobs:
           {
             echo "### Android test APK"
             echo
-            echo "Download **daily-todo-android-debug** from the Artifacts section below."
-            echo "Unzip it, verify the SHA-256 file, then install **daily-todo-debug.apk**."
+            echo "Download **daily-todo-android-arm64-v8a** from the Artifacts section below."
+            echo "Unzip it, verify the SHA-256 file, then install **daily-todo-arm64-v8a.apk**."
             echo
-            echo "> This is a debug-signed APK for internal testing, not a Play Store release."
+            echo "> This is a standalone, test-signed arm64-v8a APK for internal testing, not a Play Store release."
           } >> "$GITHUB_STEP_SUMMARY"
