@@ -259,13 +259,24 @@ export function reorderTaskAttachments(
   });
 }
 
-function resolveMediaUrl(contentUrl: string) {
+export function resolveMediaUrl(contentUrl: string) {
   const origin = API_BASE_URL.replace(/\/api\/?$/, "");
   return /^https?:\/\//i.test(contentUrl)
     ? contentUrl
     : contentUrl.startsWith("/api/")
       ? `${origin}${contentUrl}`
       : `${API_BASE_URL}/${contentUrl.replace(/^\//, "")}`;
+}
+
+export async function getAuthenticatedMediaSource(contentUrl: string) {
+  const tokens = getMemoryTokens() ?? (await loadTokens());
+  if (!tokens) {
+    throw new Error("请先登录。");
+  }
+  return {
+    uri: resolveMediaUrl(contentUrl),
+    headers: { Authorization: `Bearer ${tokens.accessToken}` },
+  };
 }
 
 export async function getAuthenticatedMediaBlob(
