@@ -43,7 +43,6 @@ export function DraggableTaskItem({
     );
   }, [active, index, translateY]);
 
-
   function handleLayout(event: LayoutChangeEvent) {
     const measuredHeight = event.nativeEvent.layout.height;
     if (measuredHeight > 0) {
