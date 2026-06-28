@@ -216,24 +216,6 @@ export function TaskEditor({
               style={styles.heroInput}
               value={text}
             />
-            <Pressable
-              accessibilityLabel="设置重复"
-              accessibilityRole="button"
-              onPress={() => setRepeatMenuOpen(true)}
-              style={({ pressed }) => [
-                styles.repeatLauncher,
-                (isLongTerm || repeatKind !== "none") && styles.repeatLauncherActive,
-                pressed && styles.pressed,
-              ]}>
-              <AppIcon
-                name="repeat-outline"
-                color={isLongTerm || repeatKind !== "none" ? colors.accent : colors.textMuted}
-                size={22}
-              />
-              <Text style={styles.repeatLauncherText}>重复</Text>
-              <Text style={styles.repeatLauncherValue}>{repeatSummary}</Text>
-              <AppIcon name="chevron-down" color={colors.textMuted} size={18} />
-            </Pressable>
             <View style={styles.quickActions}>
               <TogglePill
                 icon="bookmark-outline"
@@ -455,35 +437,8 @@ const styles = StyleSheet.create({
     padding: 0,
     textAlignVertical: "top",
   },
-  repeatLauncher: {
-    alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-  },
-  repeatLauncherActive: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.accent,
-  },
-  repeatLauncherText: {
-    ...typography.label,
-    color: colors.text,
-    fontWeight: "800",
-  },
-  repeatLauncherValue: {
-    ...typography.label,
-    color: colors.textMuted,
-    flex: 1,
-    textAlign: "right",
-  },
   quickActions: {
     flexDirection: "row",
-    flexWrap: "wrap",
     gap: spacing.sm,
   },
   togglePill: {
@@ -492,7 +447,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.full,
     borderWidth: 1,
-    flexBasis: "48%",
+    flex: 1,
     flexDirection: "row",
     gap: spacing.xs,
     justifyContent: "center",
@@ -510,92 +465,6 @@ const styles = StyleSheet.create({
   },
   togglePillTextSelected: {
     color: colors.white,
-  },
-  menuBackdrop: {
-    alignItems: "center",
-    backgroundColor: "rgba(22, 27, 24, 0.36)",
-    flex: 1,
-    justifyContent: "center",
-    padding: spacing.lg,
-  },
-  repeatMenu: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    gap: spacing.md,
-    maxWidth: 420,
-    padding: spacing.md,
-    width: "100%",
-  },
-  menuHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.sm,
-  },
-  menuTitle: {
-    ...typography.section,
-    color: colors.text,
-  },
-  repeatGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  repeatOption: {
-    alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexBasis: "48%",
-    flexDirection: "row",
-    gap: spacing.xs,
-    minHeight: 44,
-    paddingHorizontal: spacing.sm,
-  },
-  repeatOptionSelected: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.accent,
-  },
-  repeatOptionText: {
-    ...typography.label,
-    color: colors.textMuted,
-  },
-  customRepeat: {
-    alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.md,
-    flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-  },
-  customRepeatText: {
-    ...typography.label,
-    color: colors.textMuted,
-  },
-  menuDoneButton: {
-    alignItems: "center",
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-    justifyContent: "center",
-    minHeight: 44,
-  },
-  menuDoneText: {
-    ...typography.label,
-    color: colors.white,
-  },
-  intervalInput: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    color: colors.text,
-    fontSize: 16,
-    minHeight: 36,
-    textAlign: "center",
-    width: 52,
   },
   field: {
     gap: spacing.sm,
