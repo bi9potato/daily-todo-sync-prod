@@ -20,9 +20,6 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/android-apk.yml"
-  push:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -77,6 +74,15 @@ jobs:
       # Keep this release workflow focused on producing the APK quickly.
       - name: Generate Android project
         run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean --no-install
+
+      - name: Pin Gradle wrapper
+        run: |
+          # Expo prebuild currently generates a Gradle 9.x wrapper, but the
+          # bundled Foojay toolchain resolver still references a vendor
+          # constant removed from Gradle 9. Keep the ephemeral native project on
+          # the latest Gradle 8 line until Expo updates that plugin.
+          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-8.14.3-bin.zip#' \
+            apps/mobile/android/gradle/wrapper/gradle-wrapper.properties
 
       - name: Restore stable internal signing key
         uses: actions/cache@v4
