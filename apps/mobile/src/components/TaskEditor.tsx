@@ -7,7 +7,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -33,6 +32,79 @@ const repeatOptions: { value: RepeatKind; label: string }[] = [
   { value: "monthly", label: "每月" },
   { value: "yearly", label: "每年" },
 ];
+
+function RepeatMenu({
+  interval,
+  isLongTerm,
+  onChangeInterval,
+  onClose,
+  onSelect,
+  repeatKind,
+  visible,
+}: {
+  interval: string;
+  isLongTerm: boolean;
+  onChangeInterval: (value: string) => void;
+  onClose: () => void;
+  onSelect: (kind: RepeatKind) => void;
+  repeatKind: RepeatKind;
+  visible: boolean;
+}) {
+  return (
+    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
+      <Pressable onPress={onClose} style={styles.menuBackdrop}>
+        <Pressable style={styles.repeatMenu}>
+          <View style={styles.menuHeader}>
+            <AppIcon name="repeat-outline" color={colors.accent} size={22} />
+            <Text style={styles.menuTitle}>重复</Text>
+          </View>
+          <View style={styles.repeatGrid}>
+            {repeatOptions.map((option) => {
+              const selected = repeatKind === option.value;
+              return (
+                <Pressable
+                  disabled={isLongTerm && option.value !== "daily"}
+                  key={option.value}
+                  onPress={() => onSelect(option.value)}
+                  style={[
+                    styles.repeatOption,
+                    selected && styles.repeatOptionSelected,
+                    isLongTerm && option.value !== "daily" && styles.optionDisabled,
+                  ]}>
+                  <AppIcon
+                    name={selected ? "checkmark-circle" : "ellipse-outline"}
+                    color={selected ? colors.accent : colors.textMuted}
+                    size={18}
+                  />
+                  <Text style={[styles.repeatOptionText, selected && styles.optionTextSelected]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={styles.customRepeat}>
+            <AppIcon name="options-outline" color={colors.textMuted} size={18} />
+            <Text style={styles.customRepeatText}>每</Text>
+            <TextInput
+              editable={!isLongTerm && repeatKind !== "none"}
+              keyboardType="number-pad"
+              maxLength={2}
+              onChangeText={(value) => onChangeInterval(value.replace(/[^0-9]/g, ""))}
+              style={styles.intervalInput}
+              value={interval}
+            />
+            <Text style={styles.customRepeatText}>次周期</Text>
+          </View>
+          <Pressable onPress={onClose} style={styles.menuDoneButton}>
+            <Text style={styles.menuDoneText}>完成</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 
 type TaskEditorProps = {
   task: TodoOccurrence | null;
@@ -66,6 +138,10 @@ export function TaskEditor({
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(
     task?.repeat.kind ?? "none",
   );
+  const [repeatInterval, setRepeatInterval] = useState(
+    String(task?.repeat.interval ?? 1),
+  );
+  const [repeatMenuOpen, setRepeatMenuOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(task?.isPinned ?? false);
   const [isLongTerm, setIsLongTerm] = useState(task?.isLongTerm ?? false);
   const [isLowPriority, setIsLowPriority] = useState(task?.isLowPriority ?? false);
@@ -84,10 +160,16 @@ export function TaskEditor({
       repeat: {
         ...task.repeat,
         kind: isLongTerm ? "daily" : repeatKind,
-        interval: 1,
+        interval: Math.max(1, Number.parseInt(repeatInterval, 10) || 1),
       },
     });
   }
+
+  const repeatSummary = isLongTerm
+    ? "每天"
+    : repeatKind === "none"
+      ? "重复"
+      : repeatOptions.find((option) => option.value === repeatKind)?.label ?? "重复";
 
   return (
     <Modal
@@ -98,7 +180,7 @@ export function TaskEditor({
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={[styles.page, { paddingBottom: insets.bottom }]}>
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top }]}>
           <Pressable
             accessibilityLabel="关闭"
             hitSlop={8}
@@ -124,49 +206,58 @@ export function TaskEditor({
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
-          <Field label="任务名称">
+          <View style={styles.heroCard}>
             <TextInput
               autoFocus={false}
               multiline
               onChangeText={setText}
               placeholder="要完成什么？"
               placeholderTextColor={colors.textMuted}
-              style={[styles.input, styles.titleInput]}
+              style={styles.heroInput}
               value={text}
             />
-          </Field>
-
-          <View style={styles.switchGroup}>
-            <SwitchRow
-              icon="pin-outline"
-              label="置顶"
-              onValueChange={setIsPinned}
-              value={isPinned}
-            />
-            <SwitchRow
-              description="每天显示在任务列表中"
-              icon="infinite-outline"
-              label="长期任务"
-              onValueChange={(value) => {
-                setIsLongTerm(value);
-                if (value) {
-                  setIsLowPriority(false);
-                }
-              }}
-              value={isLongTerm}
-            />
-            <SwitchRow
-              description="收进底部折叠区域"
-              icon="leaf-outline"
-              label="低优先级"
-              onValueChange={(value) => {
-                setIsLowPriority(value);
-                if (value) {
-                  setIsLongTerm(false);
-                }
-              }}
-              value={isLowPriority}
-            />
+            <View style={styles.quickActions}>
+              <TogglePill
+                icon="bookmark-outline"
+                label="置顶"
+                onPress={() => setIsPinned((current) => !current)}
+                selected={isPinned}
+              />
+              <TogglePill
+                icon="repeat-outline"
+                label={repeatSummary}
+                onPress={() => setRepeatMenuOpen(true)}
+                selected={isLongTerm || repeatKind !== "none"}
+              />
+              <TogglePill
+                icon="infinite-outline"
+                label="长期"
+                onPress={() => {
+                  setIsLongTerm((current) => {
+                    const next = !current;
+                    if (next) {
+                      setIsLowPriority(false);
+                    }
+                    return next;
+                  });
+                }}
+                selected={isLongTerm}
+              />
+              <TogglePill
+                icon="leaf-outline"
+                label="低优先"
+                onPress={() => {
+                  setIsLowPriority((current) => {
+                    const next = !current;
+                    if (next) {
+                      setIsLongTerm(false);
+                    }
+                    return next;
+                  });
+                }}
+                selected={isLowPriority}
+              />
+            </View>
           </View>
 
           <Field label="提醒">
@@ -184,28 +275,6 @@ export function TaskEditor({
             </View>
           </Field>
 
-          <Field label="重复">
-            <View style={styles.options}>
-              {repeatOptions.map((option) => {
-                const selected = (isLongTerm ? "daily" : repeatKind) === option.value;
-                return (
-                  <Pressable
-                    disabled={isLongTerm}
-                    key={option.value}
-                    onPress={() => setRepeatKind(option.value)}
-                    style={[
-                      styles.option,
-                      selected && styles.optionSelected,
-                      isLongTerm && styles.optionDisabled,
-                    ]}>
-                    <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </Field>
 
           <Field label="备注">
             <TextInput
@@ -253,6 +322,15 @@ export function TaskEditor({
             </>
           ) : null}
         </ScrollView>
+        <RepeatMenu
+          interval={repeatInterval}
+          isLongTerm={isLongTerm}
+          onChangeInterval={setRepeatInterval}
+          onClose={() => setRepeatMenuOpen(false)}
+          onSelect={setRepeatKind}
+          repeatKind={isLongTerm ? "daily" : repeatKind}
+          visible={repeatMenuOpen}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -267,34 +345,37 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
-function SwitchRow({
-  description,
+function TogglePill({
   icon,
   label,
-  onValueChange,
-  value,
+  onPress,
+  selected,
 }: {
-  description?: string;
   icon: React.ComponentProps<typeof AppIcon>["name"];
   label: string;
-  onValueChange: (value: boolean) => void;
-  value: boolean;
+  onPress: () => void;
+  selected: boolean;
 }) {
   return (
-    <View style={styles.switchRow}>
-      <AppIcon name={icon} color={colors.accent} size={21} />
-      <View style={styles.switchCopy}>
-        <Text style={styles.switchLabel}>{label}</Text>
-        {description ? <Text style={styles.switchDescription}>{description}</Text> : null}
-      </View>
-      <Switch
-        ios_backgroundColor={colors.border}
-        onValueChange={onValueChange}
-        thumbColor={colors.white}
-        trackColor={{ false: colors.border, true: colors.accent }}
-        value={value}
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.togglePill,
+        selected && styles.togglePillSelected,
+        pressed && styles.pressed,
+      ]}>
+      <AppIcon
+        name={selected && icon === "bookmark-outline" ? "bookmark" : icon}
+        color={selected ? colors.white : colors.textMuted}
+        size={20}
       />
-    </View>
+      <Text style={[styles.togglePillText, selected && styles.togglePillTextSelected]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -305,6 +386,7 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: "center",
+    backgroundColor: colors.background,
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
@@ -312,6 +394,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     minHeight: 64,
     paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
   },
   iconButton: {
     alignItems: "center",
@@ -340,8 +423,141 @@ const styles = StyleSheet.create({
     opacity: 0.64,
   },
   content: {
-    gap: spacing.xl,
+    gap: spacing.lg,
     padding: spacing.lg,
+  },
+  heroCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    gap: spacing.md,
+    padding: spacing.md,
+  },
+  heroInput: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: "700",
+    lineHeight: 30,
+    minHeight: 78,
+    padding: 0,
+    textAlignVertical: "top",
+  },
+  quickActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  togglePill: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    flexBasis: "48%",
+    flexDirection: "row",
+    gap: spacing.xs,
+    justifyContent: "center",
+    minHeight: 42,
+    paddingHorizontal: spacing.sm,
+  },
+  togglePillSelected: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  togglePillText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: "700",
+  },
+  togglePillTextSelected: {
+    color: colors.white,
+  },
+  menuBackdrop: {
+    alignItems: "center",
+    backgroundColor: "rgba(22, 27, 24, 0.36)",
+    flex: 1,
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  repeatMenu: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    gap: spacing.md,
+    maxWidth: 420,
+    padding: spacing.md,
+    width: "100%",
+  },
+  menuHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  menuTitle: {
+    ...typography.section,
+    color: colors.text,
+  },
+  repeatGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  repeatOption: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexBasis: "48%",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+  },
+  repeatOptionSelected: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accent,
+  },
+  repeatOptionText: {
+    ...typography.label,
+    color: colors.textMuted,
+  },
+  customRepeat: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+  },
+  customRepeatText: {
+    ...typography.label,
+    color: colors.textMuted,
+  },
+  menuDoneButton: {
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
+    justifyContent: "center",
+    minHeight: 44,
+  },
+  menuDoneText: {
+    ...typography.label,
+    color: colors.white,
+  },
+  intervalInput: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 16,
+    minHeight: 36,
+    textAlign: "center",
+    width: 52,
   },
   field: {
     gap: spacing.sm,

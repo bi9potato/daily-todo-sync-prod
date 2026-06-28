@@ -133,11 +133,16 @@ export function ProfileScreen() {
   const calendar = calendarQuery.data;
   const displayName = user.displayName || user.username;
   const initial = displayName.slice(0, 1).toUpperCase();
-  const accountSubtitle = user.email.includes("@")
-    ? user.email
+  const googleEmails = (calendar?.accounts ?? [])
+    .map((account) => account.googleEmail)
+    .filter((email) => email.includes("@"));
+  const accountSubtitle = googleEmails.length
+    ? googleEmails.join(" · ")
     : calendar?.googleEmail.includes("@")
       ? calendar.googleEmail
-      : "Daily Todo Sync 账户";
+      : user.email.includes("@")
+        ? user.email
+        : "Daily Todo Sync 账户";
 
   return (
     <View style={styles.page}>
@@ -154,7 +159,7 @@ export function ProfileScreen() {
           </View>
           <View style={styles.profileCopy}>
             <Text style={styles.name}>{displayName}</Text>
-            <Text numberOfLines={1} style={styles.email}>
+            <Text numberOfLines={2} style={styles.email}>
               {accountSubtitle}
             </Text>
           </View>
