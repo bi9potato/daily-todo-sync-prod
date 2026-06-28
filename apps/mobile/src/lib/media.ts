@@ -31,7 +31,7 @@ function cacheKeyForUrl(contentUrl: string) {
   for (let index = 0; index < contentUrl.length; index += 1) {
     hash = (hash * 31 + contentUrl.charCodeAt(index)) >>> 0;
   }
-  return `${hash.toString(16)}.jpg`;
+  return `${hash.toString(16)}.img`;
 }
 
 async function ensureMediaCacheDirectory() {
@@ -51,7 +51,6 @@ async function deleteCachedFile(contentUrl: string) {
   const fileUri = `${mediaCacheDirectory}${cacheKeyForUrl(contentUrl)}`;
   await FileSystem.deleteAsync(fileUri, { idempotent: true });
 }
-
 async function downloadToFile(contentUrl: string) {
   await ensureMediaCacheDirectory();
   const fileUri = `${mediaCacheDirectory}${cacheKeyForUrl(contentUrl)}`;

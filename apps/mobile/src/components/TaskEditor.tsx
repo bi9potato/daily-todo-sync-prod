@@ -151,12 +151,6 @@ export function TaskEditor({
                 selected={isPinned}
               />
               <TogglePill
-                icon="repeat-outline"
-                label={repeatSummary}
-                onPress={() => setRepeatMenuOpen(true)}
-                selected={isLongTerm || repeatKind !== "none"}
-              />
-              <TogglePill
                 icon="infinite-outline"
                 label="长期"
                 onPress={() => {
@@ -272,78 +266,6 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
-function RepeatMenu({
-  interval,
-  isLongTerm,
-  onChangeInterval,
-  onClose,
-  onSelect,
-  repeatKind,
-  visible,
-}: {
-  interval: string;
-  isLongTerm: boolean;
-  onChangeInterval: (value: string) => void;
-  onClose: () => void;
-  onSelect: (kind: RepeatKind) => void;
-  repeatKind: RepeatKind;
-  visible: boolean;
-}) {
-  return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
-      <Pressable onPress={onClose} style={styles.menuBackdrop}>
-        <Pressable style={styles.repeatMenu}>
-          <View style={styles.menuHeader}>
-            <AppIcon name="repeat-outline" color={colors.accent} size={22} />
-            <Text style={styles.menuTitle}>重复</Text>
-          </View>
-          <View style={styles.repeatGrid}>
-            {repeatOptions.map((option) => {
-              const selected = repeatKind === option.value;
-              return (
-                <Pressable
-                  disabled={isLongTerm && option.value !== "daily"}
-                  key={option.value}
-                  onPress={() => onSelect(option.value)}
-                  style={[
-                    styles.repeatOption,
-                    selected && styles.repeatOptionSelected,
-                    isLongTerm && option.value !== "daily" && styles.optionDisabled,
-                  ]}>
-                  <AppIcon
-                    name={selected ? "checkmark-circle" : "ellipse-outline"}
-                    color={selected ? colors.accent : colors.textMuted}
-                    size={18}
-                  />
-                  <Text style={[styles.repeatOptionText, selected && styles.optionTextSelected]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <View style={styles.customRepeat}>
-            <AppIcon name="options-outline" color={colors.textMuted} size={18} />
-            <Text style={styles.customRepeatText}>每</Text>
-            <TextInput
-              editable={!isLongTerm && repeatKind !== "none"}
-              keyboardType="number-pad"
-              maxLength={2}
-              onChangeText={(value) => onChangeInterval(value.replace(/[^0-9]/g, ""))}
-              style={styles.intervalInput}
-              value={interval}
-            />
-            <Text style={styles.customRepeatText}>次周期</Text>
-          </View>
-          <Pressable onPress={onClose} style={styles.menuDoneButton}>
-            <Text style={styles.menuDoneText}>完成</Text>
-          </Pressable>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-}
-
 function TogglePill({
   icon,
   label,
@@ -444,7 +366,6 @@ const styles = StyleSheet.create({
   },
   quickActions: {
     flexDirection: "row",
-    flexWrap: "wrap",
     gap: spacing.sm,
   },
   togglePill: {
@@ -453,7 +374,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.full,
     borderWidth: 1,
-    flexBasis: "48%",
+    flex: 1,
     flexDirection: "row",
     gap: spacing.xs,
     justifyContent: "center",
@@ -471,92 +392,6 @@ const styles = StyleSheet.create({
   },
   togglePillTextSelected: {
     color: colors.white,
-  },
-  menuBackdrop: {
-    alignItems: "center",
-    backgroundColor: "rgba(22, 27, 24, 0.36)",
-    flex: 1,
-    justifyContent: "center",
-    padding: spacing.lg,
-  },
-  repeatMenu: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    gap: spacing.md,
-    maxWidth: 420,
-    padding: spacing.md,
-    width: "100%",
-  },
-  menuHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.sm,
-  },
-  menuTitle: {
-    ...typography.section,
-    color: colors.text,
-  },
-  repeatGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  repeatOption: {
-    alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexBasis: "48%",
-    flexDirection: "row",
-    gap: spacing.xs,
-    minHeight: 44,
-    paddingHorizontal: spacing.sm,
-  },
-  repeatOptionSelected: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.accent,
-  },
-  repeatOptionText: {
-    ...typography.label,
-    color: colors.textMuted,
-  },
-  customRepeat: {
-    alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.md,
-    flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-  },
-  customRepeatText: {
-    ...typography.label,
-    color: colors.textMuted,
-  },
-  menuDoneButton: {
-    alignItems: "center",
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-    justifyContent: "center",
-    minHeight: 44,
-  },
-  menuDoneText: {
-    ...typography.label,
-    color: colors.white,
-  },
-  intervalInput: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    color: colors.text,
-    fontSize: 16,
-    minHeight: 36,
-    textAlign: "center",
-    width: 52,
   },
   field: {
     gap: spacing.sm,
