@@ -1,3 +1,5 @@
+import * as FileSystem from "expo-file-system/legacy";
+
 import { clearTokens, getMemoryTokens, loadTokens, saveTokens } from "./auth-storage";
 import type {
   AiChatResult,
@@ -46,6 +48,29 @@ function formatErrorDetail(detail: unknown): string | null {
 async function readErrorMessage(response: Response) {
   const fallback = `请求失败（${response.status}）`;
   const text = await response.text();
+  if (!text) {
+    return fallback;
+  }
+
+  try {
+    const body = JSON.parse(text) as {
+      detail?: unknown;
+      message?: unknown;
+      error?: unknown;
+    };
+    return (
+      formatErrorDetail(body.detail) ??
+      formatErrorDetail(body.message) ??
+      formatErrorDetail(body.error) ??
+      fallback
+    );
+  } catch {
+    return text;
+  }
+}
+
+function readUploadErrorMessage(status: number, text: string) {
+  const fallback = `请求失败（${status}）`;
   if (!text) {
     return fallback;
   }
@@ -135,6 +160,39 @@ async function request<T>(
     return undefined as T;
   }
   return response.json() as Promise<T>;
+}
+
+function safeUploadFilename(name: string) {
+  return name.trim().replace(/[^A-Za-z0-9._-]/g, "_") || `attachment-${Date.now()}`;
+}
+
+async function prepareUploadUri(file: LocalAttachmentFile) {
+  if (!FileSystem.cacheDirectory) {
+    return file.uri;
+  }
+
+  const uploadUri = `${FileSystem.cacheDirectory}upload-${Date.now()}-${safeUploadFilename(
+    file.name,
+  )}`;
+
+  try {
+    await FileSystem.copyAsync({ from: file.uri, to: uploadUri });
+    return uploadUri;
+  } catch {
+    return file.uri;
+  }
+}
+
+async function removeTemporaryUploadFile(uploadUri: string, sourceUri: string) {
+  if (uploadUri === sourceUri) {
+    return;
+  }
+
+  try {
+    await FileSystem.deleteAsync(uploadUri, { idempotent: true });
+  } catch {
+    // Ignore cleanup failures; the upload result is more important.
+  }
 }
 
 export function login(payload: { identifier: string; password: string }) {
@@ -228,18 +286,40 @@ export function restoreOccurrence(id: string) {
 export async function uploadTaskAttachment(
   occurrenceId: string,
   file: LocalAttachmentFile,
-) {
-  const localResponse = await fetch(file.uri);
-  const rawBlob = await localResponse.blob();
-  const uploadBlob = file.type
-    ? new Blob([rawBlob], { type: file.type })
-    : rawBlob;
-  const formData = new FormData();
-  formData.append("file", uploadBlob, file.name);
-  return request<TaskAttachment>(
-    `/occurrences/${occurrenceId}/attachments`,
-    { method: "POST", body: formData },
-  );
+  canRetry = true,
+): Promise<TaskAttachment> {
+  const tokens = getMemoryTokens() ?? (await loadTokens());
+  if (!tokens) {
+    throw new Error("请先登录。");
+  }
+
+  const uploadUri = await prepareUploadUri(file);
+  try {
+    const result = await FileSystem.uploadAsync(
+      `${API_BASE_URL}/occurrences/${occurrenceId}/attachments`,
+      uploadUri,
+      {
+        fieldName: "file",
+        headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        httpMethod: "POST",
+        mimeType: file.type,
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      },
+    );
+
+    if (result.status === 401 && canRetry) {
+      await refreshAccessToken();
+      return uploadTaskAttachment(occurrenceId, file, false);
+    }
+
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(readUploadErrorMessage(result.status, result.body));
+    }
+
+    return JSON.parse(result.body) as TaskAttachment;
+  } finally {
+    await removeTemporaryUploadFile(uploadUri, file.uri);
+  }
 }
 
 export function deleteTaskAttachment(
