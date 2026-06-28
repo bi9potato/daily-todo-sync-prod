@@ -65,6 +65,10 @@ export function TaskEditor({
   const [repeatKind, setRepeatKind] = useState<RepeatKind>(
     task?.repeat.kind ?? "none",
   );
+  const [repeatInterval, setRepeatInterval] = useState(
+    String(task?.repeat.interval ?? 1),
+  );
+  const [repeatMenuOpen, setRepeatMenuOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(task?.isPinned ?? false);
   const [isLongTerm, setIsLongTerm] = useState(task?.isLongTerm ?? false);
   const [isLowPriority, setIsLowPriority] = useState(task?.isLowPriority ?? false);
@@ -83,10 +87,16 @@ export function TaskEditor({
       repeat: {
         ...task.repeat,
         kind: isLongTerm ? "daily" : repeatKind,
-        interval: 1,
+        interval: Math.max(1, Number.parseInt(repeatInterval, 10) || 1),
       },
     });
   }
+
+  const repeatSummary = isLongTerm
+    ? "每天"
+    : repeatKind === "none"
+      ? "重复"
+      : repeatOptions.find((option) => option.value === repeatKind)?.label ?? "重复";
 
   return (
     <Modal
@@ -186,28 +196,6 @@ export function TaskEditor({
             </View>
           </Field>
 
-          <Field label="重复">
-            <View style={styles.options}>
-              {repeatOptions.map((option) => {
-                const selected = (isLongTerm ? "daily" : repeatKind) === option.value;
-                return (
-                  <Pressable
-                    disabled={isLongTerm}
-                    key={option.value}
-                    onPress={() => setRepeatKind(option.value)}
-                    style={[
-                      styles.option,
-                      selected && styles.optionSelected,
-                      isLongTerm && styles.optionDisabled,
-                    ]}>
-                    <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </Field>
 
           <Field label="备注">
             <TextInput
@@ -255,6 +243,15 @@ export function TaskEditor({
             </>
           ) : null}
         </ScrollView>
+        <RepeatMenu
+          interval={repeatInterval}
+          isLongTerm={isLongTerm}
+          onChangeInterval={setRepeatInterval}
+          onClose={() => setRepeatMenuOpen(false)}
+          onSelect={setRepeatKind}
+          repeatKind={isLongTerm ? "daily" : repeatKind}
+          visible={repeatMenuOpen}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );
