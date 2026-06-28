@@ -33,6 +33,79 @@ const repeatOptions: { value: RepeatKind; label: string }[] = [
   { value: "yearly", label: "每年" },
 ];
 
+function RepeatMenu({
+  interval,
+  isLongTerm,
+  onChangeInterval,
+  onClose,
+  onSelect,
+  repeatKind,
+  visible,
+}: {
+  interval: string;
+  isLongTerm: boolean;
+  onChangeInterval: (value: string) => void;
+  onClose: () => void;
+  onSelect: (kind: RepeatKind) => void;
+  repeatKind: RepeatKind;
+  visible: boolean;
+}) {
+  return (
+    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
+      <Pressable onPress={onClose} style={styles.menuBackdrop}>
+        <Pressable style={styles.repeatMenu}>
+          <View style={styles.menuHeader}>
+            <AppIcon name="repeat-outline" color={colors.accent} size={22} />
+            <Text style={styles.menuTitle}>重复</Text>
+          </View>
+          <View style={styles.repeatGrid}>
+            {repeatOptions.map((option) => {
+              const selected = repeatKind === option.value;
+              return (
+                <Pressable
+                  disabled={isLongTerm && option.value !== "daily"}
+                  key={option.value}
+                  onPress={() => onSelect(option.value)}
+                  style={[
+                    styles.repeatOption,
+                    selected && styles.repeatOptionSelected,
+                    isLongTerm && option.value !== "daily" && styles.optionDisabled,
+                  ]}>
+                  <AppIcon
+                    name={selected ? "checkmark-circle" : "ellipse-outline"}
+                    color={selected ? colors.accent : colors.textMuted}
+                    size={18}
+                  />
+                  <Text style={[styles.repeatOptionText, selected && styles.optionTextSelected]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={styles.customRepeat}>
+            <AppIcon name="options-outline" color={colors.textMuted} size={18} />
+            <Text style={styles.customRepeatText}>每</Text>
+            <TextInput
+              editable={!isLongTerm && repeatKind !== "none"}
+              keyboardType="number-pad"
+              maxLength={2}
+              onChangeText={(value) => onChangeInterval(value.replace(/[^0-9]/g, ""))}
+              style={styles.intervalInput}
+              value={interval}
+            />
+            <Text style={styles.customRepeatText}>次周期</Text>
+          </View>
+          <Pressable onPress={onClose} style={styles.menuDoneButton}>
+            <Text style={styles.menuDoneText}>完成</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+
 type TaskEditorProps = {
   task: TodoOccurrence | null;
   isAttachmentMutating: boolean;
