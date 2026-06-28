@@ -23,14 +23,26 @@ const contentTypeByExtension: Record<string, string> = {
   csv: "text/csv",
   doc: "application/msword",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  gif: "image/gif",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
   json: "application/json",
   pdf: "application/pdf",
+  png: "image/png",
   ppt: "application/vnd.ms-powerpoint",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   txt: "text/plain",
+  webp: "image/webp",
   xls: "application/vnd.ms-excel",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   zip: "application/zip",
+};
+
+const extensionByImageContentType: Record<string, string> = {
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
 };
 
 function resolveContentType(filename: string, reportedType?: string | null) {
@@ -39,6 +51,55 @@ function resolveContentType(filename: string, reportedType?: string | null) {
   }
   const extension = filename.split(".").pop()?.toLowerCase() ?? "";
   return contentTypeByExtension[extension] ?? "application/octet-stream";
+}
+
+function filenameFromUri(uri: string) {
+  const cleanUri = uri.split(/[?#]/)[0];
+  const filename = cleanUri.split("/").pop();
+  if (!filename) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(filename);
+  } catch {
+    return filename;
+  }
+}
+
+function extensionFromFilename(filename: string) {
+  return filename.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function resolveImageContentType(
+  filename: string,
+  reportedType?: string | null,
+) {
+  const normalizedReportedType = reportedType?.toLowerCase();
+  if (
+    normalizedReportedType &&
+    normalizedReportedType in extensionByImageContentType
+  ) {
+    return normalizedReportedType;
+  }
+
+  const extension = extensionFromFilename(filename);
+  const inferredType = contentTypeByExtension[extension];
+  if (inferredType?.startsWith("image/")) {
+    return inferredType;
+  }
+
+  return "image/jpeg";
+}
+
+function ensureImageFilenameExtension(filename: string, contentType: string) {
+  const extension = extensionFromFilename(filename);
+  if (contentTypeByExtension[extension] === contentType) {
+    return filename;
+  }
+
+  const fallbackExtension = extensionByImageContentType[contentType] ?? "jpg";
+  const basename = filename.replace(/\.[^/.]+$/, "") || `task-image-${Date.now()}`;
+  return `${basename}.${fallbackExtension}`;
 }
 
 type AttachmentGalleryProps = {
@@ -68,10 +129,14 @@ export function AttachmentGallery({
       return;
     }
     const asset = result.assets[0];
+    const rawName =
+      asset.fileName || filenameFromUri(asset.uri) || `task-image-${Date.now()}`;
+    const type = resolveImageContentType(rawName, asset.mimeType);
+    const name = ensureImageFilenameExtension(rawName, type);
     onUpload({
       uri: asset.uri,
-      name: asset.fileName || `task-image-${Date.now()}.jpg`,
-      type: asset.mimeType || "image/jpeg",
+      name,
+      type,
     });
   }
 
@@ -113,10 +178,10 @@ export function AttachmentGallery({
                 <Pressable
                   accessibilityLabel={`预览 ${attachment.originalFilename}`}
                   onPress={() => setPreview(attachment)}>
-                <AuthenticatedImage
-                  contentUrl={attachment.contentUrl}
-                  style={styles.thumbnail}
-                />
+                  <AuthenticatedImage
+                    contentUrl={attachment.contentUrl}
+                    style={styles.thumbnail}
+                  />
                 </Pressable>
               ) : (
                 <View style={styles.fileIcon}>
