@@ -7,7 +7,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -98,7 +97,7 @@ export function TaskEditor({
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={[styles.page, { paddingBottom: insets.bottom }]}>
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top }]}>
           <Pressable
             accessibilityLabel="关闭"
             hitSlop={8}
@@ -124,49 +123,52 @@ export function TaskEditor({
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
-          <Field label="任务名称">
+          <View style={styles.heroCard}>
             <TextInput
               autoFocus={false}
               multiline
               onChangeText={setText}
               placeholder="要完成什么？"
               placeholderTextColor={colors.textMuted}
-              style={[styles.input, styles.titleInput]}
+              style={styles.heroInput}
               value={text}
             />
-          </Field>
-
-          <View style={styles.switchGroup}>
-            <SwitchRow
-              icon="pin-outline"
-              label="置顶"
-              onValueChange={setIsPinned}
-              value={isPinned}
-            />
-            <SwitchRow
-              description="每天显示在任务列表中"
-              icon="infinite-outline"
-              label="长期任务"
-              onValueChange={(value) => {
-                setIsLongTerm(value);
-                if (value) {
-                  setIsLowPriority(false);
-                }
-              }}
-              value={isLongTerm}
-            />
-            <SwitchRow
-              description="收进底部折叠区域"
-              icon="leaf-outline"
-              label="低优先级"
-              onValueChange={(value) => {
-                setIsLowPriority(value);
-                if (value) {
-                  setIsLongTerm(false);
-                }
-              }}
-              value={isLowPriority}
-            />
+            <View style={styles.quickActions}>
+              <TogglePill
+                icon="bookmark-outline"
+                label="置顶"
+                onPress={() => setIsPinned((current) => !current)}
+                selected={isPinned}
+              />
+              <TogglePill
+                icon="infinite-outline"
+                label="长期"
+                onPress={() => {
+                  setIsLongTerm((current) => {
+                    const next = !current;
+                    if (next) {
+                      setIsLowPriority(false);
+                    }
+                    return next;
+                  });
+                }}
+                selected={isLongTerm}
+              />
+              <TogglePill
+                icon="leaf-outline"
+                label="低优先"
+                onPress={() => {
+                  setIsLowPriority((current) => {
+                    const next = !current;
+                    if (next) {
+                      setIsLongTerm(false);
+                    }
+                    return next;
+                  });
+                }}
+                selected={isLowPriority}
+              />
+            </View>
           </View>
 
           <Field label="提醒">
@@ -267,34 +269,37 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
-function SwitchRow({
-  description,
+function TogglePill({
   icon,
   label,
-  onValueChange,
-  value,
+  onPress,
+  selected,
 }: {
-  description?: string;
   icon: React.ComponentProps<typeof AppIcon>["name"];
   label: string;
-  onValueChange: (value: boolean) => void;
-  value: boolean;
+  onPress: () => void;
+  selected: boolean;
 }) {
   return (
-    <View style={styles.switchRow}>
-      <AppIcon name={icon} color={colors.accent} size={21} />
-      <View style={styles.switchCopy}>
-        <Text style={styles.switchLabel}>{label}</Text>
-        {description ? <Text style={styles.switchDescription}>{description}</Text> : null}
-      </View>
-      <Switch
-        ios_backgroundColor={colors.border}
-        onValueChange={onValueChange}
-        thumbColor={colors.white}
-        trackColor={{ false: colors.border, true: colors.accent }}
-        value={value}
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.togglePill,
+        selected && styles.togglePillSelected,
+        pressed && styles.pressed,
+      ]}>
+      <AppIcon
+        name={selected && icon === "bookmark-outline" ? "bookmark" : icon}
+        color={selected ? colors.white : colors.textMuted}
+        size={20}
       />
-    </View>
+      <Text style={[styles.togglePillText, selected && styles.togglePillTextSelected]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -305,6 +310,7 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: "center",
+    backgroundColor: colors.background,
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
@@ -312,6 +318,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     minHeight: 64,
     paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
   },
   iconButton: {
     alignItems: "center",
@@ -340,8 +347,54 @@ const styles = StyleSheet.create({
     opacity: 0.64,
   },
   content: {
-    gap: spacing.xl,
+    gap: spacing.lg,
     padding: spacing.lg,
+  },
+  heroCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    gap: spacing.md,
+    padding: spacing.md,
+  },
+  heroInput: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: "700",
+    lineHeight: 30,
+    minHeight: 78,
+    padding: 0,
+    textAlignVertical: "top",
+  },
+  quickActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  togglePill: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: "row",
+    gap: spacing.xs,
+    justifyContent: "center",
+    minHeight: 42,
+    paddingHorizontal: spacing.sm,
+  },
+  togglePillSelected: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  togglePillText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: "700",
+  },
+  togglePillTextSelected: {
+    color: colors.white,
   },
   field: {
     gap: spacing.sm,
