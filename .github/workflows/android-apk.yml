@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
       - main
     paths:
@@ -11,6 +11,9 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/android-apk.yml"
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -45,7 +48,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
@@ -58,20 +61,21 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/mobile/node_modules
+          key: android-node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
 
-      - name: Typecheck mobile app
-        run: pnpm check:mobile
-
-      - name: Lint mobile app
-        run: pnpm --filter @daily-todo-sync/mobile lint
-
-      - name: Validate Expo project
-        run: pnpm --dir apps/mobile run doctor
-
+      # Typecheck/lint/doctor are intentionally covered by the CI workflow.
+      # Keep this release workflow focused on producing the APK quickly.
       - name: Generate Android project
-        run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean
+        run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean --no-install
 
       - name: Restore stable internal signing key
         uses: actions/cache@v4
@@ -86,6 +90,7 @@ jobs:
           ./gradlew :app:assembleRelease \
             -PreactNativeArchitectures=arm64-v8a \
             --build-cache \
+            --parallel \
             --no-daemon \
             --stacktrace
 
@@ -121,6 +126,7 @@ jobs:
           compression-level: 0
 
       - name: Publish latest Android test release
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: android-latest
@@ -166,6 +172,7 @@ jobs:
             --clobber
 
       - name: Copy update manifest to server
+        if: github.event_name != 'pull_request'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -176,6 +183,7 @@ jobs:
           target: "/opt/daily-todo-sync"
 
       - name: Publish update manifest
+        if: github.event_name != 'pull_request'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -192,6 +200,7 @@ jobs:
               api:/app/media/mobile/android-latest.json
 
       - name: Add download instructions
+        if: github.event_name != 'pull_request'
         run: |
           {
             echo "### Android test APK"
