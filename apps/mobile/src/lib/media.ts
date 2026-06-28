@@ -31,7 +31,7 @@ function cacheKeyForUrl(contentUrl: string) {
   for (let index = 0; index < contentUrl.length; index += 1) {
     hash = (hash * 31 + contentUrl.charCodeAt(index)) >>> 0;
   }
-  return `${hash.toString(16)}.jpg`;
+  return `${hash.toString(16)}.img`;
 }
 
 async function ensureMediaCacheDirectory() {
