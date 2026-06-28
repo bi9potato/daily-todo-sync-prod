@@ -2,6 +2,15 @@ name: Android APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "apps/mobile/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/android-apk.yml"
   push:
     branches:
       - main
@@ -115,6 +124,7 @@ jobs:
           compression-level: 0
 
       - name: Publish latest Android test release
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: android-latest
@@ -160,6 +170,7 @@ jobs:
             --clobber
 
       - name: Copy update manifest to server
+        if: github.event_name != 'pull_request'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -170,6 +181,7 @@ jobs:
           target: "/opt/daily-todo-sync"
 
       - name: Publish update manifest
+        if: github.event_name != 'pull_request'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -186,6 +198,7 @@ jobs:
               api:/app/media/mobile/android-latest.json
 
       - name: Add download instructions
+        if: github.event_name != 'pull_request'
         run: |
           {
             echo "### Android test APK"
