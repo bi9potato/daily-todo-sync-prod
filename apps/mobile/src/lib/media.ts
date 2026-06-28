@@ -2,6 +2,7 @@ import { getAuthenticatedMediaBlob, getAuthenticatedMediaSource } from "./api";
 
 type CachedMediaSource = {
   uri: string;
+  headers?: Record<string, string>;
 };
 
 const mediaDownloads = new Map<string, Promise<CachedMediaSource>>();
@@ -19,7 +20,11 @@ function blobToDataUri(blob: Blob) {
 }
 
 async function downloadAuthenticatedMedia(contentUrl: string) {
-  return getAuthenticatedMediaSource(contentUrl);
+  try {
+    return await getCachedAuthenticatedMediaDataUri(contentUrl);
+  } catch {
+    return getAuthenticatedMediaSource(contentUrl);
+  }
 }
 
 export async function getCachedAuthenticatedMediaDataUri(contentUrl: string) {

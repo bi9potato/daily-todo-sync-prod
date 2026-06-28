@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Animated, StyleSheet } from "react-native";
+import { Animated, StyleSheet, type LayoutChangeEvent } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 
@@ -31,6 +31,7 @@ export function DraggableTaskItem({
   const startIndexRef = useRef(index);
   const lastTargetRef = useRef(index);
   const latestTranslationRef = useRef(0);
+  const rowHeightRef = useRef(ESTIMATED_ROW_HEIGHT);
 
   useEffect(() => {
     if (!active) {
@@ -38,9 +39,16 @@ export function DraggableTaskItem({
     }
     translateY.setValue(
       latestTranslationRef.current +
-        (startIndexRef.current - index) * ESTIMATED_ROW_HEIGHT,
+        (startIndexRef.current - index) * rowHeightRef.current,
     );
   }, [active, index, translateY]);
+
+  function handleLayout(event: LayoutChangeEvent) {
+    const measuredHeight = event.nativeEvent.layout.height;
+    if (measuredHeight > 0) {
+      rowHeightRef.current = measuredHeight;
+    }
+  }
 
   const gesture = useMemo(
     () =>
@@ -65,9 +73,9 @@ export function DraggableTaskItem({
           latestTranslationRef.current = event.translationY;
           translateY.setValue(
             event.translationY +
-              (startIndexRef.current - index) * ESTIMATED_ROW_HEIGHT,
+              (startIndexRef.current - index) * rowHeightRef.current,
           );
-          const offset = Math.round(event.translationY / ESTIMATED_ROW_HEIGHT);
+          const offset = Math.round(event.translationY / rowHeightRef.current);
           const target = Math.max(
             0,
             Math.min(total - 1, startIndexRef.current + offset),
@@ -97,6 +105,7 @@ export function DraggableTaskItem({
     <GestureDetector gesture={gesture}>
       <Animated.View
         collapsable={false}
+        onLayout={handleLayout}
         style={[
           styles.item,
           active && styles.active,
