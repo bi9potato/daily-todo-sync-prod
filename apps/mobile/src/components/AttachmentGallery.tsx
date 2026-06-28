@@ -39,7 +39,7 @@ export function AttachmentGallery({
     const result = await ImagePicker.launchImageLibraryAsync({
       allowsMultipleSelection: false,
       mediaTypes: ["images"],
-      quality: 0.9,
+      quality: 0.72,
     });
     if (result.canceled) {
       return;
