@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
+  UIManager,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -11,6 +12,7 @@ import {
   Text,
   View,
 } from "react-native";
+
 import * as Haptics from "expo-haptics";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -21,6 +23,7 @@ import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
 import {
+  chatWithAi,
   copyLongTermOccurrenceAsRegular,
   createTask,
   deleteTaskAttachment,
@@ -40,6 +43,10 @@ import type {
   TaskUpdatePayload,
   TodoOccurrence,
 } from "@/types";
+
+if (Platform.OS === "android") {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
 
 type TodayScreenProps = {
   selectedDate: string;
@@ -115,6 +122,7 @@ export function TodayScreen({
   const [longTermOpen, setLongTermOpen] = useState(false);
   const [lowPriorityOpen, setLowPriorityOpen] = useState(false);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const [isDraggingTask, setIsDraggingTask] = useState(false);
   const dragPreviewRef = useRef<DragPreview | null>(null);
 
   const dayQuery = useQuery({
@@ -294,6 +302,15 @@ export function TodayScreen({
     },
   });
 
+  const aiChatMutation = useMutation({
+    mutationFn: (message: string) => chatWithAi(message, selectedDate),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["day", selectedDate] });
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+    onError: (error) => Alert.alert("AI 请求失败", error.message),
+  });
+
   const reorderMutation = useMutation({
     mutationFn: (orderedIds: string[]) => reorderDay(selectedDate, orderedIds),
     onError: (error) => {
@@ -433,6 +450,7 @@ export function TodayScreen({
       contentContainerStyle={styles.scrollContent}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
+      scrollEnabled={!isDraggingTask}
       refreshControl={
         <RefreshControl
           colors={[colors.accent]}
@@ -456,6 +474,8 @@ export function TodayScreen({
             count={groups.longTerm.length}
             isOpen={longTermOpen}
             onDelete={confirmDelete}
+            onDragEnd={() => setIsDraggingTask(false)}
+            onDragStart={() => setIsDraggingTask(true)}
             onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
@@ -469,6 +489,8 @@ export function TodayScreen({
           />
           <TaskGroup
             onDelete={confirmDelete}
+            onDragEnd={() => setIsDraggingTask(false)}
+            onDragStart={() => setIsDraggingTask(true)}
             onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
@@ -483,6 +505,8 @@ export function TodayScreen({
             count={groups.lowPriority.length}
             isOpen={lowPriorityOpen}
             onDelete={confirmDelete}
+            onDragEnd={() => setIsDraggingTask(false)}
+            onDragStart={() => setIsDraggingTask(true)}
             onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
@@ -498,6 +522,8 @@ export function TodayScreen({
       ) : (
         <TaskGroup
           onDelete={confirmDelete}
+          onDragEnd={() => setIsDraggingTask(false)}
+          onDragStart={() => setIsDraggingTask(true)}
           onDrop={finishTaskDrag}
           onPin={togglePin}
           onPress={(task) => setSelectedTaskId(task.id)}
@@ -540,7 +566,9 @@ export function TodayScreen({
       </View>
       {content}
       <Composer
-        isPending={createMutation.isPending}
+        isPending={createMutation.isPending || aiChatMutation.isPending}
+        lastAiReply={aiChatMutation.data?.reply}
+        onAiSubmit={(text) => aiChatMutation.mutateAsync(text).then(() => undefined)}
         onSubmit={(text) => createMutation.mutateAsync(text).then(() => undefined)}
       />
       <TaskEditor
@@ -589,6 +617,8 @@ function TaskGroup({
   title,
   tasks,
   onDelete,
+  onDragEnd,
+  onDragStart,
   onDrop,
   onPin,
   onPress,
@@ -598,6 +628,8 @@ function TaskGroup({
   title: string;
   tasks: TodoOccurrence[];
   onDelete: (task: TodoOccurrence) => void;
+  onDragEnd: () => void;
+  onDragStart: () => void;
   onDrop: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
@@ -615,6 +647,8 @@ function TaskGroup({
           id={task.id}
           index={index}
           key={task.id}
+          onDragEnd={onDragEnd}
+          onDragStart={onDragStart}
           onDrop={onDrop}
           onPreviewMove={onPreviewMove}
           total={tasks.length}>
@@ -635,6 +669,8 @@ function CollapsibleTaskGroup({
   count,
   isOpen,
   onDelete,
+  onDragEnd,
+  onDragStart,
   onDrop,
   onPin,
   onPress,
@@ -647,6 +683,8 @@ function CollapsibleTaskGroup({
   count: number;
   isOpen: boolean;
   onDelete: (task: TodoOccurrence) => void;
+  onDragEnd: () => void;
+  onDragStart: () => void;
   onDrop: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
@@ -675,6 +713,8 @@ function CollapsibleTaskGroup({
               id={task.id}
               index={index}
               key={task.id}
+              onDragEnd={onDragEnd}
+              onDragStart={onDragStart}
               onDrop={onDrop}
               onPreviewMove={onPreviewMove}
               total={tasks.length}>

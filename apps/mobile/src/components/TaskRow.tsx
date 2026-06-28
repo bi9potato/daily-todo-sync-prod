@@ -36,7 +36,8 @@ export function TaskRow({
         styles.container,
         task.isLongTerm && styles.longTermContainer,
         task.isLowPriority && !task.isLongTerm && styles.lowPriorityContainer,
-        task.isPinned && styles.pinnedContainer,
+        task.isPinned && !task.isLongTerm && styles.pinnedContainer,
+        task.isPinned && task.isLongTerm && styles.longTermPinnedContainer,
         done && styles.doneContainer,
         pressed && styles.pressed,
       ]}>
@@ -148,6 +149,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFF9EC",
     borderColor: "#C4A45D",
     borderLeftWidth: 4,
+  },
+  longTermPinnedContainer: {
+    backgroundColor: "#FFF9EC",
+    borderColor: "#C4A45D",
+    borderLeftWidth: 4,
+    borderTopWidth: 3,
+    elevation: 3,
   },
   lowPriorityContainer: {
     backgroundColor: "#EEF5F6",
