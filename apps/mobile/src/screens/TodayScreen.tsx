@@ -411,10 +411,10 @@ export function TodayScreen({
       return;
     }
     LayoutAnimation.configureNext({
-      duration: 180,
+      duration: 220,
       update: {
-        type: LayoutAnimation.Types.easeInEaseOut,
-        springDamping: 0.86,
+        type: LayoutAnimation.Types.spring,
+        springDamping: 0.74,
       },
     });
     dragPreviewRef.current = next;

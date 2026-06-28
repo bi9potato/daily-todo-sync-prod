@@ -12,6 +12,7 @@ type CachedMediaSource = {
 
 const mediaDownloads = new Map<string, Promise<CachedMediaSource>>();
 const mediaCacheDirectory = `${FileSystem.cacheDirectory ?? ""}task-attachments/`;
+let mediaCacheDirectoryPromise: Promise<void> | null = null;
 
 function blobToDataUri(blob: Blob) {
   return new Promise<string>((resolve, reject) => {
@@ -37,7 +38,10 @@ async function ensureMediaCacheDirectory() {
   if (!FileSystem.cacheDirectory) {
     throw new Error("图片缓存目录不可用。");
   }
-  await FileSystem.makeDirectoryAsync(mediaCacheDirectory, { intermediates: true });
+  mediaCacheDirectoryPromise ??= FileSystem.makeDirectoryAsync(mediaCacheDirectory, {
+    intermediates: true,
+  });
+  await mediaCacheDirectoryPromise;
 }
 
 async function downloadToFile(contentUrl: string) {
