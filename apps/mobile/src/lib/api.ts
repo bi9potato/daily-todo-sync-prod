@@ -225,12 +225,17 @@ export function restoreOccurrence(id: string) {
   });
 }
 
-export function uploadTaskAttachment(
+export async function uploadTaskAttachment(
   occurrenceId: string,
   file: LocalAttachmentFile,
 ) {
+  const localResponse = await fetch(file.uri);
+  const rawBlob = await localResponse.blob();
+  const uploadBlob = file.type
+    ? new Blob([rawBlob], { type: file.type })
+    : rawBlob;
   const formData = new FormData();
-  formData.append("file", file as unknown as Blob);
+  formData.append("file", uploadBlob, file.name);
   return request<TaskAttachment>(
     `/occurrences/${occurrenceId}/attachments`,
     { method: "POST", body: formData },
