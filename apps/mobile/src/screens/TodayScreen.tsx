@@ -122,6 +122,7 @@ export function TodayScreen({
   const [longTermOpen, setLongTermOpen] = useState(false);
   const [lowPriorityOpen, setLowPriorityOpen] = useState(false);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const [isDraggingTask, setIsDraggingTask] = useState(false);
   const dragPreviewRef = useRef<DragPreview | null>(null);
 
   const dayQuery = useQuery({
@@ -449,6 +450,7 @@ export function TodayScreen({
       contentContainerStyle={styles.scrollContent}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
+      scrollEnabled={!isDraggingTask}
       refreshControl={
         <RefreshControl
           colors={[colors.accent]}
@@ -472,6 +474,8 @@ export function TodayScreen({
             count={groups.longTerm.length}
             isOpen={longTermOpen}
             onDelete={confirmDelete}
+            onDragEnd={() => setIsDraggingTask(false)}
+            onDragStart={() => setIsDraggingTask(true)}
             onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
@@ -485,6 +489,8 @@ export function TodayScreen({
           />
           <TaskGroup
             onDelete={confirmDelete}
+            onDragEnd={() => setIsDraggingTask(false)}
+            onDragStart={() => setIsDraggingTask(true)}
             onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
@@ -499,6 +505,8 @@ export function TodayScreen({
             count={groups.lowPriority.length}
             isOpen={lowPriorityOpen}
             onDelete={confirmDelete}
+            onDragEnd={() => setIsDraggingTask(false)}
+            onDragStart={() => setIsDraggingTask(true)}
             onDrop={finishTaskDrag}
             onPin={togglePin}
             onPress={(task) => setSelectedTaskId(task.id)}
@@ -514,6 +522,8 @@ export function TodayScreen({
       ) : (
         <TaskGroup
           onDelete={confirmDelete}
+          onDragEnd={() => setIsDraggingTask(false)}
+          onDragStart={() => setIsDraggingTask(true)}
           onDrop={finishTaskDrag}
           onPin={togglePin}
           onPress={(task) => setSelectedTaskId(task.id)}
@@ -607,6 +617,8 @@ function TaskGroup({
   title,
   tasks,
   onDelete,
+  onDragEnd,
+  onDragStart,
   onDrop,
   onPin,
   onPress,
@@ -616,6 +628,8 @@ function TaskGroup({
   title: string;
   tasks: TodoOccurrence[];
   onDelete: (task: TodoOccurrence) => void;
+  onDragEnd: () => void;
+  onDragStart: () => void;
   onDrop: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
@@ -633,6 +647,8 @@ function TaskGroup({
           id={task.id}
           index={index}
           key={task.id}
+          onDragEnd={onDragEnd}
+          onDragStart={onDragStart}
           onDrop={onDrop}
           onPreviewMove={onPreviewMove}
           total={tasks.length}>
@@ -653,6 +669,8 @@ function CollapsibleTaskGroup({
   count,
   isOpen,
   onDelete,
+  onDragEnd,
+  onDragStart,
   onDrop,
   onPin,
   onPress,
@@ -665,6 +683,8 @@ function CollapsibleTaskGroup({
   count: number;
   isOpen: boolean;
   onDelete: (task: TodoOccurrence) => void;
+  onDragEnd: () => void;
+  onDragStart: () => void;
   onDrop: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
@@ -693,6 +713,8 @@ function CollapsibleTaskGroup({
               id={task.id}
               index={index}
               key={task.id}
+              onDragEnd={onDragEnd}
+              onDragStart={onDragStart}
               onDrop={onDrop}
               onPreviewMove={onPreviewMove}
               total={tasks.length}>
