@@ -11,10 +11,21 @@ from .models import Task, TaskAttachment, TodoOccurrence
 
 MAX_ATTACHMENT_SIZE_BYTES = 8 * 1024 * 1024
 ALLOWED_ATTACHMENT_TYPES = {
+    "application/json": {".json"},
+    "application/msword": {".doc"},
+    "application/pdf": {".pdf"},
+    "application/vnd.ms-excel": {".xls"},
+    "application/vnd.ms-powerpoint": {".ppt"},
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": {".pptx"},
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {".xlsx"},
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {".docx"},
+    "application/zip": {".zip"},
     "image/gif": {".gif"},
     "image/jpeg": {".jpg", ".jpeg"},
     "image/png": {".png"},
     "image/webp": {".webp"},
+    "text/csv": {".csv"},
+    "text/plain": {".txt"},
 }
 
 
@@ -280,25 +291,48 @@ def _is_valid_image_signature(content_type: str, header: bytes) -> bool:
     return False
 
 
+def _is_valid_attachment_signature(content_type: str, header: bytes) -> bool:
+    if content_type.startswith("image/"):
+        return _is_valid_image_signature(content_type, header)
+    if content_type == "application/pdf":
+        return header.startswith(b"%PDF-")
+    if content_type in {
+        "application/zip",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }:
+        return header.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"))
+    if content_type in {
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+    }:
+        return header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+    if content_type in {"application/json", "text/csv", "text/plain"}:
+        return b"\x00" not in header
+    return False
+
+
 def _validate_attachment_file(uploaded_file) -> tuple[str, str, int]:
-    original_filename = Path(uploaded_file.name or "image").name[:255] or "image"
+    original_filename = Path(uploaded_file.name or "attachment").name[:255] or "attachment"
     extension = Path(original_filename).suffix.lower()
     content_type = (getattr(uploaded_file, "content_type", "") or "").lower()
     size = int(getattr(uploaded_file, "size", 0) or 0)
 
     if content_type not in ALLOWED_ATTACHMENT_TYPES:
-        raise ValueError("Only JPEG, PNG, WebP, and GIF images can be uploaded.")
+        raise ValueError("This file type is not supported.")
     if extension not in ALLOWED_ATTACHMENT_TYPES[content_type]:
-        raise ValueError("Image extension does not match the uploaded file type.")
+        raise ValueError("File extension does not match the uploaded file type.")
     if size <= 0:
-        raise ValueError("Uploaded image is empty.")
+        raise ValueError("Uploaded file is empty.")
     if size > MAX_ATTACHMENT_SIZE_BYTES:
-        raise ValueError("Image is too large. Please upload an image under 8 MB.")
+        raise ValueError("File is too large. Please upload a file under 8 MB.")
 
     header = uploaded_file.read(16)
     uploaded_file.seek(0)
-    if not _is_valid_image_signature(content_type, header):
-        raise ValueError("Uploaded file does not look like a supported image.")
+    if not _is_valid_attachment_signature(content_type, header):
+        raise ValueError("Uploaded file content does not match its file type.")
 
     return original_filename, content_type, size
 

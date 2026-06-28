@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -33,6 +33,13 @@ const repeatOptions: { value: RepeatKind; label: string }[] = [
   { value: "yearly", label: "每年" },
 ];
 
+const repeatUnitOptions: { value: Exclude<RepeatKind, "none" | "weekdays">; label: string }[] = [
+  { value: "daily", label: "天" },
+  { value: "weekly", label: "周" },
+  { value: "monthly", label: "月" },
+  { value: "yearly", label: "年" },
+];
+
 function RepeatMenu({
   interval,
   isLongTerm,
@@ -52,55 +59,92 @@ function RepeatMenu({
 }) {
   return (
     <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
-      <Pressable onPress={onClose} style={styles.menuBackdrop}>
-        <Pressable style={styles.repeatMenu}>
+      <View style={styles.menuBackdrop}>
+        <Pressable
+          accessibilityLabel="关闭重复设置"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.repeatMenu}>
+          <View style={styles.sheetHandle} />
           <View style={styles.menuHeader}>
             <AppIcon name="repeat-outline" color={colors.accent} size={22} />
             <Text style={styles.menuTitle}>重复</Text>
           </View>
-          <View style={styles.repeatGrid}>
+          <View style={styles.repeatList}>
             {repeatOptions.map((option) => {
               const selected = repeatKind === option.value;
               return (
                 <Pressable
                   disabled={isLongTerm && option.value !== "daily"}
                   key={option.value}
-                  onPress={() => onSelect(option.value)}
+                  onPress={() => {
+                    onChangeInterval("1");
+                    onSelect(option.value);
+                  }}
+                  accessibilityRole="button"
                   style={[
                     styles.repeatOption,
                     selected && styles.repeatOptionSelected,
                     isLongTerm && option.value !== "daily" && styles.optionDisabled,
                   ]}>
-                  <AppIcon
-                    name={selected ? "checkmark-circle" : "ellipse-outline"}
-                    color={selected ? colors.accent : colors.textMuted}
-                    size={18}
-                  />
                   <Text style={[styles.repeatOptionText, selected && styles.optionTextSelected]}>
                     {option.label}
                   </Text>
+                  <AppIcon
+                    name={selected ? "checkmark-circle" : "ellipse-outline"}
+                    color={selected ? colors.accent : colors.borderStrong}
+                    size={20}
+                  />
                 </Pressable>
               );
             })}
           </View>
           <View style={styles.customRepeat}>
-            <AppIcon name="options-outline" color={colors.textMuted} size={18} />
-            <Text style={styles.customRepeatText}>每</Text>
-            <TextInput
-              editable={!isLongTerm && repeatKind !== "none"}
-              keyboardType="number-pad"
-              maxLength={2}
-              onChangeText={(value) => onChangeInterval(value.replace(/[^0-9]/g, ""))}
-              style={styles.intervalInput}
-              value={interval}
-            />
-            <Text style={styles.customRepeatText}>次周期</Text>
+            <View style={styles.customRepeatHeader}>
+              <AppIcon name="options-outline" color={colors.textMuted} size={19} />
+              <Text style={styles.customRepeatTitle}>自定义</Text>
+            </View>
+            <View style={styles.customRepeatControls}>
+              <Text style={styles.customRepeatText}>每</Text>
+              <TextInput
+                accessibilityLabel="重复间隔"
+                editable={!isLongTerm}
+                keyboardType="number-pad"
+                maxLength={2}
+                onChangeText={(value) => onChangeInterval(value.replace(/[^0-9]/g, ""))}
+                selectTextOnFocus
+                style={styles.intervalInput}
+                value={interval}
+              />
+              <View style={styles.unitSelector}>
+                {repeatUnitOptions.map((unit) => {
+                  const selected = repeatKind === unit.value;
+                  return (
+                    <Pressable
+                      accessibilityLabel={`每${unit.label}重复`}
+                      accessibilityRole="button"
+                      disabled={isLongTerm}
+                      key={unit.value}
+                      onPress={() => onSelect(unit.value)}
+                      style={[styles.unitOption, selected && styles.unitOptionSelected]}>
+                      <Text style={[styles.unitText, selected && styles.unitTextSelected]}>
+                        {unit.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
           </View>
-          <Pressable onPress={onClose} style={styles.menuDoneButton}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onClose}
+            style={styles.menuDoneButton}>
             <Text style={styles.menuDoneText}>完成</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -169,7 +213,11 @@ export function TaskEditor({
     ? "每天"
     : repeatKind === "none"
       ? "重复"
-      : repeatOptions.find((option) => option.value === repeatKind)?.label ?? "重复";
+      : Number.parseInt(repeatInterval, 10) > 1 && repeatKind !== "weekdays"
+        ? `每 ${repeatInterval} ${
+            repeatUnitOptions.find((option) => option.value === repeatKind)?.label ?? ""
+          }`
+        : repeatOptions.find((option) => option.value === repeatKind)?.label ?? "重复";
 
   return (
     <Modal
@@ -183,6 +231,7 @@ export function TaskEditor({
         <View style={[styles.header, { paddingTop: insets.top }]}>
           <Pressable
             accessibilityLabel="关闭"
+            accessibilityRole="button"
             hitSlop={8}
             onPress={onClose}
             style={styles.iconButton}>
@@ -191,13 +240,18 @@ export function TaskEditor({
           <Text style={styles.title}>任务详情</Text>
           <Pressable
             accessibilityLabel="保存"
+            accessibilityRole="button"
             disabled={isSaving || !text.trim()}
             onPress={save}
-            style={({ pressed }) => [styles.saveButton, pressed && styles.pressed]}>
+            style={({ pressed }) => [
+              styles.saveButton,
+              (!text.trim() || isSaving) && styles.saveButtonDisabled,
+              pressed && styles.pressed,
+            ]}>
             {isSaving ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
-              <Text style={styles.saveText}>保存</Text>
+              <AppIcon name="checkmark" color={colors.white} size={24} />
             )}
           </Pressable>
         </View>
@@ -206,91 +260,101 @@ export function TaskEditor({
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
-          <View style={styles.heroCard}>
-            <TextInput
-              autoFocus={false}
-              multiline
-              onChangeText={setText}
-              placeholder="要完成什么？"
-              placeholderTextColor={colors.textMuted}
-              style={styles.heroInput}
-              value={text}
+          <TextInput
+            autoFocus={false}
+            multiline
+            onChangeText={setText}
+            placeholder="要完成什么？"
+            placeholderTextColor={colors.textMuted}
+            style={styles.heroInput}
+            value={text}
+          />
+          <View style={styles.quickActions}>
+            <ToggleAction
+              icon="bookmark-outline"
+              label="置顶"
+              onPress={() => setIsPinned((current) => !current)}
+              selected={isPinned}
             />
-            <View style={styles.quickActions}>
-              <TogglePill
-                icon="bookmark-outline"
-                label="置顶"
-                onPress={() => setIsPinned((current) => !current)}
-                selected={isPinned}
-              />
-              <TogglePill
-                icon="infinite-outline"
-                label="长期"
-                onPress={() => {
-                  setIsLongTerm((current) => {
-                    const next = !current;
-                    if (next) {
-                      setIsLowPriority(false);
-                    }
-                    return next;
-                  });
-                }}
-                selected={isLongTerm}
-              />
-              <TogglePill
-                icon="leaf-outline"
-                label="低优先"
-                onPress={() => {
-                  setIsLowPriority((current) => {
-                    const next = !current;
-                    if (next) {
-                      setIsLongTerm(false);
-                    }
-                    return next;
-                  });
-                }}
-                selected={isLowPriority}
-              />
-            </View>
+            <ToggleAction
+              icon="infinite-outline"
+              label="长期"
+              onPress={() => {
+                setIsLongTerm((current) => {
+                  const next = !current;
+                  if (next) {
+                    setIsLowPriority(false);
+                  }
+                  return next;
+                });
+              }}
+              selected={isLongTerm}
+            />
+            <ToggleAction
+              icon="leaf-outline"
+              label="低优先"
+              onPress={() => {
+                setIsLowPriority((current) => {
+                  const next = !current;
+                  if (next) {
+                    setIsLongTerm(false);
+                  }
+                  return next;
+                });
+              }}
+              selected={isLowPriority}
+            />
+            <ToggleAction
+              icon="repeat-outline"
+              label={repeatSummary}
+              onPress={() => setRepeatMenuOpen(true)}
+              selected={isLongTerm || repeatKind !== "none"}
+            />
           </View>
 
-          <Field label="提醒">
-            <View style={styles.inlineInput}>
-              <AppIcon name="time-outline" color={colors.textMuted} size={20} />
+          <View style={styles.detailsSurface}>
+            <View style={styles.detailRow}>
+              <AppIcon name="notifications-outline" color={colors.text} size={21} />
+              <Text style={styles.detailLabel}>提醒</Text>
               <TextInput
+                accessibilityLabel="提醒时间"
                 keyboardType="numbers-and-punctuation"
                 maxLength={5}
                 onChangeText={setReminderTime}
-                placeholder="例如 14:30"
+                placeholder="无"
                 placeholderTextColor={colors.textMuted}
-                style={styles.inlineTextInput}
+                style={styles.detailValueInput}
                 value={reminderTime}
               />
             </View>
-          </Field>
-
-
-          <Field label="备注">
-            <TextInput
-              multiline
-              onChangeText={setNote}
-              placeholder="补充细节、链接或想法"
-              placeholderTextColor={colors.textMuted}
-              style={[styles.input, styles.noteInput]}
-              textAlignVertical="top"
-              value={note}
-            />
-          </Field>
+            <View style={[styles.detailRow, styles.noteRow]}>
+              <AppIcon name="document-text-outline" color={colors.text} size={21} />
+              <View style={styles.noteContent}>
+                <TextInput
+                  accessibilityLabel="备注"
+                  multiline
+                  onChangeText={setNote}
+                  placeholder="添加备注"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.noteInput}
+                  textAlignVertical="top"
+                  value={note}
+                />
+                {task ? (
+                  <AttachmentGallery
+                    isMutating={isAttachmentMutating}
+                    onDelete={onDeleteAttachment}
+                    onReorder={onReorderAttachments}
+                    onUpload={onUploadAttachment}
+                    task={task}
+                  />
+                ) : null}
+              </View>
+            </View>
+          </View>
 
           {task ? (
             <>
-              <AttachmentGallery
-                isMutating={isAttachmentMutating}
-                onDelete={onDeleteAttachment}
-                onReorder={onReorderAttachments}
-                onUpload={onUploadAttachment}
-                task={task}
-              />
               <View style={styles.footerActions}>
                 {task.isLongTerm ? (
                   <Pressable
@@ -321,7 +385,12 @@ export function TaskEditor({
           isLongTerm={isLongTerm}
           onChangeInterval={setRepeatInterval}
           onClose={() => setRepeatMenuOpen(false)}
-          onSelect={setRepeatKind}
+          onSelect={(kind) => {
+            setRepeatKind(kind);
+            if (kind === "none" || kind === "weekdays") {
+              setRepeatInterval("1");
+            }
+          }}
           repeatKind={isLongTerm ? "daily" : repeatKind}
           visible={repeatMenuOpen}
         />
@@ -330,16 +399,7 @@ export function TaskEditor({
   );
 }
 
-function Field({ children, label }: { children: ReactNode; label: string }) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      {children}
-    </View>
-  );
-}
-
-function TogglePill({
+function ToggleAction({
   icon,
   label,
   onPress,
@@ -357,16 +417,17 @@ function TogglePill({
       accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.togglePill,
-        selected && styles.togglePillSelected,
+        styles.toggleAction,
         pressed && styles.pressed,
       ]}>
-      <AppIcon
-        name={selected && icon === "bookmark-outline" ? "bookmark" : icon}
-        color={selected ? colors.white : colors.textMuted}
-        size={20}
-      />
-      <Text style={[styles.togglePillText, selected && styles.togglePillTextSelected]}>
+      <View style={[styles.toggleIcon, selected && styles.toggleIconSelected]}>
+        <AppIcon
+          name={selected && icon === "bookmark-outline" ? "bookmark" : icon}
+          color={selected ? colors.accent : colors.textMuted}
+          size={23}
+        />
+      </View>
+      <Text numberOfLines={1} style={[styles.toggleActionText, selected && styles.toggleActionTextSelected]}>
         {label}
       </Text>
     </Pressable>
@@ -375,20 +436,18 @@ function TogglePill({
 
 const styles = StyleSheet.create({
   page: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
     flex: 1,
   },
   header: {
     alignItems: "center",
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
-    gap: spacing.md,
     justifyContent: "space-between",
-    minHeight: 64,
-    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   iconButton: {
     alignItems: "center",
@@ -403,163 +462,113 @@ const styles = StyleSheet.create({
   saveButton: {
     alignItems: "center",
     backgroundColor: colors.accent,
-    borderRadius: radius.sm,
+    borderRadius: radius.full,
+    height: 44,
     justifyContent: "center",
-    minHeight: 40,
-    minWidth: 64,
-    paddingHorizontal: spacing.md,
+    width: 44,
   },
-  saveText: {
-    ...typography.label,
-    color: colors.white,
+  saveButtonDisabled: {
+    opacity: 0.42,
   },
   pressed: {
     opacity: 0.64,
   },
   content: {
-    gap: spacing.lg,
-    padding: spacing.lg,
-  },
-  heroCard: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
     gap: spacing.md,
-    padding: spacing.md,
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
   },
   heroInput: {
     color: colors.text,
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: "700",
-    lineHeight: 30,
-    minHeight: 78,
+    lineHeight: 32,
+    minHeight: 72,
     padding: 0,
     textAlignVertical: "top",
   },
   quickActions: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
-    gap: spacing.sm,
+    paddingVertical: spacing.sm,
   },
-  togglePill: {
+  toggleAction: {
     alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderColor: colors.border,
-    borderRadius: radius.full,
-    borderWidth: 1,
     flex: 1,
-    flexDirection: "row",
     gap: spacing.xs,
     justifyContent: "center",
-    minHeight: 42,
-    paddingHorizontal: spacing.sm,
+    minHeight: 62,
+    minWidth: 0,
   },
-  togglePillSelected: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+  toggleIcon: {
+    alignItems: "center",
+    borderRadius: radius.md,
+    height: 36,
+    justifyContent: "center",
+    width: 44,
   },
-  togglePillText: {
+  toggleIconSelected: {
+    backgroundColor: colors.accentSoft,
+  },
+  toggleActionText: {
     ...typography.caption,
     color: colors.textMuted,
+    maxWidth: "100%",
+  },
+  toggleActionTextSelected: {
+    color: colors.accent,
     fontWeight: "700",
   },
-  togglePillTextSelected: {
-    color: colors.white,
-  },
-  field: {
-    gap: spacing.sm,
-  },
-  label: {
-    ...typography.label,
-    color: colors.textMuted,
-  },
-  input: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    color: colors.text,
-    fontSize: 16,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  titleInput: {
-    fontSize: 18,
-    fontWeight: "600",
-    minHeight: 58,
-  },
-  noteInput: {
-    minHeight: 128,
-  },
-  switchGroup: {
+  detailsSurface: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
     overflow: "hidden",
   },
-  switchRow: {
+  detailRow: {
     alignItems: "center",
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     gap: spacing.md,
-    minHeight: 66,
-    paddingHorizontal: spacing.md,
-  },
-  switchCopy: {
-    flex: 1,
-  },
-  switchLabel: {
-    ...typography.body,
-    color: colors.text,
-    fontWeight: "500",
-  },
-  switchDescription: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  inlineInput: {
-    alignItems: "center",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: spacing.sm,
     minHeight: 52,
     paddingHorizontal: spacing.md,
   },
-  inlineTextInput: {
+  detailLabel: {
+    ...typography.body,
     color: colors.text,
     flex: 1,
+  },
+  detailValueInput: {
+    color: colors.text,
     fontSize: 16,
-    paddingVertical: spacing.md,
+    minWidth: 76,
+    paddingVertical: spacing.sm,
+    textAlign: "right",
   },
-  options: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
+  noteRow: {
+    alignItems: "flex-start",
+    borderBottomWidth: 0,
+    minHeight: 118,
+    paddingTop: spacing.md,
   },
-  option: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    minHeight: 42,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 10,
+  noteContent: {
+    flex: 1,
+    minWidth: 0,
   },
-  optionSelected: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.accent,
+  noteInput: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 23,
+    minHeight: 76,
+    padding: 0,
   },
   optionDisabled: {
     opacity: 0.58,
-  },
-  optionText: {
-    ...typography.label,
-    color: colors.textMuted,
   },
   optionTextSelected: {
     color: colors.accent,
@@ -576,8 +585,9 @@ const styles = StyleSheet.create({
     color: colors.danger,
   },
   footerActions: {
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: spacing.sm,
+    paddingTop: spacing.xs,
   },
   copyButton: {
     alignItems: "center",
@@ -588,5 +598,125 @@ const styles = StyleSheet.create({
   copyText: {
     ...typography.label,
     color: colors.accent,
+  },
+  menuBackdrop: {
+    backgroundColor: "rgba(22, 27, 24, 0.48)",
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  repeatMenu: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  sheetHandle: {
+    alignSelf: "center",
+    backgroundColor: colors.borderStrong,
+    borderRadius: radius.full,
+    height: 4,
+    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
+    width: 38,
+  },
+  menuHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 44,
+  },
+  menuTitle: {
+    ...typography.section,
+    color: colors.text,
+    fontSize: 19,
+  },
+  repeatList: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  repeatOption: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 44,
+    paddingHorizontal: spacing.xs,
+  },
+  repeatOptionSelected: {
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+  },
+  repeatOptionText: {
+    ...typography.body,
+    color: colors.text,
+  },
+  customRepeat: {
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+  },
+  customRepeatHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  customRepeatTitle: {
+    ...typography.label,
+    color: colors.text,
+  },
+  customRepeatControls: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  customRepeatText: {
+    ...typography.body,
+    color: colors.textMuted,
+  },
+  intervalInput: {
+    borderColor: colors.borderStrong,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 16,
+    height: 42,
+    paddingHorizontal: spacing.sm,
+    textAlign: "center",
+    width: 52,
+  },
+  unitSelector: {
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: "row",
+    overflow: "hidden",
+  },
+  unitOption: {
+    alignItems: "center",
+    flex: 1,
+    height: 42,
+    justifyContent: "center",
+  },
+  unitOptionSelected: {
+    backgroundColor: colors.accentSoft,
+  },
+  unitText: {
+    ...typography.label,
+    color: colors.textMuted,
+  },
+  unitTextSelected: {
+    color: colors.accent,
+  },
+  menuDoneButton: {
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    justifyContent: "center",
+    minHeight: 46,
+  },
+  menuDoneText: {
+    ...typography.label,
+    color: colors.white,
+    fontSize: 15,
   },
 });

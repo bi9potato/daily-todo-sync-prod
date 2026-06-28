@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 
 import { AppIcon } from "./AppIcon";
@@ -17,6 +18,28 @@ import type {
   TaskAttachment,
   TodoOccurrence,
 } from "@/types";
+
+const contentTypeByExtension: Record<string, string> = {
+  csv: "text/csv",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  json: "application/json",
+  pdf: "application/pdf",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  txt: "text/plain",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  zip: "application/zip",
+};
+
+function resolveContentType(filename: string, reportedType?: string | null) {
+  if (reportedType && reportedType !== "application/octet-stream") {
+    return reportedType;
+  }
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+  return contentTypeByExtension[extension] ?? "application/octet-stream";
+}
 
 type AttachmentGalleryProps = {
   isMutating: boolean;
@@ -52,6 +75,23 @@ export function AttachmentGallery({
     });
   }
 
+  async function pickFile() {
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: false,
+      type: "*/*",
+    });
+    if (result.canceled) {
+      return;
+    }
+    const asset = result.assets[0];
+    onUpload({
+      uri: asset.uri,
+      name: asset.name || `task-file-${Date.now()}`,
+      type: resolveContentType(asset.name, asset.mimeType),
+    });
+  }
+
   function move(index: number, direction: -1 | 1) {
     const target = index + direction;
     if (target < 0 || target >= task.attachments.length) {
@@ -65,44 +105,35 @@ export function AttachmentGallery({
 
   return (
     <View style={styles.section}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>图片</Text>
-          <Text style={styles.meta}>{task.attachments.length} 张附件</Text>
-        </View>
-        <Pressable
-          accessibilityLabel="添加图片"
-          disabled={isMutating}
-          onPress={pickImage}
-          style={({ pressed }) => [
-            styles.addButton,
-            pressed && styles.pressed,
-          ]}>
-          {isMutating ? (
-            <ActivityIndicator color={colors.accent} size="small" />
-          ) : (
-            <AppIcon name="image-outline" color={colors.accent} size={20} />
-          )}
-          <Text style={styles.addText}>添加图片</Text>
-        </Pressable>
-      </View>
-
       {task.attachments.length ? (
-        <View style={styles.grid}>
+        <View style={styles.attachmentList}>
           {task.attachments.map((attachment, index) => (
-            <View key={attachment.id} style={styles.tile}>
-              <Pressable onPress={() => setPreview(attachment)}>
+            <View key={attachment.id} style={styles.attachmentRow}>
+              {attachment.contentType.startsWith("image/") ? (
+                <Pressable
+                  accessibilityLabel={`预览 ${attachment.originalFilename}`}
+                  onPress={() => setPreview(attachment)}>
                 <AuthenticatedImage
                   contentUrl={attachment.contentUrl}
                   style={styles.thumbnail}
                 />
-              </Pressable>
-              <Text numberOfLines={1} style={styles.filename}>
-                {attachment.originalFilename}
-              </Text>
+                </Pressable>
+              ) : (
+                <View style={styles.fileIcon}>
+                  <AppIcon name="document-outline" color={colors.accent} size={22} />
+                </View>
+              )}
+              <View style={styles.fileCopy}>
+                <Text numberOfLines={1} style={styles.filename}>
+                  {attachment.originalFilename}
+                </Text>
+                <Text style={styles.fileMeta}>
+                  {Math.max(1, Math.ceil(attachment.sizeBytes / 1024))} KB
+                </Text>
+              </View>
               <View style={styles.actions}>
                 <Pressable
-                  accessibilityLabel="图片前移"
+                  accessibilityLabel="附件前移"
                   disabled={index === 0 || isMutating}
                   onPress={() => move(index, -1)}
                   style={styles.iconButton}>
@@ -113,7 +144,7 @@ export function AttachmentGallery({
                   />
                 </Pressable>
                 <Pressable
-                  accessibilityLabel="图片后移"
+                  accessibilityLabel="附件后移"
                   disabled={index === task.attachments.length - 1 || isMutating}
                   onPress={() => move(index, 1)}
                   style={styles.iconButton}>
@@ -128,7 +159,7 @@ export function AttachmentGallery({
                   />
                 </Pressable>
                 <Pressable
-                  accessibilityLabel="删除图片"
+                  accessibilityLabel="删除附件"
                   disabled={isMutating}
                   onPress={() => onDelete(attachment)}
                   style={styles.iconButton}>
@@ -138,9 +169,35 @@ export function AttachmentGallery({
             </View>
           ))}
         </View>
-      ) : (
-        <Text style={styles.empty}>尚未添加图片。</Text>
-      )}
+      ) : null}
+
+      <View style={styles.addActions}>
+        {isMutating ? (
+          <ActivityIndicator color={colors.accent} size="small" />
+        ) : (
+          <>
+            <Pressable
+              accessibilityLabel="添加图片"
+              disabled={isMutating}
+              hitSlop={8}
+              onPress={pickImage}
+              style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}>
+              <AppIcon name="image-outline" color={colors.textMuted} size={21} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="添加文件"
+              disabled={isMutating}
+              hitSlop={8}
+              onPress={pickFile}
+              style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}>
+              <AppIcon name="attach-outline" color={colors.textMuted} size={22} />
+            </Pressable>
+          </>
+        )}
+        {task.attachments.length ? (
+          <Text style={styles.meta}>{task.attachments.length} 个附件</Text>
+        ) : null}
+      </View>
 
       <Modal
         animationType="fade"
@@ -169,74 +226,77 @@ export function AttachmentGallery({
 
 const styles = StyleSheet.create({
   section: {
-    gap: spacing.md,
-  },
-  header: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  title: {
-    ...typography.label,
-    color: colors.textMuted,
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+    paddingTop: spacing.xs,
   },
   meta: {
     ...typography.caption,
     color: colors.textMuted,
-    marginTop: 2,
+    marginLeft: spacing.xs,
+  },
+  addActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 36,
   },
   addButton: {
     alignItems: "center",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
     borderRadius: radius.sm,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: spacing.xs,
-    minHeight: 42,
-    paddingHorizontal: spacing.md,
+    height: 36,
+    justifyContent: "center",
+    width: 36,
   },
-  addText: {
-    ...typography.label,
-    color: colors.accent,
-  },
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
+  attachmentList: {
     gap: spacing.sm,
   },
-  tile: {
-    backgroundColor: colors.surface,
+  attachmentRow: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
     borderColor: colors.border,
     borderRadius: radius.sm,
     borderWidth: 1,
-    overflow: "hidden",
-    width: "48%",
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 52,
+    padding: spacing.xs,
   },
   thumbnail: {
-    height: 116,
-    width: "100%",
+    borderRadius: 6,
+    height: 42,
+    width: 42,
+  },
+  fileIcon: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderRadius: 6,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
+  },
+  fileCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   filename: {
     ...typography.caption,
+    color: colors.text,
+    fontWeight: "600",
+  },
+  fileMeta: {
     color: colors.textMuted,
-    paddingHorizontal: spacing.sm,
-    paddingTop: spacing.sm,
+    fontSize: 10,
+    marginTop: 2,
   },
   actions: {
     flexDirection: "row",
-    justifyContent: "flex-end",
-    padding: spacing.xs,
   },
   iconButton: {
     alignItems: "center",
-    height: 34,
+    height: 36,
     justifyContent: "center",
-    width: 34,
-  },
-  empty: {
-    ...typography.body,
-    color: colors.textMuted,
+    width: 30,
   },
   previewBackdrop: {
     alignItems: "center",

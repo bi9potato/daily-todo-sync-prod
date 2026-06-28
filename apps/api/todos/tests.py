@@ -276,6 +276,21 @@ class CarryoverTests(TestCase):
             self.assertTrue(TaskAttachment.objects.filter(id=attachment.id).exists())
             attachment.file.close()
 
+    def test_document_attachment_can_be_added_to_task(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        document = SimpleUploadedFile(
+            "notes.pdf",
+            b"%PDF-1.7\n" + b"0" * 32,
+            content_type="application/pdf",
+        )
+
+        with override_settings(STORAGES=TEST_STORAGES):
+            attachment = add_task_attachment(self.user, occurrence.id, document)
+
+            self.assertEqual(attachment.original_filename, "notes.pdf")
+            self.assertEqual(attachment.content_type, "application/pdf")
+            attachment.file.close()
+
     def test_future_content_task_update_does_not_change_past_occurrence(self):
         start = create_task_for_day(
             self.user,
