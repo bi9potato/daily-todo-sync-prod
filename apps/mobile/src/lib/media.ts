@@ -44,6 +44,13 @@ async function ensureMediaCacheDirectory() {
   await mediaCacheDirectoryPromise;
 }
 
+async function deleteCachedFile(contentUrl: string) {
+  if (!FileSystem.cacheDirectory) {
+    return;
+  }
+  const fileUri = `${mediaCacheDirectory}${cacheKeyForUrl(contentUrl)}`;
+  await FileSystem.deleteAsync(fileUri, { idempotent: true });
+}
 async function downloadToFile(contentUrl: string) {
   await ensureMediaCacheDirectory();
   const fileUri = `${mediaCacheDirectory}${cacheKeyForUrl(contentUrl)}`;
@@ -59,7 +66,7 @@ async function downloadToFile(contentUrl: string) {
   });
 
   if (result.status === 401) {
-    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+    await deleteCachedFile(contentUrl);
     await getAuthenticatedMediaBlob(contentUrl);
     source = await getAuthenticatedMediaSource(contentUrl);
     result = await FileSystem.downloadAsync(source.uri, fileUri, {
@@ -69,7 +76,7 @@ async function downloadToFile(contentUrl: string) {
   }
 
   if (result.status < 200 || result.status >= 300) {
-    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+    await deleteCachedFile(contentUrl);
     throw new Error(`图片下载失败（${result.status}）。`);
   }
 
@@ -104,4 +111,9 @@ export function getCachedAuthenticatedMediaUri(contentUrl: string) {
   });
   mediaDownloads.set(contentUrl, download);
   return download;
+}
+
+export async function clearCachedAuthenticatedMedia(contentUrl: string) {
+  mediaDownloads.delete(contentUrl);
+  await deleteCachedFile(contentUrl);
 }
