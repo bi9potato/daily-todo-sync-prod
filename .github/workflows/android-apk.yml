@@ -11,6 +11,9 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/android-apk.yml"
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
