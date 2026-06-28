@@ -1,4 +1,9 @@
-import { getAuthenticatedMediaBlob, getAuthenticatedMediaSource } from "./api";
+import * as FileSystem from "expo-file-system/legacy";
+
+import {
+  getAuthenticatedMediaBlob,
+  getAuthenticatedMediaSource,
+} from "./api";
 
 type CachedMediaSource = {
   uri: string;
@@ -6,6 +11,7 @@ type CachedMediaSource = {
 };
 
 const mediaDownloads = new Map<string, Promise<CachedMediaSource>>();
+const mediaCacheDirectory = `${FileSystem.cacheDirectory ?? ""}task-attachments/`;
 
 function blobToDataUri(blob: Blob) {
   return new Promise<string>((resolve, reject) => {
@@ -19,11 +25,62 @@ function blobToDataUri(blob: Blob) {
   });
 }
 
+function cacheKeyForUrl(contentUrl: string) {
+  let hash = 0;
+  for (let index = 0; index < contentUrl.length; index += 1) {
+    hash = (hash * 31 + contentUrl.charCodeAt(index)) >>> 0;
+  }
+  return `${hash.toString(16)}.img`;
+}
+
+async function ensureMediaCacheDirectory() {
+  if (!FileSystem.cacheDirectory) {
+    throw new Error("图片缓存目录不可用。");
+  }
+  await FileSystem.makeDirectoryAsync(mediaCacheDirectory, { intermediates: true });
+}
+
+async function downloadToFile(contentUrl: string) {
+  await ensureMediaCacheDirectory();
+  const fileUri = `${mediaCacheDirectory}${cacheKeyForUrl(contentUrl)}`;
+  const existing = await FileSystem.getInfoAsync(fileUri);
+  if (existing.exists) {
+    return { uri: fileUri };
+  }
+
+  let source = await getAuthenticatedMediaSource(contentUrl);
+  let result = await FileSystem.downloadAsync(source.uri, fileUri, {
+    cache: true,
+    headers: source.headers,
+  });
+
+  if (result.status === 401) {
+    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+    await getAuthenticatedMediaBlob(contentUrl);
+    source = await getAuthenticatedMediaSource(contentUrl);
+    result = await FileSystem.downloadAsync(source.uri, fileUri, {
+      cache: true,
+      headers: source.headers,
+    });
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+    throw new Error(`图片下载失败（${result.status}）。`);
+  }
+
+  return { uri: result.uri };
+}
+
 async function downloadAuthenticatedMedia(contentUrl: string) {
   try {
-    return await getCachedAuthenticatedMediaDataUri(contentUrl);
+    return await downloadToFile(contentUrl);
   } catch {
-    return getAuthenticatedMediaSource(contentUrl);
+    try {
+      return await getCachedAuthenticatedMediaDataUri(contentUrl);
+    } catch {
+      return getAuthenticatedMediaSource(contentUrl);
+    }
   }
 }
 
