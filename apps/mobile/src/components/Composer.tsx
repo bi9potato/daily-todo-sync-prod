@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -6,12 +6,15 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
+  type KeyboardEvent,
 } from "react-native";
 
 import { AppIcon } from "./AppIcon";
@@ -35,6 +38,39 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
+  const [keyboardInset, setKeyboardInset] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      setKeyboardInset(0);
+      return;
+    }
+
+    function alignToKeyboard(event: KeyboardEvent) {
+      const windowHeight = Dimensions.get("window").height;
+      const keyboardTop = event.endCoordinates.screenY;
+      const overlap = Math.max(0, windowHeight - keyboardTop);
+      setKeyboardInset(overlap || Math.max(0, event.endCoordinates.height));
+    }
+
+    const showSubscription = Keyboard.addListener(
+      "keyboardDidShow",
+      alignToKeyboard,
+    );
+    const frameSubscription = Keyboard.addListener(
+      "keyboardDidChangeFrame",
+      alignToKeyboard,
+    );
+    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardInset(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      frameSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
   useSpeechRecognitionEvent("end", () => setIsListening(false));
@@ -85,7 +121,7 @@ export function Composer({
   }
 
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, { marginBottom: keyboardInset || spacing.sm }]}> 
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
@@ -163,7 +199,6 @@ export function Composer({
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginBottom: spacing.sm,
     marginHorizontal: spacing.md,
     pointerEvents: "box-none",
   },
