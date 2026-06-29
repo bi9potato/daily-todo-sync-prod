@@ -23,8 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -33,24 +31,24 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push API image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/api/Dockerfile
-          push: true
-          tags: |
-            ${{ env.API_IMAGE }}:${{ env.IMAGE_TAG }}
-            ${{ env.API_IMAGE }}:latest
+        run: |
+          docker build \
+            -f apps/api/Dockerfile \
+            -t "${API_IMAGE}:${IMAGE_TAG}" \
+            -t "${API_IMAGE}:latest" \
+            .
+          docker push "${API_IMAGE}:${IMAGE_TAG}"
+          docker push "${API_IMAGE}:latest"
 
       - name: Build and push Web image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/web/Dockerfile
-          push: true
-          tags: |
-            ${{ env.WEB_IMAGE }}:${{ env.IMAGE_TAG }}
-            ${{ env.WEB_IMAGE }}:latest
+        run: |
+          docker build \
+            -f apps/web/Dockerfile \
+            -t "${WEB_IMAGE}:${IMAGE_TAG}" \
+            -t "${WEB_IMAGE}:latest" \
+            .
+          docker push "${WEB_IMAGE}:${IMAGE_TAG}"
+          docker push "${WEB_IMAGE}:latest"
 
       - name: Copy deployment files
         uses: appleboy/scp-action@v0.1.7
