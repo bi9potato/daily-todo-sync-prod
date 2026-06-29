@@ -72,7 +72,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-cleanup: on-success
-          cache-read-only: ${{ github.event_name != 'workflow_dispatch' }}
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           add-job-summary: on-failure
 
       - name: Install dependencies
