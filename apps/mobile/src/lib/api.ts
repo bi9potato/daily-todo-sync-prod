@@ -69,29 +69,6 @@ async function readErrorMessage(response: Response) {
   }
 }
 
-function readUploadErrorMessage(status: number, text: string) {
-  const fallback = `请求失败（${status}）`;
-  if (!text) {
-    return fallback;
-  }
-
-  try {
-    const body = JSON.parse(text) as {
-      detail?: unknown;
-      message?: unknown;
-      error?: unknown;
-    };
-    return (
-      formatErrorDetail(body.detail) ??
-      formatErrorDetail(body.message) ??
-      formatErrorDetail(body.error) ??
-      fallback
-    );
-  } catch {
-    return text;
-  }
-}
-
 async function refreshAccessToken() {
   if (refreshPromise) {
     return refreshPromise;
@@ -195,6 +172,16 @@ async function removeTemporaryUploadFile(uploadUri: string, sourceUri: string) {
   }
 }
 
+function createUploadFormData(file: LocalAttachmentFile, uploadUri: string) {
+  const formData = new FormData();
+  formData.append("file", {
+    uri: uploadUri,
+    name: file.name,
+    type: file.type,
+  } as unknown as Blob);
+  return formData;
+}
+
 export function login(payload: { identifier: string; password: string }) {
   return request<TokenPair>(
     "/auth/login",
@@ -295,28 +282,28 @@ export async function uploadTaskAttachment(
 
   const uploadUri = await prepareUploadUri(file);
   try {
-    const result = await FileSystem.uploadAsync(
+    const response = await fetch(
       `${API_BASE_URL}/occurrences/${occurrenceId}/attachments`,
-      uploadUri,
       {
-        fieldName: "file",
-        headers: { Authorization: `Bearer ${tokens.accessToken}` },
-        httpMethod: "POST",
-        mimeType: file.type,
-        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${tokens.accessToken}`,
+        },
+        body: createUploadFormData(file, uploadUri),
       },
     );
 
-    if (result.status === 401 && canRetry) {
+    if (response.status === 401 && canRetry) {
       await refreshAccessToken();
       return uploadTaskAttachment(occurrenceId, file, false);
     }
 
-    if (result.status < 200 || result.status >= 300) {
-      throw new Error(readUploadErrorMessage(result.status, result.body));
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
     }
 
-    return JSON.parse(result.body) as TaskAttachment;
+    return response.json() as Promise<TaskAttachment>;
   } finally {
     await removeTemporaryUploadFile(uploadUri, file.uri);
   }
