@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -37,26 +37,8 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    if (Platform.OS !== "android") {
-      return undefined;
-    }
-
-    const showSubscription = Keyboard.addListener("keyboardDidShow", () => {
-      setIsKeyboardVisible(true);
-    });
-    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
-      setIsKeyboardVisible(false);
-    });
-
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, []);
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
   useSpeechRecognitionEvent("end", () => setIsListening(false));
@@ -107,7 +89,7 @@ export function Composer({
   }
 
   const wrapperStyle =
-    Platform.OS === "android" && isKeyboardVisible
+    Platform.OS === "android" && isInputFocused
       ? { bottom: -insets.bottom }
       : null;
 
@@ -132,6 +114,8 @@ export function Composer({
           blurOnSubmit={false}
           editable={!isPending}
           onChangeText={setText}
+          onBlur={() => setIsInputFocused(false)}
+          onFocus={() => setIsInputFocused(true)}
           onSubmitEditing={submit}
           placeholder={
             mode === "ai"
