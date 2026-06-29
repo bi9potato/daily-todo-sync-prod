@@ -39,10 +39,12 @@ export function Composer({
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "android") {
       setKeyboardInset(0);
+      setKeyboardVisible(false);
       return;
     }
 
@@ -50,7 +52,8 @@ export function Composer({
       const windowHeight = Dimensions.get("window").height;
       const keyboardTop = event.endCoordinates.screenY;
       const overlap = Math.max(0, windowHeight - keyboardTop);
-      setKeyboardInset(overlap || Math.max(0, event.endCoordinates.height));
+      setKeyboardVisible(true);
+      setKeyboardInset(overlap);
     }
 
     const showSubscription = Keyboard.addListener(
@@ -62,6 +65,7 @@ export function Composer({
       alignToKeyboard,
     );
     const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardVisible(false);
       setKeyboardInset(0);
     });
 
@@ -121,7 +125,11 @@ export function Composer({
   }
 
   return (
-    <View style={[styles.wrapper, { marginBottom: keyboardInset || spacing.sm }]}>
+    <View
+      style={[
+        styles.wrapper,
+        { marginBottom: keyboardVisible ? keyboardInset : spacing.sm },
+      ]}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
