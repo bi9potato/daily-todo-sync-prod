@@ -121,7 +121,7 @@ export function Composer({
   }
 
   return (
-    <View style={[styles.wrapper, { marginBottom: keyboardInset || spacing.sm }]}> 
+    <View style={[styles.wrapper, { marginBottom: keyboardInset || spacing.sm }]}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
