@@ -1,3 +1,4 @@
+import { File as ExpoFile, UploadType } from "expo-file-system";
 import * as FileSystem from "expo-file-system/legacy";
 
 import { clearTokens, getMemoryTokens, loadTokens, saveTokens } from "./auth-storage";
@@ -66,6 +67,29 @@ async function readErrorMessage(response: Response) {
     );
   } catch {
     return text;
+  }
+}
+
+function readUploadResultErrorMessage(status: number, body: string) {
+  const fallback = `请求失败（${status}）`;
+  if (!body) {
+    return fallback;
+  }
+
+  try {
+    const payload = JSON.parse(body) as {
+      detail?: unknown;
+      message?: unknown;
+      error?: unknown;
+    };
+    return (
+      formatErrorDetail(payload.detail) ??
+      formatErrorDetail(payload.message) ??
+      formatErrorDetail(payload.error) ??
+      fallback
+    );
+  } catch {
+    return body;
   }
 }
 
@@ -145,41 +169,33 @@ function safeUploadFilename(name: string) {
 
 async function prepareUploadUri(file: LocalAttachmentFile) {
   if (!FileSystem.cacheDirectory) {
-    return file.uri;
+    return { cleanupUri: null, uri: file.uri };
   }
 
-  const uploadUri = `${FileSystem.cacheDirectory}upload-${Date.now()}-${safeUploadFilename(
-    file.name,
-  )}`;
+  const uploadDirectory = `${FileSystem.cacheDirectory}upload-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}/`;
+  const uploadUri = `${uploadDirectory}${safeUploadFilename(file.name)}`;
 
   try {
+    await FileSystem.makeDirectoryAsync(uploadDirectory, { intermediates: true });
     await FileSystem.copyAsync({ from: file.uri, to: uploadUri });
-    return uploadUri;
+    return { cleanupUri: uploadDirectory, uri: uploadUri };
   } catch {
-    return file.uri;
+    return { cleanupUri: null, uri: file.uri };
   }
 }
 
-async function removeTemporaryUploadFile(uploadUri: string, sourceUri: string) {
-  if (uploadUri === sourceUri) {
+async function removeTemporaryUploadFile(cleanupUri: string | null) {
+  if (!cleanupUri) {
     return;
   }
 
   try {
-    await FileSystem.deleteAsync(uploadUri, { idempotent: true });
+    await FileSystem.deleteAsync(cleanupUri, { idempotent: true });
   } catch {
     // Ignore cleanup failures; the upload result is more important.
   }
-}
-
-function createUploadFormData(file: LocalAttachmentFile, uploadUri: string) {
-  const formData = new FormData();
-  formData.append("file", {
-    uri: uploadUri,
-    name: file.name,
-    type: file.type,
-  } as unknown as Blob);
-  return formData;
 }
 
 export function login(payload: { identifier: string; password: string }) {
@@ -280,32 +296,34 @@ export async function uploadTaskAttachment(
     throw new Error("请先登录。");
   }
 
-  const uploadUri = await prepareUploadUri(file);
+  const upload = await prepareUploadUri(file);
   try {
-    const response = await fetch(
+    const result = await new ExpoFile(upload.uri).upload(
       `${API_BASE_URL}/occurrences/${occurrenceId}/attachments`,
       {
-        method: "POST",
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${tokens.accessToken}`,
         },
-        body: createUploadFormData(file, uploadUri),
+        fieldName: "file",
+        httpMethod: "POST",
+        mimeType: file.type,
+        uploadType: UploadType.MULTIPART,
       },
     );
 
-    if (response.status === 401 && canRetry) {
+    if (result.status === 401 && canRetry) {
       await refreshAccessToken();
       return uploadTaskAttachment(occurrenceId, file, false);
     }
 
-    if (!response.ok) {
-      throw new Error(await readErrorMessage(response));
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(readUploadResultErrorMessage(result.status, result.body));
     }
 
-    return response.json() as Promise<TaskAttachment>;
+    return JSON.parse(result.body) as TaskAttachment;
   } finally {
-    await removeTemporaryUploadFile(uploadUri, file.uri);
+    await removeTemporaryUploadFile(upload.cleanupUri);
   }
 }
 
