@@ -15,7 +15,7 @@
     "android": {
       "package": "com.dailytodosync.app",
       "versionCode": 1,
-      "softwareKeyboardLayoutMode": "pan",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#FFFEFA",
         "foregroundImage": "./assets/images/app-icon.png"

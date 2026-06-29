@@ -555,7 +555,7 @@ export function TodayScreen({
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={0}
       style={styles.page}>
       <View style={styles.header}>
