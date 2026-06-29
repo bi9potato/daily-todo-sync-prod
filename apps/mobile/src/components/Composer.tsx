@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -6,15 +6,12 @@ import {
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
   Keyboard,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
-  type KeyboardEvent,
 } from "react-native";
 
 import { AppIcon } from "./AppIcon";
@@ -38,44 +35,6 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
-  const [keyboardInset, setKeyboardInset] = useState(0);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-
-  useEffect(() => {
-    if (Platform.OS !== "android") {
-      setKeyboardInset(0);
-      setKeyboardVisible(false);
-      return;
-    }
-
-    function alignToKeyboard(event: KeyboardEvent) {
-      const windowHeight = Dimensions.get("window").height;
-      const keyboardTop = event.endCoordinates.screenY;
-      const overlap = Math.max(0, windowHeight - keyboardTop);
-      const keyboardHeight = Math.max(0, event.endCoordinates.height);
-      setKeyboardVisible(true);
-      setKeyboardInset(overlap > 0 ? overlap : -keyboardHeight);
-    }
-
-    const showSubscription = Keyboard.addListener(
-      "keyboardDidShow",
-      alignToKeyboard,
-    );
-    const frameSubscription = Keyboard.addListener(
-      "keyboardDidChangeFrame",
-      alignToKeyboard,
-    );
-    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardVisible(false);
-      setKeyboardInset(0);
-    });
-
-    return () => {
-      showSubscription.remove();
-      frameSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, []);
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
   useSpeechRecognitionEvent("end", () => setIsListening(false));
@@ -126,11 +85,7 @@ export function Composer({
   }
 
   return (
-    <View
-      style={[
-        styles.wrapper,
-        { bottom: keyboardVisible ? keyboardInset : spacing.sm },
-      ]}>
+    <View style={styles.wrapper}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
@@ -208,6 +163,7 @@ export function Composer({
 
 const styles = StyleSheet.create({
   wrapper: {
+    bottom: spacing.sm,
     elevation: 12,
     left: 0,
     marginHorizontal: spacing.md,
