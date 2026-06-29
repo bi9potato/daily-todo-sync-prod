@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -7,13 +7,11 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
-  type KeyboardEvent,
 } from "react-native";
 
 import { AppIcon } from "./AppIcon";
@@ -37,31 +35,6 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
-  const [keyboardInset, setKeyboardInset] = useState(0);
-
-  useEffect(() => {
-    if (Platform.OS !== "android") {
-      setKeyboardInset(0);
-      return;
-    }
-
-    function liftAboveKeyboard(event: KeyboardEvent) {
-      setKeyboardInset(Math.max(0, event.endCoordinates.height) + spacing.sm);
-    }
-
-    const showSubscription = Keyboard.addListener(
-      "keyboardDidShow",
-      liftAboveKeyboard,
-    );
-    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardInset(0);
-    });
-
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, []);
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
   useSpeechRecognitionEvent("end", () => setIsListening(false));
@@ -112,7 +85,7 @@ export function Composer({
   }
 
   return (
-    <View style={[styles.wrapper, { marginBottom: keyboardInset || spacing.sm }]}>
+    <View style={styles.wrapper}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
@@ -190,6 +163,7 @@ export function Composer({
 
 const styles = StyleSheet.create({
   wrapper: {
+    marginBottom: spacing.sm,
     marginHorizontal: spacing.md,
     pointerEvents: "box-none",
   },
