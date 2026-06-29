@@ -7,14 +7,12 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
 import { colors, radius, spacing } from "@/theme";
@@ -37,8 +35,6 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
-  const [isInputFocused, setIsInputFocused] = useState(false);
-  const insets = useSafeAreaInsets();
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
   useSpeechRecognitionEvent("end", () => setIsListening(false));
@@ -88,13 +84,8 @@ export function Composer({
     Keyboard.dismiss();
   }
 
-  const wrapperStyle =
-    Platform.OS === "android" && isInputFocused
-      ? { bottom: -insets.bottom }
-      : null;
-
   return (
-    <View style={[styles.wrapper, wrapperStyle]}>
+    <View style={styles.wrapper}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
@@ -114,8 +105,6 @@ export function Composer({
           blurOnSubmit={false}
           editable={!isPending}
           onChangeText={setText}
-          onBlur={() => setIsInputFocused(false)}
-          onFocus={() => setIsInputFocused(true)}
           onSubmitEditing={submit}
           placeholder={
             mode === "ai"
