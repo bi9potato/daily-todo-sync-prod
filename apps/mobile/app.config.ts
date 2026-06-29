@@ -1,6 +1,7 @@
 import type { ConfigContext, ExpoConfig } from "expo/config";
 
 export default ({ config }: ConfigContext): ExpoConfig => {
+  const fastAndroidBuild = process.env.EXPO_FAST_ANDROID_BUILD === "1";
   const configuredVersionCode = config.android?.versionCode ?? 1;
   const versionCode = Number.parseInt(
     process.env.EXPO_PUBLIC_BUILD_NUMBER ?? String(configuredVersionCode),
@@ -18,6 +19,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     extra: {
       ...config.extra,
       buildSha: process.env.EXPO_PUBLIC_BUILD_SHA ?? "development",
+    },
+    experiments: {
+      ...(config.experiments ?? {}),
+      reactCompiler: fastAndroidBuild ? false : config.experiments?.reactCompiler,
     },
   };
 };

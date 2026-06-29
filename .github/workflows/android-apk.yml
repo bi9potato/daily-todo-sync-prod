@@ -5,6 +5,13 @@ on:
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/android-apk.yml"
+      - ".npmrc"
+      - "apps/mobile/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
 
 permissions:
   contents: write
@@ -16,11 +23,16 @@ concurrency:
 env:
   CI: "true"
   EXPO_NO_TELEMETRY: "1"
+  EXPO_FAST_ANDROID_BUILD: "1"
   EXPO_PUBLIC_API_BASE_URL: ${{ vars.MOBILE_API_BASE_URL || 'https://68.183.180.19.sslip.io/api' }}
   EXPO_PUBLIC_BUILD_NUMBER: ${{ github.run_number }}
   EXPO_PUBLIC_BUILD_SHA: ${{ github.sha }}
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 2G
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_NOHASHDIR: "true"
+  CCACHE_SLOPPINESS: file_stat_matches,include_file_ctime,include_file_mtime,time_macros
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
 
@@ -53,10 +65,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Use npmjs registry in GitHub Actions
+        run: pnpm config set registry https://registry.npmjs.org/
+
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v6
         with:
-          cache-cleanup: never
+          cache-cleanup: on-success
+          cache-read-only: ${{ github.event_name != 'workflow_dispatch' }}
           add-job-summary: on-failure
 
       - name: Install dependencies
@@ -64,10 +80,18 @@ jobs:
 
       # Typecheck/lint/doctor are intentionally covered by the CI workflow.
       # Keep this release workflow focused on producing the APK quickly.
+      - name: Restore generated Android project
+        id: android-project-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: apps/mobile/android
+          key: android-prebuild-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}
+
       - name: Generate Android project
+        if: steps.android-project-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean --no-install
 
-      - name: Pin Gradle wrapper
+      - name: Prepare Android project
         run: |
           # Expo prebuild currently generates a Gradle 9.x wrapper, but the
           # bundled Foojay toolchain resolver still references a vendor
@@ -76,19 +100,46 @@ jobs:
           sed -i 's#gradle-[0-9.]*-bin.zip#gradle-8.14.3-bin.zip#' \
             apps/mobile/android/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Restore native build outputs
-        uses: actions/cache@v4
+          # The generated native project is cached across commits. Keep the
+          # build-number-sensitive versionCode current when reusing it.
+          version_code="${EXPO_PUBLIC_BUILD_NUMBER:-1}"
+          if grep -qE 'versionCode [0-9]+' apps/mobile/android/app/build.gradle; then
+            sed -i "s/versionCode [0-9][0-9]*/versionCode ${version_code}/" \
+              apps/mobile/android/app/build.gradle
+          else
+            grep -n "versionCode" apps/mobile/android/app/build.gradle
+          fi
+
+      - name: Save generated Android project
+        if: steps.android-project-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: apps/mobile/android
+          key: android-prebuild-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}
+
+      - name: Restore Android incremental outputs
+        id: android-incremental-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
+            apps/mobile/android/.gradle
+            apps/mobile/android/app/build
             apps/mobile/android/app/.cxx
+            apps/mobile/android/build
             node_modules/.pnpm/**/android/.cxx
-          key: android-cmake-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}
+          key: android-incremental-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+          restore-keys: |
+            android-incremental-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-
 
       - name: Restore native compiler cache
-        uses: actions/cache@v4
+        id: ccache-cache
+        uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: android-ccache-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}
+          key: android-ccache-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+          restore-keys: |
+            android-ccache-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-
 
       - name: Enable native compiler cache
         run: |
@@ -96,6 +147,11 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends ccache
           fi
+          ccache --set-config=base_dir="${CCACHE_BASEDIR}"
+          ccache --set-config=compiler_check="${CCACHE_COMPILERCHECK}"
+          ccache --set-config=hash_dir=false
+          ccache --set-config=max_size="${CCACHE_MAXSIZE}"
+          ccache --set-config=sloppiness="${CCACHE_SLOPPINESS}"
           ccache --zero-stats
 
       - name: Restore stable internal signing key
@@ -118,6 +174,27 @@ jobs:
             --no-daemon \
             --stacktrace
           ccache --show-stats
+
+      - name: Save Android incremental outputs
+        if: success()
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            apps/mobile/android/.gradle
+            apps/mobile/android/app/build
+            apps/mobile/android/app/.cxx
+            apps/mobile/android/build
+            node_modules/.pnpm/**/android/.cxx
+          key: android-incremental-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+
+      - name: Save native compiler cache
+        if: success()
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .ccache
+          key: android-ccache-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
 
       - name: Prepare artifact and checksum
         run: |
