@@ -52,8 +52,9 @@ export function Composer({
       const windowHeight = Dimensions.get("window").height;
       const keyboardTop = event.endCoordinates.screenY;
       const overlap = Math.max(0, windowHeight - keyboardTop);
+      const keyboardHeight = Math.max(0, event.endCoordinates.height);
       setKeyboardVisible(true);
-      setKeyboardInset(overlap);
+      setKeyboardInset(overlap > 0 ? overlap : -keyboardHeight);
     }
 
     const showSubscription = Keyboard.addListener(
