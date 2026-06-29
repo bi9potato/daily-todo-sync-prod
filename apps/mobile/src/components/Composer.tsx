@@ -128,7 +128,7 @@ export function Composer({
     <View
       style={[
         styles.wrapper,
-        { marginBottom: keyboardVisible ? keyboardInset : spacing.sm },
+        { bottom: keyboardVisible ? keyboardInset : spacing.sm },
       ]}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
@@ -207,8 +207,13 @@ export function Composer({
 
 const styles = StyleSheet.create({
   wrapper: {
+    elevation: 12,
+    left: 0,
     marginHorizontal: spacing.md,
     pointerEvents: "box-none",
+    position: "absolute",
+    right: 0,
+    zIndex: 12,
   },
   container: {
     alignItems: "center",
