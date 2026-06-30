@@ -29,6 +29,8 @@
     "react-native-web": "~0.21.0"
   },
   "devDependencies": {
+    "@expo/fingerprint": "0.19.4",
+    "@expo/repack-app": "0.7.1",
     "@types/react": "~19.2.2",
     "eslint": "^9.39.4",
     "eslint-config-expo": "~56.0.4",

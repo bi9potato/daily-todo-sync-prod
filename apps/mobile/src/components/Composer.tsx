@@ -7,14 +7,17 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
+import { useAndroidKeyboardInset } from "@/lib/useAndroidKeyboardInset";
 import { colors, radius, spacing } from "@/theme";
 
 type ComposerMode = "task" | "ai";
@@ -32,9 +35,13 @@ export function Composer({
   onAiSubmit,
   onSubmit,
 }: ComposerProps) {
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
+  const { keyboardInset, keyboardVisible } = useAndroidKeyboardInset(
+    insets.bottom,
+  );
 
   useSpeechRecognitionEvent("start", () => setIsListening(true));
   useSpeechRecognitionEvent("end", () => setIsListening(false));
@@ -84,8 +91,13 @@ export function Composer({
     Keyboard.dismiss();
   }
 
+  const wrapperStyle =
+    Platform.OS === "android" && keyboardVisible
+      ? { bottom: keyboardInset }
+      : null;
+
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, wrapperStyle]}>
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}

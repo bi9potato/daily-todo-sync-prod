@@ -68,30 +68,66 @@ jobs:
       - name: Use npmjs registry in GitHub Actions
         run: pnpm config set registry https://registry.npmjs.org/
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Generate Android native fingerprint
+        id: native-fingerprint
+        working-directory: apps/mobile
+        run: |
+          native_hash="$(
+            pnpm exec fingerprint fingerprint:generate --platform android |
+              jq -er '.hash'
+          )"
+          echo "hash=${native_hash}" >> "$GITHUB_OUTPUT"
+
+      # A matching native fingerprint means only JavaScript, bundled assets, or
+      # app metadata changed. Repacking avoids the entire Gradle/native toolchain.
+      - name: Restore reusable native APK
+        id: native-base-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/daily-todo-native-base
+          key: android-native-base-v1-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
+
+      - name: Repack JavaScript-only APK
+        if: steps.native-base-cache.outputs.cache-hit == 'true'
+        working-directory: apps/mobile
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts"
+          pnpm exec repack-app \
+            --platform android \
+            --source-app "${RUNNER_TEMP}/daily-todo-native-base/base.apk" \
+            --output "${GITHUB_WORKSPACE}/artifacts/daily-todo-arm64-v8a.apk" \
+            --ks "${RUNNER_TEMP}/daily-todo-native-base/debug.keystore" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --ks-key-pass pass:android
+
       - name: Set up Gradle cache
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-cleanup: on-success
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           add-job-summary: on-failure
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
-
       # Typecheck/lint/doctor are intentionally covered by the CI workflow.
       # Keep this release workflow focused on producing the APK quickly.
       - name: Restore generated Android project
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         id: android-project-cache
         uses: actions/cache/restore@v4
         with:
           path: apps/mobile/android
-          key: android-prebuild-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}
+          key: android-prebuild-v2-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
 
       - name: Generate Android project
-        if: steps.android-project-cache.outputs.cache-hit != 'true'
+        if: steps.native-base-cache.outputs.cache-hit != 'true' && steps.android-project-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @daily-todo-sync/mobile exec expo prebuild --platform android --clean --no-install
 
       - name: Prepare Android project
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         run: |
           # Expo prebuild currently generates a Gradle 9.x wrapper, but the
           # bundled Foojay toolchain resolver still references a vendor
@@ -111,14 +147,15 @@ jobs:
           fi
 
       - name: Save generated Android project
-        if: steps.android-project-cache.outputs.cache-hit != 'true'
+        if: steps.native-base-cache.outputs.cache-hit != 'true' && steps.android-project-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         continue-on-error: true
         with:
           path: apps/mobile/android
-          key: android-prebuild-v1-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}
+          key: android-prebuild-v2-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
 
       - name: Restore Android incremental outputs
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         id: android-incremental-cache
         uses: actions/cache/restore@v4
         with:
@@ -128,20 +165,26 @@ jobs:
             apps/mobile/android/app/.cxx
             apps/mobile/android/build
             node_modules/.pnpm/**/android/.cxx
-          key: android-incremental-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+          key: android-incremental-v3-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}-${{ github.run_id }}
           restore-keys: |
-            android-incremental-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-
+            android-incremental-v3-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}-
+            android-incremental-v3-${{ runner.os }}-
+            android-incremental-v2-${{ runner.os }}-
 
       - name: Restore native compiler cache
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         id: ccache-cache
         uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: android-ccache-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+          key: android-ccache-v3-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}-${{ github.run_id }}
           restore-keys: |
-            android-ccache-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-
+            android-ccache-v3-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}-
+            android-ccache-v3-${{ runner.os }}-
+            android-ccache-v2-${{ runner.os }}-
 
       - name: Enable native compiler cache
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         run: |
           if ! command -v ccache > /dev/null 2>&1; then
             sudo apt-get update -qq
@@ -155,12 +198,14 @@ jobs:
           ccache --zero-stats
 
       - name: Restore stable internal signing key
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: apps/mobile/android/app/debug.keystore
           key: android-internal-signing-v1
 
       - name: Build standalone arm64 APK
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
@@ -175,8 +220,26 @@ jobs:
             --stacktrace
           ccache --show-stats
 
+      - name: Stage reusable native APK
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${RUNNER_TEMP}/daily-todo-native-base"
+          cp \
+            apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+            "${RUNNER_TEMP}/daily-todo-native-base/base.apk"
+          cp \
+            apps/mobile/android/app/debug.keystore \
+            "${RUNNER_TEMP}/daily-todo-native-base/debug.keystore"
+
+      - name: Save reusable native APK
+        if: steps.native-base-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/daily-todo-native-base
+          key: android-native-base-v1-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
+
       - name: Save Android incremental outputs
-        if: success()
+        if: success() && steps.native-base-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         continue-on-error: true
         with:
@@ -186,20 +249,24 @@ jobs:
             apps/mobile/android/app/.cxx
             apps/mobile/android/build
             node_modules/.pnpm/**/android/.cxx
-          key: android-incremental-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+          key: android-incremental-v3-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}-${{ github.run_id }}
 
       - name: Save native compiler cache
-        if: success()
+        if: success() && steps.native-base-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         continue-on-error: true
         with:
           path: .ccache
-          key: android-ccache-v2-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json', 'apps/mobile/app.json', 'apps/mobile/app.config.ts') }}-${{ github.run_id }}
+          key: android-ccache-v3-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}-${{ github.run_id }}
 
       - name: Prepare artifact and checksum
         run: |
           mkdir -p artifacts
-          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk artifacts/daily-todo-arm64-v8a.apk
+          if [[ "${{ steps.native-base-cache.outputs.cache-hit }}" != "true" ]]; then
+            cp \
+              apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+              artifacts/daily-todo-arm64-v8a.apk
+          fi
           sha256sum artifacts/daily-todo-arm64-v8a.apk > artifacts/daily-todo-arm64-v8a.apk.sha256
           published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           version_name="$(node -p "require('./apps/mobile/package.json').version")"

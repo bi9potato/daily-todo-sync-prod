@@ -4,31 +4,41 @@ import {
   Keyboard,
   Platform,
   type KeyboardEvent,
+  type KeyboardMetrics,
 } from "react-native";
 
-export function useAndroidKeyboardInset() {
+export function useAndroidKeyboardInset(bottomSafeAreaInset: number) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "android") {
-      setKeyboardInset(0);
-      setKeyboardVisible(false);
       return;
     }
 
-    function updateKeyboardInset(event: KeyboardEvent) {
+    function updateKeyboardInset(
+      coordinates: KeyboardEvent["endCoordinates"] | KeyboardMetrics,
+    ) {
       const windowHeight = Dimensions.get("window").height;
-      const keyboardTop = event.endCoordinates.screenY;
-      const overlap = Math.max(0, windowHeight - keyboardTop);
+      const overlap = Math.max(
+        0,
+        windowHeight - coordinates.screenY - bottomSafeAreaInset,
+      );
       setKeyboardVisible(true);
       setKeyboardInset(overlap);
     }
 
-    const showSubscription = Keyboard.addListener("keyboardDidShow", updateKeyboardInset);
+    const currentMetrics = Keyboard.metrics();
+    if (Keyboard.isVisible() && currentMetrics) {
+      updateKeyboardInset(currentMetrics);
+    }
+
+    const showSubscription = Keyboard.addListener("keyboardDidShow", (event) =>
+      updateKeyboardInset(event.endCoordinates),
+    );
     const frameSubscription = Keyboard.addListener(
       "keyboardDidChangeFrame",
-      updateKeyboardInset,
+      (event) => updateKeyboardInset(event.endCoordinates),
     );
     const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
       setKeyboardVisible(false);
@@ -40,7 +50,7 @@ export function useAndroidKeyboardInset() {
       frameSubscription.remove();
       hideSubscription.remove();
     };
-  }, []);
+  }, [bottomSafeAreaInset]);
 
   return { keyboardInset, keyboardVisible };
 }
