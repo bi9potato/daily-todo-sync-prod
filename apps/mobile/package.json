@@ -36,6 +36,7 @@
     "react-native-webview": "13.16.1"
   },
   "devDependencies": {
+    "@expo/config-plugins": "56.0.9",
     "@expo/fingerprint": "0.19.4",
     "@expo/repack-app": "0.7.1",
     "@types/react": "~19.2.2",
