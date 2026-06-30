@@ -14,6 +14,7 @@ import {
   type CalendarViewMode,
 } from "@/screens/CalendarScreen";
 import { ProfileScreen } from "@/screens/ProfileScreen";
+import { MobilityScreen } from "@/screens/MobilityScreen";
 import { TodayScreen } from "@/screens/TodayScreen";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
@@ -75,6 +76,7 @@ export function MainApp() {
             today={today}
           />
         ) : null}
+        {activeSection === "mobility" ? <MobilityScreen today={today} /> : null}
         {activeSection === "ai" ? <AiScreen selectedDate={selectedDate} /> : null}
         {activeSection === "profile" ? <ProfileScreen /> : null}
       </View>

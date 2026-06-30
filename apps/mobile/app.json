@@ -16,6 +16,9 @@
       "package": "com.dailytodosync.app",
       "versionCode": 1,
       "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.ACTIVITY_RECOGNITION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#FFFEFA",
         "foregroundImage": "./assets/images/app-icon.png"
@@ -41,6 +44,22 @@
         }
       ],
       "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "允许 Daily Todo 在你主动开启足迹记录后持续记录行走路线。",
+          "locationWhenInUsePermission": "允许 Daily Todo 获取当前位置并为任务记录地点。",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "允许 Daily Todo 在足迹记录期间统计步数。"
+        }
+      ],
       [
         "expo-image-picker",
         {

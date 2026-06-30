@@ -44,6 +44,13 @@ class TaskAttachmentOut(Schema):
     contentUrl: str
 
 
+class TaskLocationOut(Schema):
+    name: str
+    latitude: float
+    longitude: float
+    recordedAt: str
+
+
 class TodoOccurrenceOut(Schema):
     id: str
     taskId: str
@@ -66,6 +73,7 @@ class TodoOccurrenceOut(Schema):
     isRecurring: bool
     isLongTerm: bool
     repeat: dict
+    location: TaskLocationOut | None
     attachments: list[TaskAttachmentOut]
 
 
@@ -92,6 +100,13 @@ class RepeatRuleIn(Schema):
     until: date | None = None
 
 
+class TaskLocationIn(Schema):
+    name: str = ""
+    latitude: float
+    longitude: float
+    recordedAt: datetime | None = None
+
+
 class TaskCreateIn(Schema):
     text: str
     note: str = ""
@@ -110,6 +125,7 @@ class OccurrencePatchIn(Schema):
     isLongTerm: bool | None = None
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
+    location: TaskLocationIn | None = None
 
 
 class ReorderIn(Schema):
@@ -149,6 +165,21 @@ def recurrence_payload(rule: RepeatRuleIn | None) -> dict:
         "recurrence_interval": max(rule.interval or 1, 1),
         "recurrence_days_of_week": rule.daysOfWeek or [],
         "recurrence_until": rule.until,
+    }
+
+
+def location_payload(location: TaskLocationIn | None) -> dict | None:
+    if location is None:
+        return None
+    if not -90 <= location.latitude <= 90:
+        raise HttpError(400, "Location latitude is invalid.")
+    if not -180 <= location.longitude <= 180:
+        raise HttpError(400, "Location longitude is invalid.")
+    return {
+        "name": location.name.strip()[:180],
+        "latitude": location.latitude,
+        "longitude": location.longitude,
+        "recorded_at": location.recordedAt or timezone.now(),
     }
 
 
@@ -221,6 +252,20 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
             "daysOfWeek": task.recurrence_days_of_week,
             "until": task.recurrence_until.isoformat() if task.recurrence_until else None,
         },
+        "location": (
+            {
+                "name": occurrence.location_name,
+                "latitude": float(occurrence.location_latitude),
+                "longitude": float(occurrence.location_longitude),
+                "recordedAt": occurrence.location_recorded_at.isoformat(),
+            }
+            if (
+                occurrence.location_latitude is not None
+                and occurrence.location_longitude is not None
+                and occurrence.location_recorded_at is not None
+            )
+            else None
+        ),
         "attachments": [serialize_attachment(attachment) for attachment in attachments],
     }
 
@@ -323,6 +368,8 @@ def patch_occurrence(request, occurrence_id: UUID, payload: OccurrencePatchIn):
         is_long_term=payload.isLongTerm,
         reminder_time=parse_reminder_time(payload.reminderTime),
         set_reminder_time="reminderTime" in data,
+        location=location_payload(payload.location),
+        set_location="location" in data,
         **(recurrence_payload(payload.repeat) if payload.repeat is not None else {}),
     )
     sync_occurrence_to_google_calendar(request.auth, occurrence)

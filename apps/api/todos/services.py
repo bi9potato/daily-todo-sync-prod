@@ -584,6 +584,8 @@ def update_occurrence(
     recurrence_interval: int | None = None,
     recurrence_days_of_week: list[int] | None = None,
     recurrence_until: date | None = None,
+    location: dict | None = None,
+    set_location: bool = False,
 ) -> TodoOccurrence:
     occurrence = TodoOccurrence.objects.select_for_update().select_related("task").get(
         id=occurrence_id,
@@ -646,6 +648,26 @@ def update_occurrence(
         else:
             occurrence.note = note.strip()
             occurrence_changed_fields.append("note")
+
+    if set_location:
+        if location is None:
+            occurrence.location_name = ""
+            occurrence.location_latitude = None
+            occurrence.location_longitude = None
+            occurrence.location_recorded_at = None
+        else:
+            occurrence.location_name = location["name"]
+            occurrence.location_latitude = location["latitude"]
+            occurrence.location_longitude = location["longitude"]
+            occurrence.location_recorded_at = location["recorded_at"]
+        occurrence_changed_fields.extend(
+            [
+                "location_name",
+                "location_latitude",
+                "location_longitude",
+                "location_recorded_at",
+            ]
+        )
 
     if set_reminder_time:
         occurrence.task.reminder_time = reminder_time

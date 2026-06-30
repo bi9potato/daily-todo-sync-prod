@@ -100,6 +100,20 @@ class TodoOccurrence(models.Model):
     is_pinned = models.BooleanField(default=False)
     is_low_priority = models.BooleanField(default=False)
     sort_order = models.PositiveIntegerField(default=0)
+    location_name = models.CharField(max_length=180, blank=True, default="")
+    location_latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    location_longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    location_recorded_at = models.DateTimeField(null=True, blank=True)
     carryover_from_occurrence = models.ForeignKey(
         "self",
         null=True,

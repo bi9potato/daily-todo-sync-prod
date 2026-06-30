@@ -11,6 +11,9 @@ import type {
   GoogleCalendarSyncResult,
   LocalAttachmentFile,
   MobileRelease,
+  MobilityDay,
+  MobilityPointInput,
+  MobilityRecording,
   RangeTodos,
   TaskAttachment,
   TaskCreatePayload,
@@ -239,6 +242,39 @@ export function getDay(date: string) {
 
 export function getRange(start: string, end: string) {
   return request<RangeTodos>(`/range?start=${start}&end=${end}`);
+}
+
+export function getMobilityDay(date: string) {
+  return request<MobilityDay>(`/mobility/days/${date}`);
+}
+
+export function startMobilityRecording() {
+  return request<MobilityRecording>("/mobility/recordings/start", {
+    method: "POST",
+  });
+}
+
+export function stopMobilityRecording(id: string) {
+  return request<MobilityRecording>(`/mobility/recordings/${id}/stop`, {
+    method: "POST",
+  });
+}
+
+export function addMobilityPoints(id: string, points: MobilityPointInput[]) {
+  return request<MobilityRecording>(`/mobility/recordings/${id}/points`, {
+    method: "POST",
+    body: JSON.stringify({ points }),
+  });
+}
+
+export function setMobilityStepSample(
+  id: string,
+  payload: { sourceId: string; stepCount: number; recordedAt: string },
+) {
+  return request<MobilityRecording>(`/mobility/recordings/${id}/steps`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createTask(date: string, payload: TaskCreatePayload) {

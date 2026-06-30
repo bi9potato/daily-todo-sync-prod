@@ -522,6 +522,40 @@ class TodoApiTests(TestCase):
         occurrence.refresh_from_db()
         self.assertTrue(occurrence.is_pinned)
 
+    def test_patch_occurrence_can_set_and_clear_location(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Walk")
+
+        response = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps(
+                {
+                    "location": {
+                        "name": "海淀公园",
+                        "latitude": 39.99123,
+                        "longitude": 116.30234,
+                        "recordedAt": "2026-06-20T10:30:00+08:00",
+                    }
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["location"]["name"], "海淀公园")
+        occurrence.refresh_from_db()
+        self.assertEqual(occurrence.location_name, "海淀公园")
+
+        cleared = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps({"location": None}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json()["location"])
+
     def test_create_long_term_task_returns_future_content(self):
         response = self.client.post(
             "/api/days/2026-06-20/tasks",

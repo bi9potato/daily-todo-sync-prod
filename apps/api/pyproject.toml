@@ -31,6 +31,8 @@ include = [
     "accounts.*",
     "integrations",
     "integrations.*",
+    "mobility",
+    "mobility.*",
     "todos",
     "todos.*",
 ]

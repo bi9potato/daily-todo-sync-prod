@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as Location from "expo-location";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -20,6 +21,7 @@ import type {
   LocalAttachmentFile,
   RepeatKind,
   TaskAttachment,
+  TaskLocation,
   TaskUpdatePayload,
   TodoOccurrence,
 } from "@/types";
@@ -189,6 +191,52 @@ export function TaskEditor({
   const [isPinned, setIsPinned] = useState(task?.isPinned ?? false);
   const [isLongTerm, setIsLongTerm] = useState(task?.isLongTerm ?? false);
   const [isLowPriority, setIsLowPriority] = useState(task?.isLowPriority ?? false);
+  const [taskLocation, setTaskLocation] = useState<TaskLocation | null>(
+    task?.location ?? null,
+  );
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationError, setLocationError] = useState("");
+
+  async function useCurrentLocation() {
+    setIsLocating(true);
+    setLocationError("");
+    try {
+      if (Platform.OS === "web") {
+        throw new Error("请在 Android 或 iOS 客户端中获取当前位置。");
+      }
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) {
+        throw new Error("需要位置权限才能记录任务地点。");
+      }
+      const current = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      let name = "";
+      try {
+        const [address] = await Location.reverseGeocodeAsync(current.coords);
+        name =
+          address?.name ||
+          address?.formattedAddress ||
+          [address?.district, address?.city].filter(Boolean).join(" · ");
+      } catch {
+        // Coordinates remain usable when reverse geocoding is unavailable.
+      }
+      setTaskLocation({
+        name:
+          name ||
+          `${current.coords.latitude.toFixed(5)}, ${current.coords.longitude.toFixed(5)}`,
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude,
+        recordedAt: new Date(current.timestamp).toISOString(),
+      });
+    } catch (error) {
+      setLocationError(
+        error instanceof Error ? error.message : "无法获取当前位置",
+      );
+    } finally {
+      setIsLocating(false);
+    }
+  }
 
   function save() {
     if (!task || !text.trim()) {
@@ -206,6 +254,7 @@ export function TaskEditor({
         kind: isLongTerm ? "daily" : repeatKind,
         interval: Math.max(1, Number.parseInt(repeatInterval, 10) || 1),
       },
+      location: taskLocation,
     });
   }
 
@@ -326,6 +375,55 @@ export function TaskEditor({
                 style={styles.detailValueInput}
                 value={reminderTime}
               />
+            </View>
+            <View style={styles.locationBlock}>
+              <View style={[styles.detailRow, styles.locationRow]}>
+                <AppIcon name="location-outline" color={colors.text} size={21} />
+                <View style={styles.locationCopy}>
+                  <Text style={styles.detailLabel}>位置</Text>
+                  {taskLocation ? (
+                    <TextInput
+                      accessibilityLabel="任务位置名称"
+                      onChangeText={(name) =>
+                        setTaskLocation((current) =>
+                          current ? { ...current, name } : current,
+                        )
+                      }
+                      placeholder="位置名称"
+                      placeholderTextColor={colors.textMuted}
+                      style={styles.locationNameInput}
+                      value={taskLocation.name}
+                    />
+                  ) : null}
+                </View>
+                {isLocating ? (
+                  <ActivityIndicator color={colors.accent} size="small" />
+                ) : (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={useCurrentLocation}
+                    style={({ pressed }) => [
+                      styles.locationButton,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Text style={styles.locationButtonText}>
+                      {taskLocation ? "更新" : "使用当前位置"}
+                    </Text>
+                  </Pressable>
+                )}
+                {taskLocation ? (
+                  <Pressable
+                    accessibilityLabel="清除任务位置"
+                    hitSlop={8}
+                    onPress={() => setTaskLocation(null)}
+                    style={styles.clearLocationButton}>
+                    <AppIcon name="close-circle" color={colors.textMuted} size={20} />
+                  </Pressable>
+                ) : null}
+              </View>
+              {locationError ? (
+                <Text style={styles.locationError}>{locationError}</Text>
+              ) : null}
             </View>
             <View style={[styles.detailRow, styles.noteRow]}>
               <AppIcon name="document-text-outline" color={colors.text} size={21} />
@@ -549,6 +647,46 @@ const styles = StyleSheet.create({
     minWidth: 76,
     paddingVertical: spacing.sm,
     textAlign: "right",
+  },
+  locationBlock: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  locationRow: {
+    borderBottomWidth: 0,
+    minHeight: 64,
+  },
+  locationCopy: {
+    flex: 1,
+    gap: 1,
+    minWidth: 0,
+  },
+  locationNameInput: {
+    color: colors.textMuted,
+    fontSize: 13,
+    margin: 0,
+    minHeight: 24,
+    padding: 0,
+  },
+  locationButton: {
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  locationButtonText: {
+    ...typography.label,
+    color: colors.accent,
+  },
+  clearLocationButton: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  locationError: {
+    ...typography.caption,
+    color: colors.danger,
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   noteRow: {
     alignItems: "flex-start",

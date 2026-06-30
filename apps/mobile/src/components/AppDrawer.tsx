@@ -11,6 +11,7 @@ export type AppSection =
   | "low-priority"
   | "analytics"
   | "calendar"
+  | "mobility"
   | "ai"
   | "profile";
 
@@ -55,6 +56,12 @@ const navItems = [
     label: "日历",
     meta: "选择日期",
     icon: "calendar-outline",
+  },
+  {
+    key: "mobility",
+    label: "足迹地图",
+    meta: "轨迹、步数与地点",
+    icon: "map-outline",
   },
   {
     key: "ai",

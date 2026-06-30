@@ -39,6 +39,13 @@ export type TaskAttachment = {
   contentUrl: string;
 };
 
+export type TaskLocation = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
+};
+
 export type TodoOccurrence = {
   id: string;
   taskId: string;
@@ -61,6 +68,7 @@ export type TodoOccurrence = {
   isRecurring: boolean;
   isLongTerm: boolean;
   repeat: RepeatRule;
+  location: TaskLocation | null;
   attachments: TaskAttachment[];
 };
 
@@ -94,6 +102,48 @@ export type TaskUpdatePayload = {
   isLowPriority?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
+  location?: TaskLocation | null;
+};
+
+export type MobilityPoint = {
+  recordedAt: string;
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  speed: number | null;
+  placeName: string;
+};
+
+export type MobilityRecording = {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  isActive: boolean;
+  stepCount: number;
+  distanceMeters: number;
+  durationMinutes: number;
+};
+
+export type MobilityDay = {
+  date: string;
+  stepCount: number;
+  distanceMeters: number;
+  durationMinutes: number;
+  activeRecording: MobilityRecording | null;
+  recordings: MobilityRecording[];
+  points: MobilityPoint[];
+};
+
+export type MobilityPointInput = {
+  clientId: string;
+  recordedAt: string;
+  latitude: number;
+  longitude: number;
+  accuracy?: number | null;
+  altitude?: number | null;
+  speed?: number | null;
+  heading?: number | null;
+  placeName?: string;
 };
 
 export type AiChatResult = {

@@ -69,6 +69,18 @@ export function TaskRow({
             </Text>
           </View>
         ) : null}
+        {task.location ? (
+          <View style={styles.locationMetadata}>
+            <AppIcon name="location-outline" color={colors.accent} size={14} />
+            <Text numberOfLines={1} style={styles.metadataText}>
+              {task.location.name || "已记录位置"} ·{" "}
+              {new Date(task.location.recordedAt).toLocaleTimeString("zh-CN", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </Text>
+          </View>
+        ) : null}
         {task.isPinned ? (
           <View style={styles.pinnedTag}>
             <AppIcon name="bookmark" color={colors.accent} size={12} />
@@ -197,6 +209,11 @@ const styles = StyleSheet.create({
     textDecorationLine: "line-through",
   },
   metadata: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  locationMetadata: {
     alignItems: "center",
     flexDirection: "row",
     gap: spacing.xs,
