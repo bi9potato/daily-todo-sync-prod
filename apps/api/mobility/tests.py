@@ -125,6 +125,46 @@ class MobilityApiTests(TestCase):
         self.assertEqual(lower.json()["stepCount"], 20)
         self.assertEqual(combined.json()["stepCount"], 27)
 
+    def test_health_connect_replaces_sensor_samples_and_can_correct_downward(self):
+        recording = self.post("/api/mobility/recordings/start").json()
+        path = f"/api/mobility/recordings/{recording['id']}/steps"
+        self.put(
+            path,
+            {
+                "sourceId": "pedometer-process-a",
+                "stepCount": 40,
+                "recordedAt": "2026-06-30T08:10:00+08:00",
+            },
+        )
+        health = self.put(
+            path,
+            {
+                "sourceId": "health-connect",
+                "stepCount": 35,
+                "recordedAt": "2026-06-30T08:11:00+08:00",
+            },
+        )
+        corrected = self.put(
+            path,
+            {
+                "sourceId": "health-connect",
+                "stepCount": 32,
+                "recordedAt": "2026-06-30T08:12:00+08:00",
+            },
+        )
+        ignored_sensor = self.put(
+            path,
+            {
+                "sourceId": "pedometer-process-b",
+                "stepCount": 10,
+                "recordedAt": "2026-06-30T08:13:00+08:00",
+            },
+        )
+
+        self.assertEqual(health.json()["stepCount"], 35)
+        self.assertEqual(corrected.json()["stepCount"], 32)
+        self.assertEqual(ignored_sensor.json()["stepCount"], 32)
+
     def test_user_cannot_access_another_users_recording(self):
         recording = self.post("/api/mobility/recordings/start").json()
         other = get_user_model().objects.create_user(

@@ -27,6 +27,11 @@ async function readQueue(): Promise<QueuedBatch[]> {
   }
 }
 
+export async function getQueuedMobilityPointCount() {
+  const batches = await readQueue();
+  return batches.reduce((total, batch) => total + batch.points.length, 0);
+}
+
 async function writeQueue(batches: QueuedBatch[]) {
   if (Platform.OS === "web" || !QUEUE_FILE) {
     return;

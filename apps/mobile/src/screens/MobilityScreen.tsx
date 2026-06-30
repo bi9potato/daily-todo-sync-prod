@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -9,7 +9,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { Pedometer } from "expo-sensors";
 import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,7 +17,6 @@ import { AppIcon } from "@/components/AppIcon";
 import { RouteMap } from "@/components/RouteMap";
 import {
   getMobilityDay,
-  setMobilityStepSample,
   startMobilityRecording,
   stopMobilityRecording,
 } from "@/lib/api";
@@ -36,12 +34,15 @@ import {
   startMobilityLocationTracking,
   stopMobilityLocationTracking,
 } from "@/lib/mobility-tracking";
+import {
+  requestHealthConnectStepAccess,
+  startFallbackStepTracking,
+  stopFallbackStepTracking,
+  syncHealthConnectSteps,
+} from "@/lib/mobility-steps";
+import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
-import type {
-  MobilityDay,
-  MobilityPoint,
-  MobilityRecording,
-} from "@/types";
+import type { MobilityPoint, MobilityRecording } from "@/types";
 
 function explainBackgroundPermission() {
   if (Platform.OS !== "android") {
@@ -108,41 +109,17 @@ async function captureNamedPoint() {
   return locationToMobilityPoint(location, name);
 }
 
-function updateRecordingInDay(
-  day: MobilityDay | undefined,
-  recording: MobilityRecording,
-) {
-  if (!day) {
-    return day;
-  }
-  const recordings = day.recordings.map((item) =>
-    item.id === recording.id ? recording : item,
-  );
-  return {
-    ...day,
-    activeRecording: recording.isActive ? recording : null,
-    recordings,
-    stepCount: recordings.reduce((sum, item) => sum + item.stepCount, 0),
-    distanceMeters: recordings.reduce(
-      (sum, item) => sum + item.distanceMeters,
-      0,
-    ),
-    durationMinutes: recordings.reduce(
-      (sum, item) => sum + item.durationMinutes,
-      0,
-    ),
-  };
-}
-
-export function MobilityScreen({ today }: { today: string }) {
+export function MobilityScreen({
+  runtime,
+  today,
+}: {
+  runtime: MobilityRuntimeState;
+  today: string;
+}) {
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(today);
   const [actionError, setActionError] = useState("");
-  const [unsyncedSteps, setUnsyncedSteps] = useState(0);
-  const sourceIdRef = useRef("");
-  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestStepsRef = useRef(0);
-  const syncedStepsRef = useRef(0);
+  const [isEnablingSteps, setIsEnablingSteps] = useState(false);
 
   const dayQuery = useQuery({
     queryKey: ["mobility-day", selectedDate],
@@ -153,78 +130,22 @@ export function MobilityScreen({ today }: { today: string }) {
   const activeRecording = dayQuery.data?.activeRecording ?? null;
   const isToday = selectedDate === today;
 
-  const syncStepSample = useCallback(async (recordingId: string) => {
-    const stepCount = latestStepsRef.current;
-    if (stepCount <= syncedStepsRef.current) {
-      return;
-    }
-    const recording = await setMobilityStepSample(recordingId, {
-      sourceId: sourceIdRef.current,
-      stepCount,
-      recordedAt: new Date().toISOString(),
-    });
-    syncedStepsRef.current = stepCount;
-    setUnsyncedSteps(0);
-    queryClient.setQueryData<MobilityDay>(
-      ["mobility-day", selectedDate],
-      (current) => updateRecordingInDay(current, recording),
-    );
-  }, [queryClient, selectedDate]);
-
-  useEffect(() => {
-    if (!activeRecording?.id || Platform.OS === "web") {
-      return;
-    }
-    let mounted = true;
-    let subscription: ReturnType<typeof Pedometer.watchStepCount> | null = null;
-
-    void (async () => {
-      sourceIdRef.current = `pedometer-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}`;
-      latestStepsRef.current = 0;
-      syncedStepsRef.current = 0;
-      const permission = await Pedometer.requestPermissionsAsync();
-      const available = await Pedometer.isAvailableAsync();
-      if (!mounted || !permission.granted || !available) {
-        return;
-      }
-      subscription = Pedometer.watchStepCount(({ steps }) => {
-        latestStepsRef.current = steps;
-        setUnsyncedSteps(Math.max(steps - syncedStepsRef.current, 0));
-        if (syncTimerRef.current) {
-          return;
-        }
-        const delay =
-          steps - syncedStepsRef.current >= 10 ? 0 : 15_000;
-        syncTimerRef.current = setTimeout(() => {
-          syncTimerRef.current = null;
-          void syncStepSample(activeRecording.id);
-        }, delay);
-      });
-    })();
-
-    return () => {
-      mounted = false;
-      subscription?.remove();
-      if (syncTimerRef.current) {
-        clearTimeout(syncTimerRef.current);
-        syncTimerRef.current = null;
-      }
-      void syncStepSample(activeRecording.id);
-    };
-  }, [activeRecording?.id, selectedDate, syncStepSample]);
-
   const startMutation = useMutation({
     mutationFn: async () => {
       setActionError("");
       await requestTrackingPermissions();
+      await requestHealthConnectStepAccess();
       const recording = await startMobilityRecording();
       await setActiveMobilityRecordingId(recording.id);
       try {
         const initialPoint = await captureNamedPoint();
         await syncOrQueueMobilityPoints(recording.id, [initialPoint]);
         await startMobilityLocationTracking();
+        try {
+          await startFallbackStepTracking(recording.id);
+        } catch {
+          // The route can still be recorded when this device has no step sensor.
+        }
       } catch (error) {
         await stopMobilityRecording(recording.id);
         await clearActiveMobilityRecordingId();
@@ -245,9 +166,8 @@ export function MobilityScreen({ today }: { today: string }) {
   const stopMutation = useMutation({
     mutationFn: async (recording: MobilityRecording) => {
       setActionError("");
-      if (latestStepsRef.current > syncedStepsRef.current) {
-        await syncStepSample(recording.id);
-      }
+      const fallbackRecording = await stopFallbackStepTracking();
+      await syncHealthConnectSteps(fallbackRecording ?? recording);
       try {
         const finalPoint = await captureNamedPoint();
         await syncOrQueueMobilityPoints(recording.id, [finalPoint]);
@@ -281,7 +201,34 @@ export function MobilityScreen({ today }: { today: string }) {
     [dayQuery.data?.points],
   );
   const busy = startMutation.isPending || stopMutation.isPending;
-  const totalSteps = (dayQuery.data?.stepCount ?? 0) + unsyncedSteps;
+  const totalSteps = dayQuery.data?.stepCount ?? 0;
+  const trackingHealthy =
+    runtime.backgroundPermission && runtime.nativeTaskActive;
+
+  async function enableHealthSteps() {
+    setIsEnablingSteps(true);
+    setActionError("");
+    try {
+      const granted = await requestHealthConnectStepAccess();
+      if (!granted) {
+        throw new Error(
+          "Health Connect 不可用或未授权。Android 13 及以下请先安装并配置 Health Connect。",
+        );
+      }
+      if (activeRecording) {
+        await syncHealthConnectSteps(activeRecording);
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["mobility-day", selectedDate],
+      });
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "无法启用系统步数",
+      );
+    } finally {
+      setIsEnablingSteps(false);
+    }
+  }
 
   return (
     <ScrollView
@@ -394,10 +341,72 @@ export function MobilityScreen({ today }: { today: string }) {
         <AppIcon name="lock-closed-outline" color={colors.textMuted} size={15} />
         <Text style={styles.privacyText}>
           {activeRecording
-            ? "仅你可见 · 后台轨迹正在记录"
+            ? trackingHealthy
+              ? "仅你可见 · Android 后台服务运行中"
+              : "后台服务异常 · 请检查下方状态"
             : "轨迹已停止 · 不会在后台获取位置"}
         </Text>
       </View>
+
+      {activeRecording ? (
+        <View
+          style={[
+            styles.runtimePanel,
+            !trackingHealthy && styles.runtimePanelWarning,
+          ]}>
+          <View style={styles.runtimeHeading}>
+            <AppIcon
+              name={trackingHealthy ? "shield-checkmark-outline" : "warning-outline"}
+              color={trackingHealthy ? colors.accent : colors.danger}
+              size={21}
+            />
+            <View style={styles.runtimeHeadingCopy}>
+              <Text style={styles.runtimeTitle}>
+                {trackingHealthy ? "后台轨迹服务正常" : "后台轨迹服务未运行"}
+              </Text>
+              <Text style={styles.runtimeMeta}>
+                {runtime.lastLocationAt
+                  ? `最近定位 ${formatRuntimeTime(runtime.lastLocationAt)}`
+                  : "正在等待第一条后台定位"}
+                {runtime.queuedPointCount
+                  ? ` · ${runtime.queuedPointCount} 个定位点待同步`
+                  : ""}
+              </Text>
+            </View>
+          </View>
+          {runtime.lastError ? (
+            <Text style={styles.runtimeError}>{runtime.lastError}</Text>
+          ) : null}
+          <View style={styles.stepSourceRow}>
+            <View style={styles.stepSourceCopy}>
+              <Text style={styles.stepSourceLabel}>步数来源</Text>
+              <Text style={styles.stepSourceValue}>
+                {runtime.stepSource === "health-connect"
+                  ? "Health Connect 系统聚合"
+                  : runtime.stepSource === "device"
+                    ? "设备传感器（前台补充）"
+                    : "尚未连接"}
+              </Text>
+            </View>
+            {runtime.stepSource !== "health-connect" &&
+            Platform.OS === "android" ? (
+              <Pressable
+                disabled={isEnablingSteps}
+                onPress={enableHealthSteps}
+                style={({ pressed }) => [
+                  styles.enableStepsButton,
+                  pressed && styles.pressed,
+                ]}>
+                {isEnablingSteps ? (
+                  <ActivityIndicator color={colors.accent} size="small" />
+                ) : (
+                  <Text style={styles.enableStepsText}>启用系统步数</Text>
+                )}
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.placesSection}>
         <Text style={styles.sectionTitle}>到访地点</Text>
@@ -425,10 +434,18 @@ export function MobilityScreen({ today }: { today: string }) {
       </View>
 
       <Text style={styles.stepNote}>
-        步数来自设备计步器，Android 仅在应用运行期间提供更新；轨迹与距离可在后台持续记录。
+        Android 优先读取 Health Connect 去重后的步数；未连接时仅使用设备前台传感器补充，不再跨页面重复累计。
       </Text>
     </ScrollView>
   );
+}
+
+function formatRuntimeTime(value: string) {
+  return new Date(value).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function getVisitedPlaces(points: MobilityPoint[]) {
@@ -626,6 +643,75 @@ const styles = StyleSheet.create({
   privacyText: {
     ...typography.caption,
     color: colors.textMuted,
+  },
+  runtimePanel: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.md,
+    padding: spacing.md,
+  },
+  runtimePanelWarning: {
+    backgroundColor: colors.dangerSoft,
+    borderColor: "#EDB9B4",
+  },
+  runtimeHeading: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  runtimeHeadingCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  runtimeTitle: {
+    ...typography.label,
+    color: colors.text,
+    fontSize: 14,
+  },
+  runtimeMeta: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  runtimeError: {
+    ...typography.caption,
+    color: colors.danger,
+  },
+  stepSourceRow: {
+    alignItems: "center",
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  stepSourceCopy: {
+    flex: 1,
+    gap: 1,
+  },
+  stepSourceLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  stepSourceValue: {
+    ...typography.label,
+    color: colors.text,
+  },
+  enableStepsButton: {
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 38,
+    minWidth: 112,
+    paddingHorizontal: spacing.sm,
+  },
+  enableStepsText: {
+    ...typography.label,
+    color: colors.accent,
   },
   placesSection: {
     backgroundColor: colors.panel,

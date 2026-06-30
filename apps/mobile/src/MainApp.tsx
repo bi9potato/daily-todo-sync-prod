@@ -7,6 +7,7 @@ import { AppDrawer, type AppSection } from "@/components/AppDrawer";
 import { AppIcon } from "@/components/AppIcon";
 import { getMe } from "@/lib/api";
 import { toDateKey } from "@/lib/date";
+import { useMobilityRuntime } from "@/lib/useMobilityRuntime";
 import { AiScreen } from "@/screens/AiScreen";
 import { AnalyticsScreen } from "@/screens/AnalyticsScreen";
 import {
@@ -20,6 +21,7 @@ import { colors, radius, shadows, spacing, typography } from "@/theme";
 
 export function MainApp() {
   const today = toDateKey(new Date());
+  const mobilityRuntime = useMobilityRuntime(today);
   const [activeSection, setActiveSection] = useState<AppSection>("today");
   const [calendarView, setCalendarView] = useState<CalendarViewMode>("week");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -76,7 +78,9 @@ export function MainApp() {
             today={today}
           />
         ) : null}
-        {activeSection === "mobility" ? <MobilityScreen today={today} /> : null}
+        {activeSection === "mobility" ? (
+          <MobilityScreen runtime={mobilityRuntime} today={today} />
+        ) : null}
         {activeSection === "ai" ? <AiScreen selectedDate={selectedDate} /> : null}
         {activeSection === "profile" ? <ProfileScreen /> : null}
       </View>

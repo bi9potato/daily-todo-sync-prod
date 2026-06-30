@@ -253,15 +253,24 @@ def set_step_sample(request, recording_id: UUID, payload: StepSampleIn):
         id=recording_id,
         user=request.auth,
     )
+    source_id = payload.sourceId[:100]
+    is_health_connect = source_id == "health-connect"
+    health_connect_exists = recording.step_samples.filter(
+        source_id="health-connect"
+    ).exists()
+    if health_connect_exists and not is_health_connect:
+        return serialize_recording(recording)
+    if is_health_connect:
+        recording.step_samples.exclude(source_id="health-connect").delete()
     sample, _ = StepSample.objects.get_or_create(
         recording=recording,
-        source_id=payload.sourceId[:100],
+        source_id=source_id,
         defaults={
             "step_count": payload.stepCount,
             "recorded_at": payload.recordedAt,
         },
     )
-    if payload.stepCount > sample.step_count:
+    if is_health_connect or payload.stepCount > sample.step_count:
         sample.step_count = payload.stepCount
         sample.recorded_at = payload.recordedAt
         sample.save(update_fields=["step_count", "recorded_at", "updated_at"])
