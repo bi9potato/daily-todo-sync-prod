@@ -179,13 +179,16 @@ export async function stopFallbackStepTracking() {
   return syncedRecording;
 }
 
-export async function reconcileMobilitySteps(_recording: MobilityRecording): Promise<{
+export async function reconcileMobilitySteps(recording: MobilityRecording): Promise<{
   recording: MobilityRecording | null;
   source: MobilityStepSource;
 }> {
   const syncedRecording: MobilityRecording | null = null;
   return {
     recording: syncedRecording,
-    source: "unavailable",
+    source:
+      fallbackRecordingId === recording.id && fallbackSubscription
+        ? "device"
+        : "unavailable",
   };
 }

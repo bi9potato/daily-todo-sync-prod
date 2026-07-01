@@ -17,6 +17,7 @@ import {
 } from "./mobility-storage";
 import {
   getMobilityTrackingDiagnostics,
+  isForegroundMobilityTrackingActive,
   isMobilityLocationTrackingActive,
   recoverMobilityLocationTracking,
   stopMobilityLocationTracking,
@@ -30,7 +31,9 @@ import type { MobilityRecording } from "@/types";
 
 export type MobilityRuntimeState = MobilityDiagnosticState & {
   backgroundPermission: boolean;
+  foregroundWatchActive: boolean;
   foregroundPermission: boolean;
+  nativeBackgroundAvailable: boolean;
   nativeTaskActive: boolean;
   queuedPointCount: number;
   stepSource: MobilityStepSource;
@@ -38,10 +41,12 @@ export type MobilityRuntimeState = MobilityDiagnosticState & {
 
 const INITIAL_STATE: MobilityRuntimeState = {
   backgroundPermission: false,
+  foregroundWatchActive: false,
   foregroundPermission: false,
   lastError: "",
   lastLocationAt: null,
   lastSyncAt: null,
+  nativeBackgroundAvailable: false,
   nativeTaskActive: false,
   queuedPointCount: 0,
   recoveredAt: null,
@@ -56,10 +61,12 @@ async function getSafeMobilityDiagnostics() {
     return {
       backgroundPermission: false,
       foregroundPermission: false,
+      foregroundWatchActive: false,
       lastError:
         error instanceof Error ? error.message : "Mobility diagnostics unavailable",
       lastLocationAt: null,
       lastSyncAt: null,
+      nativeBackgroundAvailable: false,
       nativeTaskActive: false,
       recoveredAt: null,
     };
@@ -95,7 +102,11 @@ export function useMobilityRuntime(today: string, enabled = true) {
       reconcilingRef.current = true;
       try {
         if (!recording) {
-          if (dayLoaded && (await isMobilityLocationTrackingActive())) {
+          if (
+            dayLoaded &&
+            ((await isMobilityLocationTrackingActive()) ||
+              isForegroundMobilityTrackingActive())
+          ) {
             await stopMobilityLocationTracking();
             await clearActiveMobilityRecordingId();
             await clearMobilityDiagnostics();

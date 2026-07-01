@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Line, Polyline } from "react-native-svg";
 import { WebView } from "react-native-webview";
@@ -84,6 +84,8 @@ const MAP_SOURCE = { html: createMapHtml() };
 function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
   const webViewRef = useRef<WebView>(null);
   const mapReadyRef = useRef(false);
+  const webViewStartedRef = useRef(false);
+  const [mapFailed, setMapFailed] = useState(false);
   const updateRoute = useCallback(
     (fitRoute: boolean) => {
       webViewRef.current?.injectJavaScript(
@@ -99,6 +101,25 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
     }
   }, [updateRoute]);
 
+  useEffect(() => {
+    if (Platform.OS === "web" || !points.length) {
+      webViewStartedRef.current = false;
+      return;
+    }
+    if (webViewStartedRef.current) {
+      return;
+    }
+    webViewStartedRef.current = true;
+    mapReadyRef.current = false;
+    setMapFailed(false);
+    const timer = setTimeout(() => {
+      if (!mapReadyRef.current) {
+        setMapFailed(true);
+      }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [points.length]);
+
   if (!points.length) {
     return (
       <View style={styles.empty}>
@@ -111,7 +132,7 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
     );
   }
 
-  if (Platform.OS === "web") {
+  if (Platform.OS === "web" || mapFailed) {
     return <RoutePreview points={points} />;
   }
 
@@ -123,9 +144,12 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
       onMessage={({ nativeEvent }) => {
         if (nativeEvent.data === "map-ready") {
           mapReadyRef.current = true;
+          setMapFailed(false);
           updateRoute(true);
         }
       }}
+      onError={() => setMapFailed(true)}
+      onHttpError={() => setMapFailed(true)}
       originWhitelist={["*"]}
       overScrollMode="never"
       scrollEnabled={false}

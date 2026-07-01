@@ -36,6 +36,7 @@ import {
   locationToMobilityPoint,
   startMobilityLocationTracking,
   stopMobilityLocationTracking,
+  supportsNativeBackgroundLocationTracking,
 } from "@/lib/mobility-tracking";
 import {
   startFallbackStepTracking,
@@ -83,7 +84,11 @@ async function requestAndroidNotificationPermission() {
   }
 }
 
-async function requestTrackingPermissions() {
+async function requestTrackingPermissions({
+  requireBackground,
+}: {
+  requireBackground: boolean;
+}) {
   if (Platform.OS === "web") {
     throw new Error("网页端不能持续记录轨迹，请在 Android APK 中使用。");
   }
@@ -91,7 +96,6 @@ async function requestTrackingPermissions() {
     source: "mobility",
   });
   await flushClientLogs();
-  await requestAndroidNotificationPermission();
   if (!(await Location.hasServicesEnabledAsync())) {
     throw new Error("请先打开系统定位服务。");
   }
@@ -99,6 +103,10 @@ async function requestTrackingPermissions() {
   if (!foreground.granted) {
     throw new Error("需要“精确位置”权限才能记录路线。");
   }
+  if (!requireBackground) {
+    return;
+  }
+  await requestAndroidNotificationPermission();
   if (!(await explainBackgroundPermission())) {
     throw new Error("未开启后台位置权限。");
   }
@@ -126,10 +134,28 @@ function addressLabel(address: Location.LocationGeocodedAddress | undefined) {
   );
 }
 
-async function captureNamedPoint() {
-  const location = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.High,
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
   });
+}
+
+async function captureNamedPoint() {
+  const location = await withTimeout(
+    Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.High,
+    }),
+    8000,
+    "定位暂时不可用",
+  );
   let name = "";
   try {
     const addresses = await Location.reverseGeocodeAsync(location.coords);
@@ -168,21 +194,34 @@ export function MobilityScreen({
   const startMutation = useMutation({
     mutationFn: async () => {
       setActionError("");
+      const nativeBackgroundAvailable = supportsNativeBackgroundLocationTracking();
       recordClientLog("info", "Mobility recording start requested", {
         source: "mobility",
+        context: { nativeBackgroundAvailable },
       });
       await flushClientLogs();
-      await requestTrackingPermissions();
+      await requestTrackingPermissions({
+        requireBackground: nativeBackgroundAvailable,
+      });
       const recording = await startMobilityRecording();
       await setActiveMobilityRecordingId(recording.id);
       try {
-        const initialPoint = await captureNamedPoint();
-        await syncOrQueueMobilityPoints(recording.id, [initialPoint]);
-        recordClientLog("info", "Starting background location updates", {
+        recordClientLog("info", "Starting mobility location tracking", {
           source: "mobility",
+          context: { nativeBackgroundAvailable },
         });
         await flushClientLogs();
-        await startMobilityLocationTracking({ manual: true });
+        await startMobilityLocationTracking({
+          background: nativeBackgroundAvailable,
+          manual: true,
+          recordingId: recording.id,
+        });
+        try {
+          const initialPoint = await captureNamedPoint();
+          await syncOrQueueMobilityPoints(recording.id, [initialPoint]);
+        } catch (error) {
+          console.warn("Initial mobility point capture failed", error);
+        }
         try {
           await startFallbackStepTracking(recording.id);
         } catch {
@@ -247,8 +286,12 @@ export function MobilityScreen({
   );
   const busy = startMutation.isPending || stopMutation.isPending;
   const totalSteps = dayQuery.data?.stepCount ?? 0;
+  const backgroundTrackingHealthy =
+    runtime.nativeBackgroundAvailable &&
+    runtime.backgroundPermission &&
+    runtime.nativeTaskActive;
   const trackingHealthy =
-    runtime.backgroundPermission && runtime.nativeTaskActive;
+    runtime.foregroundWatchActive || backgroundTrackingHealthy;
   const recordingEnabled = Boolean(activeRecording);
 
   if (showDetails) {
@@ -270,7 +313,7 @@ export function MobilityScreen({
       <View style={styles.heading}>
         <View>
           <Text style={styles.title}>足迹地图</Text>
-          <Text style={styles.subtitle}>授权打开后持续记录，关闭授权才会停止</Text>
+          <Text style={styles.subtitle}>打开后实时记录路线，关闭开关才会停止</Text>
         </View>
         {recordingEnabled ? (
           <View style={styles.liveBadge}>
@@ -282,20 +325,22 @@ export function MobilityScreen({
 
       <View style={styles.authorizationCard}>
         <View style={styles.authorizationCopy}>
-          <Text style={styles.authorizationTitle}>持续后台记录授权</Text>
+          <Text style={styles.authorizationTitle}>足迹记录</Text>
           <Text style={styles.authorizationDescription}>
             {recordingEnabled
-              ? trackingHealthy
-                ? "已授权，应用关闭后后台服务仍会继续记录"
-                : "已授权，请保持应用打开或关闭后重新开启以恢复服务"
-              : "未授权，不会在后台获取位置和活动数据"}
+              ? backgroundTrackingHealthy
+                ? "正在记录；应用关闭后后台服务也会继续写入路线"
+                : runtime.foregroundWatchActive
+                  ? "正在安全实时记录；保持应用打开即可持续写入路线"
+                  : "已开启记录，正在等待定位服务恢复"
+              : "未开启，不会获取位置和活动数据"}
           </Text>
         </View>
         {busy || todayQuery.isPending ? (
           <ActivityIndicator color={colors.accent} />
         ) : (
           <Switch
-            accessibilityLabel="持续后台记录授权"
+            accessibilityLabel="足迹记录"
             onValueChange={(enabled) => {
               if (enabled) {
                 startMutation.mutate();
@@ -387,10 +432,12 @@ export function MobilityScreen({
         <AppIcon name="lock-closed-outline" color={colors.textMuted} size={15} />
         <Text style={styles.privacyText}>
           {recordingEnabled
-            ? trackingHealthy
-              ? "仅你可见 · Android 后台服务运行中"
-              : "后台服务异常 · 请检查下方状态"
-            : "授权已关闭 · 不会在后台获取位置"}
+            ? backgroundTrackingHealthy
+              ? "仅你可见 · 后台服务运行中"
+              : runtime.foregroundWatchActive
+                ? "仅你可见 · 安全实时记录中"
+                : "定位服务等待恢复 · 请检查下方状态"
+            : "记录已关闭 · 不会获取位置"}
         </Text>
       </View>
 
@@ -408,12 +455,16 @@ export function MobilityScreen({
             />
             <View style={styles.runtimeHeadingCopy}>
               <Text style={styles.runtimeTitle}>
-                {trackingHealthy ? "后台轨迹服务正常" : "后台轨迹服务未运行"}
+                {backgroundTrackingHealthy
+                  ? "后台轨迹服务正常"
+                  : runtime.foregroundWatchActive
+                    ? "安全实时记录正常"
+                    : "定位服务未运行"}
               </Text>
               <Text style={styles.runtimeMeta}>
                 {runtime.lastLocationAt
                   ? `最近定位 ${formatRuntimeTime(runtime.lastLocationAt)}`
-                  : "正在等待第一条后台定位"}
+                  : "正在等待第一条定位"}
                 {runtime.queuedPointCount
                   ? ` · ${runtime.queuedPointCount} 个定位点待同步`
                   : ""}
@@ -540,7 +591,7 @@ function MobilityDetails({
       </View>
 
       <Text style={styles.stepNote}>
-        Android 优先使用 Health Connect 的系统聚合步数；没有系统数据时使用设备传感器补充。
+        Android 会在你开启足迹记录后使用设备传感器统计本次步数。
       </Text>
     </ScrollView>
   );
