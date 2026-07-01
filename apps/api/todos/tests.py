@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -506,6 +507,32 @@ class TodoApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["text"], "Read")
+
+    def test_create_task_with_client_id_is_idempotent_and_uses_that_id(self):
+        client_id = str(uuid4())
+        payload = json.dumps({"text": "Read", "clientId": client_id})
+
+        first = self.client.post(
+            "/api/days/2026-06-20/tasks",
+            data=payload,
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        second = self.client.post(
+            "/api/days/2026-06-20/tasks",
+            data=payload,
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(first.json()["id"], client_id)
+        self.assertEqual(first.json()["id"], second.json()["id"])
+        self.assertEqual(
+            TodoOccurrence.objects.filter(id=client_id).count(),
+            1,
+        )
 
     def test_patch_occurrence_can_pin_task(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")

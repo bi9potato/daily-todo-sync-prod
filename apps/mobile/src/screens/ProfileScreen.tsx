@@ -113,7 +113,10 @@ export function ProfileScreen() {
   if (meQuery.isPending) {
     return (
       <View style={styles.page}>
-        <LoadingState label="正在读取账户…" />
+        <LoadingState
+          label="正在读取账户…"
+          isPaused={meQuery.fetchStatus === "paused"}
+        />
       </View>
     );
   }

@@ -56,7 +56,10 @@ export function CalendarScreen({
         today={today}
       />
       {rangeQuery.isPending ? (
-        <LoadingState label="正在读取日程…" />
+        <LoadingState
+          label="正在读取日程…"
+          isPaused={rangeQuery.fetchStatus === "paused"}
+        />
       ) : rangeQuery.isError ? (
         <ErrorState
           message={rangeQuery.error.message || "日历加载失败"}

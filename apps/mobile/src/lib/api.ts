@@ -39,6 +39,21 @@ const REQUEST_TIMEOUT_MS = 20_000;
 
 let refreshPromise: Promise<string> | null = null;
 
+// Carries the HTTP status alongside the message so callers (the offline
+// mutation queue in particular) can tell "the server rejected this" (an
+// ApiError) apart from "we couldn't reach the server at all" (a plain
+// Error/TypeError from fetch itself, or the timeout below) without having
+// to string-match the message.
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function fetchWithTimeout(url: string, options: RequestInit) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -182,7 +197,7 @@ async function request<T>(
   }
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+    throw new ApiError(response.status, await readErrorMessage(response));
   }
   if (response.status === 204) {
     return undefined as T;

@@ -23,6 +23,7 @@ import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
 import {
+  ApiError,
   chatWithAi,
   copyLongTermOccurrenceAsRegular,
   createTask,
@@ -35,14 +36,71 @@ import {
   uploadTaskAttachment,
 } from "@/lib/api";
 import { formatLongDate } from "@/lib/date";
+import {
+  createTodoClientId,
+  enqueueTodoCreate,
+  enqueueTodoDelete,
+  enqueueTodoReorder,
+  enqueueTodoUpdate,
+} from "@/lib/todo-mutation-queue";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
   DayTodos,
   LocalAttachmentFile,
   TaskAttachment,
+  TaskCreatePayload,
   TaskUpdatePayload,
   TodoOccurrence,
 } from "@/types";
+
+// A network-class failure (couldn't reach the server at all) should be
+// queued and retried later; a real response from the server (ApiError,
+// even a 4xx/5xx) means the request was understood and rejected, so it
+// should surface to the user immediately instead of being queued.
+function isOfflineError(error: unknown) {
+  return !(error instanceof ApiError);
+}
+
+function createOptimisticOccurrence(
+  clientId: string,
+  date: string,
+  payload: TaskCreatePayload,
+): TodoOccurrence {
+  const timestamp = new Date().toISOString();
+  return {
+    id: clientId,
+    taskId: clientId,
+    rootId: clientId,
+    taskDate: date,
+    text: payload.text,
+    note: payload.note ?? "",
+    status: "pending",
+    source: "manual",
+    // Date.now() sorts after every server-assigned sortOrder (those are
+    // small integers), which is exactly "append to the end of the list"
+    // until the real value comes back from a sync.
+    sortOrder: Date.now(),
+    isPinned: false,
+    isLowPriority: payload.isLowPriority ?? false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    completedAt: null,
+    carryoverFromOccurrenceId: null,
+    firstCreatedAt: timestamp,
+    reminderTime: payload.reminderTime ?? null,
+    reminderAt: null,
+    isRecurring: Boolean(payload.repeat && payload.repeat.kind !== "none"),
+    isLongTerm: payload.isLongTerm ?? false,
+    repeat: payload.repeat ?? {
+      kind: "none",
+      interval: 1,
+      daysOfWeek: [],
+      until: null,
+    },
+    location: null,
+    attachments: [],
+  };
+}
 
 if (Platform.OS === "android") {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
@@ -139,12 +197,24 @@ export function TodayScreen({
   );
 
   const createMutation = useMutation({
-    mutationFn: (text: string) =>
-      createTask(selectedDate, {
+    mutationFn: async (text: string) => {
+      const clientId = createTodoClientId();
+      const payload: TaskCreatePayload = {
         text,
         isLongTerm: viewMode === "long-term",
         isLowPriority: viewMode === "low-priority",
-      }),
+        clientId,
+      };
+      try {
+        return await createTask(selectedDate, payload);
+      } catch (error) {
+        if (!isOfflineError(error)) {
+          throw error;
+        }
+        await enqueueTodoCreate(clientId, selectedDate, payload);
+        return createOptimisticOccurrence(clientId, selectedDate, payload);
+      }
+    },
     onSuccess: (task) => {
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
         current ? { ...current, pending: [...current.pending, task] } : current,
@@ -154,13 +224,36 @@ export function TodayScreen({
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       id,
       payload,
     }: {
       id: string;
       payload: TaskUpdatePayload;
-    }) => updateOccurrence(id, payload),
+    }) => {
+      try {
+        return await updateOccurrence(id, payload);
+      } catch (error) {
+        if (!isOfflineError(error)) {
+          throw error;
+        }
+        await enqueueTodoUpdate(id, payload);
+        // onMutate (below) already wrote the optimistic merge into the
+        // cache before this ran; re-reading it keeps that state as the
+        // mutation's "result" instead of rolling back.
+        const current = queryClient.getQueryData<DayTodos>([
+          "day",
+          selectedDate,
+        ]);
+        const optimistic = [...(current?.pending ?? []), ...(current?.done ?? [])].find(
+          (item) => item.id === id,
+        );
+        if (!optimistic) {
+          throw error;
+        }
+        return optimistic;
+      }
+    },
     onMutate: async ({ id, payload }) => {
       await queryClient.cancelQueries({ queryKey: ["day", selectedDate] });
       const previous = queryClient.getQueryData<DayTodos>(["day", selectedDate]);
@@ -210,8 +303,19 @@ export function TodayScreen({
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteOccurrence,
-    onSuccess: (_result, id) => {
+    mutationFn: async (id: string) => {
+      try {
+        await deleteOccurrence(id);
+      } catch (error) {
+        if (!isOfflineError(error)) {
+          throw error;
+        }
+        await enqueueTodoDelete(id);
+      }
+    },
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["day", selectedDate] });
+      const previous = queryClient.getQueryData<DayTodos>(["day", selectedDate]);
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
         current
           ? {
@@ -221,6 +325,14 @@ export function TodayScreen({
             }
           : current,
       );
+      return { previous };
+    },
+    onError: (_error, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["day", selectedDate], context.previous);
+      }
+    },
+    onSuccess: () => {
       setSelectedTaskId(null);
       void queryClient.invalidateQueries({ queryKey: ["range"] });
     },
@@ -312,7 +424,20 @@ export function TodayScreen({
   });
 
   const reorderMutation = useMutation({
-    mutationFn: (orderedIds: string[]) => reorderDay(selectedDate, orderedIds),
+    // The drag handlers below already write the reordered sortOrder
+    // directly into the query cache before calling this, so this is
+    // already optimistic; offline just needs to queue instead of
+    // reverting via a refetch that would fail anyway.
+    mutationFn: async (orderedIds: string[]) => {
+      try {
+        await reorderDay(selectedDate, orderedIds);
+      } catch (error) {
+        if (!isOfflineError(error)) {
+          throw error;
+        }
+        await enqueueTodoReorder(selectedDate, orderedIds);
+      }
+    },
     onError: (error) => {
       Alert.alert("任务排序失败", error.message);
       void queryClient.invalidateQueries({ queryKey: ["day", selectedDate] });
@@ -445,7 +570,7 @@ export function TodayScreen({
   }
 
   const content = dayQuery.isPending ? (
-    <LoadingState />
+    <LoadingState isPaused={dayQuery.fetchStatus === "paused"} />
   ) : dayQuery.isError ? (
     <ErrorState
       message={dayQuery.error.message || "任务加载失败"}

@@ -114,6 +114,10 @@ class TaskCreateIn(Schema):
     isLowPriority: bool = False
     reminderTime: str | None = None
     repeat: RepeatRuleIn | None = None
+    # Lets a client that created this task while offline pin the final
+    # occurrence ID upfront (see create_task_for_day), so it never needs to
+    # swap a temporary local ID for a server-assigned one once this syncs.
+    clientId: UUID | None = None
 
 
 class OccurrencePatchIn(Schema):
@@ -341,6 +345,7 @@ def create_task(request, day: date, payload: TaskCreateIn):
         ),
         reminder_time=parse_reminder_time(payload.reminderTime),
         is_low_priority=payload.isLowPriority and not payload.isLongTerm,
+        occurrence_id=payload.clientId,
         **recurrence_payload(payload.repeat),
     )
     sync_occurrence_to_google_calendar(request.auth, occurrence)

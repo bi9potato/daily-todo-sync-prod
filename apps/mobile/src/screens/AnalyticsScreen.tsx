@@ -46,7 +46,12 @@ export function AnalyticsScreen({ today }: { today: string }) {
   }, [dayQuery.data]);
 
   if (dayQuery.isPending) {
-    return <LoadingState label="正在整理今日复盘…" />;
+    return (
+      <LoadingState
+        label="正在整理今日复盘…"
+        isPaused={dayQuery.fetchStatus === "paused"}
+      />
+    );
   }
   if (dayQuery.isError) {
     return (

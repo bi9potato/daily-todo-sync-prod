@@ -1,6 +1,6 @@
 from datetime import date, timedelta, time
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Max, Min
@@ -396,7 +396,16 @@ def create_task_for_day(
     recurrence_days_of_week: list[int] | None = None,
     recurrence_until: date | None = None,
     is_low_priority: bool = False,
+    occurrence_id: UUID | None = None,
 ) -> TodoOccurrence:
+    # A client-supplied ID (from an offline-created todo) lets the mobile app
+    # target update/delete/reorder at the final ID immediately, without ever
+    # needing to reconcile a temporary local ID once the create syncs. Retry
+    # of the same offline create (e.g. after a timeout) is then idempotent.
+    if occurrence_id is not None:
+        existing = TodoOccurrence.objects.filter(user=user, id=occurrence_id).first()
+        if existing is not None:
+            return existing
     normalized_kind = recurrence_kind or Task.RecurrenceKind.NONE
     normalized_content_mode = (
         Task.ContentMode.FUTURE
@@ -421,6 +430,7 @@ def create_task_for_day(
         recurrence_start_date=task_date if normalized_kind != Task.RecurrenceKind.NONE else None,
     )
     created = TodoOccurrence.objects.create(
+        id=occurrence_id or uuid4(),
         user=user,
         task=task,
         root_id=task.root_id,

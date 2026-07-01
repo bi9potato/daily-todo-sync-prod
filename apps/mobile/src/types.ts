@@ -91,6 +91,10 @@ export type TaskCreatePayload = {
   isLowPriority?: boolean;
   reminderTime?: string | null;
   repeat?: RepeatRule;
+  // Lets the backend use this as the occurrence's final ID (see
+  // create_task_for_day), so an offline-created todo never needs a
+  // temporary-ID-to-real-ID swap once it syncs.
+  clientId?: string;
 };
 
 export type TaskUpdatePayload = {

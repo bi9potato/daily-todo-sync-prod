@@ -14,6 +14,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { chatWithAi } from "@/lib/api";
+import { useIsOnline } from "@/lib/network";
 import { colors, radius, spacing, typography } from "@/theme";
 
 type ChatMessage = {
@@ -32,6 +33,7 @@ const initialMessages: ChatMessage[] = [
 
 export function AiScreen({ selectedDate }: { selectedDate: string }) {
   const queryClient = useQueryClient();
+  const isOnline = useIsOnline();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const [text, setText] = useState("");
   const [messages, setMessages] = useState(initialMessages);
@@ -63,6 +65,19 @@ export function AiScreen({ selectedDate }: { selectedDate: string }) {
   function submit() {
     const value = text.trim();
     if (!value || mutation.isPending) {
+      return;
+    }
+    if (!isOnline) {
+      setMessages((current) => [
+        ...current,
+        { id: `user-${Date.now()}`, role: "user", text: value },
+        {
+          id: `offline-${Date.now()}`,
+          role: "assistant",
+          text: "AI 助手需要联网才能使用，请检查网络后重试。",
+        },
+      ]);
+      setText("");
       return;
     }
     setMessages((current) => [
