@@ -326,14 +326,12 @@ export async function startMobilityLocationTracking({
   }
   await setActiveMobilityRecordingId(activeRecordingId);
   await cleanupLegacyMobilityRuntime();
-  await startForegroundMobilityTracking(activeRecordingId);
-  if (!manual) {
-    return;
-  }
-  if (!background || !supportsNativeBackgroundLocationTracking()) {
-    return;
-  }
-  if (shouldUseNativeAndroidMobilityService()) {
+  if (
+    manual &&
+    background &&
+    supportsNativeBackgroundLocationTracking() &&
+    shouldUseNativeAndroidMobilityService()
+  ) {
     try {
       recordClientLog("info", "Mobility native Android service starting", {
         source: "mobility",
@@ -342,7 +340,11 @@ export async function startMobilityLocationTracking({
         },
       });
       await flushClientLogs();
-      await startNativeMobilityService(activeRecordingId);
+      const started = await startNativeMobilityService(activeRecordingId);
+      if (!started) {
+        throw new Error("原生足迹服务不可用");
+      }
+      await stopForegroundMobilityTracking();
       await updateMobilityDiagnostics({
         lastError: "",
         recoveredAt: new Date().toISOString(),
@@ -363,8 +365,17 @@ export async function startMobilityLocationTracking({
         recoveredAt: new Date().toISOString(),
       });
       console.warn("Native mobility service start failed", error);
-      return;
     }
+  }
+  await startForegroundMobilityTracking(activeRecordingId);
+  if (!manual) {
+    return;
+  }
+  if (!background || !supportsNativeBackgroundLocationTracking()) {
+    return;
+  }
+  if (shouldUseNativeAndroidMobilityService()) {
+    return;
   }
   defineMobilityLocationTask();
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(

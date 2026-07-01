@@ -162,6 +162,7 @@ const nativeMobilityModuleSource = `package ${PACKAGE_NAME}.mobility
 
 import android.content.Intent
 import android.os.Build
+import androidx.core.content.ContextCompat
 import com.dailytodosync.app.NativeMobilityService
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -176,17 +177,25 @@ class NativeMobilityModule(
   @ReactMethod
   fun start(recordingId: String, apiBaseUrl: String, accessToken: String, promise: Promise) {
     try {
+      val activity = reactContext.currentActivity
+      if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        (activity == null || activity.isFinishing || !activity.hasWindowFocus())
+      ) {
+        promise.reject(
+          "native_mobility_activity_not_visible",
+          "足迹服务只能在应用授权页面完全关闭后启动，请返回应用重试。",
+        )
+        return
+      }
       val intent = Intent(reactContext, NativeMobilityService::class.java).apply {
         action = NativeMobilityService.ACTION_START
         putExtra(NativeMobilityService.EXTRA_RECORDING_ID, recordingId)
         putExtra(NativeMobilityService.EXTRA_API_BASE_URL, apiBaseUrl)
         putExtra(NativeMobilityService.EXTRA_ACCESS_TOKEN, accessToken)
       }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        reactContext.startForegroundService(intent)
-      } else {
-        reactContext.startService(intent)
-      }
+      NativeMobilityService.clearLastError()
+      ContextCompat.startForegroundService(activity ?: reactContext, intent)
       promise.resolve(true)
     } catch (error: Throwable) {
       promise.reject("native_mobility_start_failed", error)
@@ -196,9 +205,16 @@ class NativeMobilityModule(
   @ReactMethod
   fun stop(promise: Promise) {
     try {
-      reactContext.startService(Intent(reactContext, NativeMobilityService::class.java).apply {
-        action = NativeMobilityService.ACTION_STOP
-      })
+      if (NativeMobilityService.isRunning()) {
+        ContextCompat.startForegroundService(
+          reactContext.currentActivity ?: reactContext,
+          Intent(reactContext, NativeMobilityService::class.java).apply {
+            action = NativeMobilityService.ACTION_STOP
+          },
+        )
+      } else {
+        NativeMobilityService.clearPersistedConfig(reactContext)
+      }
       promise.resolve(true)
     } catch (error: Throwable) {
       promise.reject("native_mobility_stop_failed", error)
@@ -208,6 +224,16 @@ class NativeMobilityModule(
   @ReactMethod
   fun isRunning(promise: Promise) {
     promise.resolve(NativeMobilityService.isRunning())
+  }
+
+  @ReactMethod
+  fun isStepTrackingActive(promise: Promise) {
+    promise.resolve(NativeMobilityService.isStepTrackingActive())
+  }
+
+  @ReactMethod
+  fun getLastError(promise: Promise) {
+    promise.resolve(NativeMobilityService.getLastError())
   }
 
   @ReactMethod
@@ -229,6 +255,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.os.Build
 import android.os.IBinder
@@ -249,49 +279,72 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import kotlin.concurrent.thread
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 
-class NativeMobilityService : Service() {
+class NativeMobilityService : Service(), SensorEventListener {
   private lateinit var fusedLocationClient: FusedLocationProviderClient
+  private lateinit var sensorManager: SensorManager
+  private var stepSensor: Sensor? = null
   private var uploadThread: Thread? = null
   private var running = false
+  private var stepTracking = false
   private var recordingId = ""
   private var apiBaseUrl = ""
   private var accessToken = ""
+  @Volatile private var stepCount = 0
+  @Volatile private var syncedStepCount = 0
+  private var lastStepSensorValue: Float? = null
+  private var lastStepUploadScheduledAt = 0L
   private val queueLock = Any()
 
   private val locationCallback = object : LocationCallback() {
     override fun onLocationResult(result: LocationResult) {
       if (!running || recordingId.isBlank()) return
-      val points = result.locations
-        .filter { it.accuracy <= MAX_ACCURACY_METERS }
-        .map { it.toJsonPoint() }
-      if (points.isEmpty()) return
-      appendPoints(points)
-      scheduleUpload()
+      try {
+        val points = result.locations
+          .filter { it.accuracy <= MAX_ACCURACY_METERS }
+          .map { it.toJsonPoint() }
+        if (points.isEmpty()) return
+        appendPoints(points)
+        scheduleUpload()
+      } catch (error: Throwable) {
+        setLastError("保存后台定位点失败：\${error.message ?: error.javaClass.simpleName}")
+      }
     }
   }
 
   override fun onCreate() {
     super.onCreate()
-    fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+    try {
+      fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+      sensorManager = getSystemService(SensorManager::class.java)
+    } catch (error: Throwable) {
+      failAndStop("初始化足迹服务失败", error)
+    }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    when (intent?.action) {
-      ACTION_START -> {
-        recordingId = intent.getStringExtra(EXTRA_RECORDING_ID).orEmpty()
-        apiBaseUrl = intent.getStringExtra(EXTRA_API_BASE_URL).orEmpty().trimEnd('/')
-        accessToken = intent.getStringExtra(EXTRA_ACCESS_TOKEN).orEmpty()
-        persistConfig()
-        startTracking()
+    try {
+      when (intent?.action) {
+        ACTION_START -> {
+          val nextRecordingId = intent.getStringExtra(EXTRA_RECORDING_ID).orEmpty()
+          restoreStepState(nextRecordingId)
+          recordingId = nextRecordingId
+          apiBaseUrl = intent.getStringExtra(EXTRA_API_BASE_URL).orEmpty().trimEnd('/')
+          accessToken = intent.getStringExtra(EXTRA_ACCESS_TOKEN).orEmpty()
+          persistConfig()
+          startTracking()
+        }
+        ACTION_STOP -> stopTracking()
+        else -> {
+          restoreConfig()
+          if (recordingId.isNotBlank()) startTracking() else stopSelf()
+        }
       }
-      ACTION_STOP -> stopTracking()
-      else -> {
-        restoreConfig()
-        if (recordingId.isNotBlank()) startTracking()
-      }
+    } catch (error: Throwable) {
+      failAndStop("启动足迹服务失败", error)
     }
     return START_STICKY
   }
@@ -299,21 +352,30 @@ class NativeMobilityService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onDestroy() {
-    stopLocationUpdates()
+    try {
+      stopLocationUpdates()
+      stopStepTracking()
+    } catch (_: Throwable) {
+      // Destruction must never bring down the host process.
+    }
     serviceRunning = false
+    stepTrackingActive = false
     running = false
     super.onDestroy()
   }
 
   private fun startTracking() {
-    startForegroundNotification()
     if (recordingId.isBlank() || apiBaseUrl.isBlank() || accessToken.isBlank()) {
+      setLastError("足迹服务缺少活动记录或登录信息。")
       stopSelf()
       return
     }
-    serviceRunning = true
+    startForegroundNotification()
     running = true
     requestLocationUpdates()
+    startStepTracking()
+    setLastError("")
+    serviceRunning = true
     scheduleUpload()
   }
 
@@ -332,9 +394,11 @@ class NativeMobilityService : Service() {
   private fun stopTracking() {
     running = false
     serviceRunning = false
-    clearConfig()
+    stepTrackingActive = false
     stopLocationUpdates()
+    stopStepTracking()
     scheduleUpload()
+    clearConfig()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
       stopForeground(STOP_FOREGROUND_REMOVE)
     } else {
@@ -346,12 +410,19 @@ class NativeMobilityService : Service() {
 
   private fun requestLocationUpdates() {
     if (
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      throw SecurityException("没有后台位置权限，无法持续记录足迹。")
+    }
+    if (
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
         PackageManager.PERMISSION_GRANTED &&
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=
         PackageManager.PERMISSION_GRANTED
     ) {
-      return
+      throw SecurityException("没有前台位置权限，无法启动足迹服务。")
     }
     val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
       .setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
@@ -359,12 +430,93 @@ class NativeMobilityService : Service() {
       .setWaitForAccurateLocation(false)
       .build()
     fusedLocationClient.removeLocationUpdates(locationCallback)
-    fusedLocationClient.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+    fusedLocationClient
+      .requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+      .addOnFailureListener { error ->
+        setLastError("后台定位订阅失败：\${error.message ?: error.javaClass.simpleName}")
+      }
   }
 
   private fun stopLocationUpdates() {
     if (::fusedLocationClient.isInitialized) {
       fusedLocationClient.removeLocationUpdates(locationCallback)
+    }
+  }
+
+  override fun onSensorChanged(event: SensorEvent) {
+    if (!running || event.values.isEmpty()) return
+    try {
+      when (event.sensor.type) {
+        Sensor.TYPE_STEP_COUNTER -> {
+          val currentValue = event.values[0]
+          val previousValue = lastStepSensorValue
+          lastStepSensorValue = currentValue
+          if (previousValue != null && currentValue >= previousValue) {
+            stepCount += (currentValue - previousValue).roundToInt().coerceAtLeast(0)
+          }
+        }
+        Sensor.TYPE_STEP_DETECTOR -> {
+          stepCount += event.values[0].roundToInt().coerceAtLeast(1)
+        }
+      }
+      persistStepState()
+      val now = System.currentTimeMillis()
+      if (
+        stepCount > syncedStepCount &&
+        (
+          stepCount - syncedStepCount >= STEP_UPLOAD_COUNT_INTERVAL ||
+            now - lastStepUploadScheduledAt >= STEP_UPLOAD_TIME_INTERVAL_MS
+        )
+      ) {
+        lastStepUploadScheduledAt = now
+        scheduleUpload()
+      }
+    } catch (error: Throwable) {
+      setLastError("记录步数失败：\${error.message ?: error.javaClass.simpleName}")
+    }
+  }
+
+  override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+  private fun startStepTracking() {
+    if (
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      stepTracking = false
+      stepTrackingActive = false
+      return
+    }
+    if (!::sensorManager.isInitialized) return
+    stepSensor =
+      sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+    stepTracking =
+      stepSensor?.let {
+        sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+      } ?: false
+    stepTrackingActive = stepTracking
+  }
+
+  private fun stopStepTracking() {
+    if (::sensorManager.isInitialized) {
+      sensorManager.unregisterListener(this)
+    }
+    stepSensor = null
+    stepTracking = false
+    stepTrackingActive = false
+  }
+
+  private fun failAndStop(prefix: String, error: Throwable) {
+    running = false
+    serviceRunning = false
+    stepTrackingActive = false
+    setLastError("\${prefix}：\${error.message ?: error.javaClass.simpleName}")
+    try {
+      stopSelf()
+    } catch (_: Throwable) {
+      // The original failure is retained for the JS diagnostics.
     }
   }
 
@@ -447,7 +599,7 @@ class NativeMobilityService : Service() {
     if (apiBaseUrl.isBlank() || accessToken.isBlank()) return
     synchronized(queueLock) {
       val queue = mergeQueue(readQueue())
-      if (queue.length() == 0) return
+      if (queue.length() == 0) return@synchronized
       val remaining = JSONArray()
       for (batchIndex in 0 until queue.length()) {
         val batch = queue.getJSONObject(batchIndex)
@@ -483,6 +635,7 @@ class NativeMobilityService : Service() {
       }
       writeQueue(trimQueue(mergeQueue(remaining)))
     }
+    uploadSteps()
   }
 
   private fun uploadPoints(targetRecordingId: String, points: JSONArray): Int {
@@ -509,6 +662,50 @@ class NativeMobilityService : Service() {
       status
     } catch (_: Throwable) {
       -1
+    }
+  }
+
+  private fun uploadSteps() {
+    val targetRecordingId = recordingId
+    val countToUpload = stepCount
+    if (
+      targetRecordingId.isBlank() ||
+      countToUpload <= syncedStepCount ||
+      apiBaseUrl.isBlank() ||
+      accessToken.isBlank()
+    ) {
+      return
+    }
+    val status = try {
+      val url = URL("\${apiBaseUrl}/mobility/recordings/\${targetRecordingId}/steps")
+      val body = JSONObject()
+        .put("sourceId", "native-step-\${targetRecordingId}")
+        .put("stepCount", countToUpload)
+        .put("recordedAt", ISO_FORMAT.get().format(Date()))
+        .toString()
+      val connection = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = "PUT"
+        connectTimeout = NETWORK_TIMEOUT_MS
+        readTimeout = NETWORK_TIMEOUT_MS
+        doOutput = true
+        setRequestProperty("Authorization", "Bearer \${accessToken}")
+        setRequestProperty("Content-Type", "application/json")
+      }
+      connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+      val responseStatus = connection.responseCode
+      if (responseStatus in 200..299) {
+        connection.inputStream?.close()
+      } else {
+        connection.errorStream?.close()
+      }
+      connection.disconnect()
+      responseStatus
+    } catch (_: Throwable) {
+      -1
+    }
+    if (status in 200..299 || status == 404) {
+      syncedStepCount = maxOf(syncedStepCount, countToUpload)
+      persistStepState()
     }
   }
 
@@ -594,6 +791,9 @@ class NativeMobilityService : Service() {
       .putString("recordingId", recordingId)
       .putString("apiBaseUrl", apiBaseUrl)
       .putString("accessToken", accessToken)
+      .putInt("stepCount", stepCount)
+      .putInt("syncedStepCount", syncedStepCount)
+      .putFloat("lastStepSensorValue", lastStepSensorValue ?: -1f)
       .apply()
   }
 
@@ -602,6 +802,32 @@ class NativeMobilityService : Service() {
     recordingId = prefs.getString("recordingId", "").orEmpty()
     apiBaseUrl = prefs.getString("apiBaseUrl", "").orEmpty()
     accessToken = prefs.getString("accessToken", "").orEmpty()
+    stepCount = prefs.getInt("stepCount", 0)
+    syncedStepCount = prefs.getInt("syncedStepCount", 0)
+    lastStepSensorValue =
+      prefs.getFloat("lastStepSensorValue", -1f).takeIf { it >= 0f }
+  }
+
+  private fun restoreStepState(nextRecordingId: String) {
+    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    if (prefs.getString("recordingId", "").orEmpty() == nextRecordingId) {
+      stepCount = prefs.getInt("stepCount", 0)
+      syncedStepCount = prefs.getInt("syncedStepCount", 0)
+      lastStepSensorValue =
+        prefs.getFloat("lastStepSensorValue", -1f).takeIf { it >= 0f }
+    } else {
+      stepCount = 0
+      syncedStepCount = 0
+      lastStepSensorValue = null
+    }
+  }
+
+  private fun persistStepState() {
+    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+      .putInt("stepCount", stepCount)
+      .putInt("syncedStepCount", syncedStepCount)
+      .putFloat("lastStepSensorValue", lastStepSensorValue ?: -1f)
+      .apply()
   }
 
   private fun clearConfig() {
@@ -624,12 +850,16 @@ class NativeMobilityService : Service() {
     private const val MAX_ACCURACY_METERS = 500f
     private const val MAX_UPLOAD_POINTS = 250
     private const val MAX_QUEUED_POINTS = 10_000
+    private const val STEP_UPLOAD_COUNT_INTERVAL = 10
+    private const val STEP_UPLOAD_TIME_INTERVAL_MS = 15_000L
     private const val NETWORK_TIMEOUT_MS = 15_000
     private const val PREFS_NAME = "daily_todo_native_mobility"
     private const val QUEUE_FILE_NAME = "native-mobility-points.json"
     private val random = SecureRandom()
     @Volatile private var serviceRunning = false
+    @Volatile private var stepTrackingActive = false
     @Volatile private var queuedPointCount = 0
+    @Volatile private var lastError = ""
     private val ISO_FORMAT = ThreadLocal.withInitial {
       SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
@@ -637,6 +867,27 @@ class NativeMobilityService : Service() {
     }
 
     fun isRunning(): Boolean = serviceRunning
+
+    fun isStepTrackingActive(): Boolean = stepTrackingActive
+
+    fun getLastError(): String = lastError
+
+    fun clearLastError() {
+      lastError = ""
+    }
+
+    private fun setLastError(message: String) {
+      lastError = message
+    }
+
+    fun clearPersistedConfig(context: Context) {
+      context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .clear()
+        .apply()
+      serviceRunning = false
+      stepTrackingActive = false
+    }
 
     fun getQueuedPointCount(context: Context): Int {
       return try {

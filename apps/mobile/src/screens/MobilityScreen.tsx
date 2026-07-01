@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -24,6 +25,8 @@ import {
   stopMobilityRecording,
 } from "@/lib/api";
 import { addDays, formatLongDate } from "@/lib/date";
+import { beginMobilityActivation } from "@/lib/mobility-activation";
+import { isNativeMobilityServiceRunning } from "@/lib/mobility-native-service";
 import {
   clearActiveMobilityRecordingId,
   setActiveMobilityRecordingId,
@@ -84,6 +87,53 @@ async function requestAndroidNotificationPermission() {
   }
 }
 
+async function requestAndroidActivityRecognitionPermission() {
+  const version =
+    typeof Platform.Version === "string"
+      ? Number.parseInt(Platform.Version, 10)
+      : Platform.Version;
+  if (
+    Platform.OS !== "android" ||
+    !Number.isFinite(version) ||
+    version < 29
+  ) {
+    return true;
+  }
+  try {
+    return (
+      (await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
+      )) === PermissionsAndroid.RESULTS.GRANTED
+    );
+  } catch (error) {
+    console.warn("Activity recognition permission request failed", error);
+    return false;
+  }
+}
+
+async function waitForAndroidActivityToResume() {
+  if (Platform.OS !== "android") {
+    return;
+  }
+  if (AppState.currentState !== "active") {
+    await withTimeout(
+      new Promise<void>((resolve) => {
+        const subscription = AppState.addEventListener("change", (state) => {
+          if (state === "active") {
+            subscription.remove();
+            resolve();
+          }
+        });
+      }),
+      10_000,
+      "应用未能从系统授权页面恢复，请返回应用后重试。",
+    );
+  }
+  // Android can publish AppState.active slightly before the Activity window
+  // regains focus. Starting a location FGS in that gap crashes API 34+.
+  await new Promise<void>((resolve) => setTimeout(resolve, 600));
+}
+
 async function requestTrackingPermissions({
   requireBackground,
 }: {
@@ -106,6 +156,7 @@ async function requestTrackingPermissions({
   if (!requireBackground) {
     return;
   }
+  await requestAndroidActivityRecognitionPermission();
   await requestAndroidNotificationPermission();
   if (!(await explainBackgroundPermission())) {
     throw new Error("未开启后台位置权限。");
@@ -118,7 +169,11 @@ async function requestTrackingPermissions({
   if (!background.granted) {
     throw new Error("需要选择“始终允许”才能在锁屏后继续记录。");
   }
-  if (!(await TaskManager.isAvailableAsync())) {
+  await waitForAndroidActivityToResume();
+  if (
+    !usesNativeAndroidCapture() &&
+    !(await TaskManager.isAvailableAsync())
+  ) {
     throw new Error("当前运行环境不支持后台定位，请安装开发版或正式 APK。");
   }
 }
@@ -156,8 +211,15 @@ function getAndroidApiLevel() {
   return Number.isFinite(version) ? version : null;
 }
 
-function shouldSkipOptionalNativeCapture() {
+function usesNativeAndroidCapture() {
   return Platform.OS === "android" && (getAndroidApiLevel() ?? 0) >= 36;
+}
+
+async function isNativeAndroidCaptureActive() {
+  return (
+    usesNativeAndroidCapture() &&
+    (await isNativeMobilityServiceRunning().catch(() => false))
+  );
 }
 
 async function captureNamedPoint() {
@@ -205,77 +267,97 @@ export function MobilityScreen({
 
   const startMutation = useMutation({
     mutationFn: async () => {
+      const finishActivation = beginMobilityActivation();
       setActionError("");
-      const nativeBackgroundAvailable = supportsNativeBackgroundLocationTracking();
-      recordClientLog("info", "Mobility recording start requested", {
-        source: "mobility",
-        context: { nativeBackgroundAvailable },
-      });
-      await flushClientLogs();
-      await requestTrackingPermissions({
-        requireBackground: nativeBackgroundAvailable,
-      });
-      const recording = await startMobilityRecording();
-      await setActiveMobilityRecordingId(recording.id);
       try {
-        recordClientLog("info", "Starting mobility location tracking", {
+        const nativeBackgroundAvailable =
+          supportsNativeBackgroundLocationTracking();
+        recordClientLog("info", "Mobility recording start requested", {
           source: "mobility",
           context: { nativeBackgroundAvailable },
         });
         await flushClientLogs();
-        await startMobilityLocationTracking({
-          background: nativeBackgroundAvailable,
-          manual: true,
-          recordingId: recording.id,
+        await requestTrackingPermissions({
+          requireBackground: nativeBackgroundAvailable,
         });
-        recordClientLog("info", "Mobility location tracking started", {
-          source: "mobility",
-          context: { nativeBackgroundAvailable },
-        });
-        await flushClientLogs();
-        if (!shouldSkipOptionalNativeCapture()) {
-          try {
-            recordClientLog("info", "Capturing initial mobility point", {
-              source: "mobility",
-            });
-            await flushClientLogs();
-            const initialPoint = await captureNamedPoint();
-            await queueMobilityPoints(recording.id, [initialPoint]);
-          } catch (error) {
-            console.warn("Initial mobility point capture failed", error);
-          }
-          try {
-            recordClientLog("info", "Starting fallback step tracking", {
-              source: "mobility",
-            });
-            await flushClientLogs();
-            await startFallbackStepTracking(recording.id);
-          } catch {
-            // The route can still be recorded when this device has no step sensor.
-          }
-        } else {
-          recordClientLog("info", "Skipping optional Android 16 native capture", {
+        const recording = await startMobilityRecording();
+        await setActiveMobilityRecordingId(recording.id);
+        try {
+          recordClientLog("info", "Starting mobility location tracking", {
             source: "mobility",
-            context: { androidApiLevel: getAndroidApiLevel() },
+            context: { nativeBackgroundAvailable },
           });
           await flushClientLogs();
+          await startMobilityLocationTracking({
+            background: nativeBackgroundAvailable,
+            manual: true,
+            recordingId: recording.id,
+          });
+          recordClientLog("info", "Mobility location tracking started", {
+            source: "mobility",
+            context: { nativeBackgroundAvailable },
+          });
+          await flushClientLogs();
+          const nativeCaptureActive =
+            await isNativeAndroidCaptureActive();
+          if (!nativeCaptureActive) {
+            try {
+              recordClientLog("info", "Capturing initial mobility point", {
+                source: "mobility",
+              });
+              await flushClientLogs();
+              const initialPoint = await captureNamedPoint();
+              await queueMobilityPoints(recording.id, [initialPoint]);
+            } catch (error) {
+              console.warn("Initial mobility point capture failed", error);
+            }
+            try {
+              recordClientLog("info", "Starting fallback step tracking", {
+                source: "mobility",
+              });
+              await flushClientLogs();
+              await startFallbackStepTracking(recording.id);
+            } catch {
+              // The route can still be recorded when this device has no step sensor.
+            }
+          } else {
+            recordClientLog("info", "Android 16 native capture enabled", {
+              source: "mobility",
+              context: { androidApiLevel: getAndroidApiLevel() },
+            });
+            await flushClientLogs();
+          }
+        } catch (error) {
+          await stopFallbackStepTracking().catch((cleanupError) => {
+            console.warn(
+              "Mobility step cleanup after start failure failed",
+              cleanupError,
+            );
+          });
+          await stopMobilityLocationTracking().catch((cleanupError) => {
+            console.warn(
+              "Mobility tracking cleanup after start failure failed",
+              cleanupError,
+            );
+          });
+          await stopMobilityRecording(recording.id).catch((cleanupError) => {
+            console.warn(
+              "Mobility recording cleanup after start failure failed",
+              cleanupError,
+            );
+          });
+          await clearActiveMobilityRecordingId().catch((cleanupError) => {
+            console.warn(
+              "Mobility active recording cleanup failed",
+              cleanupError,
+            );
+          });
+          throw error;
         }
-      } catch (error) {
-        await stopFallbackStepTracking().catch((cleanupError) => {
-          console.warn("Mobility step cleanup after start failure failed", cleanupError);
-        });
-        await stopMobilityLocationTracking().catch((cleanupError) => {
-          console.warn("Mobility tracking cleanup after start failure failed", cleanupError);
-        });
-        await stopMobilityRecording(recording.id).catch((cleanupError) => {
-          console.warn("Mobility recording cleanup after start failure failed", cleanupError);
-        });
-        await clearActiveMobilityRecordingId().catch((cleanupError) => {
-          console.warn("Mobility active recording cleanup failed", cleanupError);
-        });
-        throw error;
+        return recording;
+      } finally {
+        finishActivation();
       }
-      return recording;
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({
@@ -294,8 +376,9 @@ export function MobilityScreen({
         source: "mobility",
       });
       await flushClientLogs();
+      const nativeCaptureActive = await isNativeAndroidCaptureActive();
       await stopFallbackStepTracking();
-      if (!shouldSkipOptionalNativeCapture()) {
+      if (!nativeCaptureActive) {
         try {
           const finalPoint = await captureNamedPoint();
           await queueMobilityPoints(recording.id, [finalPoint]);

@@ -2,6 +2,7 @@ import { Pedometer } from "expo-sensors";
 import { Platform } from "react-native";
 
 import { setMobilityStepSample } from "./api";
+import { isNativeStepTrackingActive } from "./mobility-native-service";
 import type { MobilityRecording } from "@/types";
 
 export type MobilityStepSource = "health-connect" | "device" | "unavailable";
@@ -184,10 +185,17 @@ export async function reconcileMobilitySteps(recording: MobilityRecording): Prom
   source: MobilityStepSource;
 }> {
   const syncedRecording: MobilityRecording | null = null;
+  const nativeStepTracking = await isNativeStepTrackingActive().catch(
+    () => false,
+  );
+  if (nativeStepTracking && fallbackRecordingId === recording.id) {
+    await stopFallbackStepTracking();
+  }
   return {
     recording: syncedRecording,
     source:
-      fallbackRecordingId === recording.id && fallbackSubscription
+      nativeStepTracking ||
+      (fallbackRecordingId === recording.id && fallbackSubscription)
         ? "device"
         : "unavailable",
   };

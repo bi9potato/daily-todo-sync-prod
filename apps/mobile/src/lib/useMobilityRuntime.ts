@@ -3,6 +3,7 @@ import { AppState, Platform } from "react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getMobilityDay } from "./api";
+import { isMobilityActivationInProgress } from "./mobility-activation";
 import {
   clearMobilityDiagnostics,
   type MobilityDiagnosticState,
@@ -186,6 +187,9 @@ export function useMobilityRuntime(today: string, enabled = true) {
     }
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
+        if (isMobilityActivationInProgress()) {
+          return;
+        }
         void refetchDay().then(({ data }) =>
           reconcile(data?.activeRecording ?? null, Boolean(data)),
         );
