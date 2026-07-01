@@ -26,6 +26,7 @@ import {
   stopFallbackStepTracking,
   type MobilityStepSource,
 } from "./mobility-steps";
+import type { MobilityRecording } from "@/types";
 
 export type MobilityRuntimeState = MobilityDiagnosticState & {
   backgroundPermission: boolean;
@@ -51,6 +52,7 @@ export function useMobilityRuntime(today: string) {
   const queryClient = useQueryClient();
   const [runtime, setRuntime] = useState(INITIAL_STATE);
   const reconcilingRef = useRef(false);
+  const activeRecordingRef = useRef<MobilityRecording | null>(null);
   const dayQuery = useQuery({
     queryKey: ["mobility-day", today],
     queryFn: () => getMobilityDay(today),
@@ -58,13 +60,16 @@ export function useMobilityRuntime(today: string) {
       query.state.data?.activeRecording ? 15_000 : false,
   });
   const activeRecording = dayQuery.data?.activeRecording ?? null;
+  const activeRecordingId = activeRecording?.id ?? null;
+  const dayLoaded = Boolean(dayQuery.data);
   const refetchDay = dayQuery.refetch;
 
+  useEffect(() => {
+    activeRecordingRef.current = activeRecording;
+  }, [activeRecording]);
+
   const reconcile = useCallback(
-    async (
-      recording = activeRecording,
-      dayLoaded = Boolean(dayQuery.data),
-    ) => {
+    async (recording: MobilityRecording | null, dayLoaded: boolean) => {
       if (Platform.OS === "web" || reconcilingRef.current) {
         return;
       }
@@ -92,7 +97,10 @@ export function useMobilityRuntime(today: string) {
           reconcileMobilitySteps(recording),
           flushMobilityPointQueue(),
         ]);
-        if (stepResult.recording) {
+        if (
+          stepResult.recording &&
+          stepResult.recording.stepCount !== recording.stepCount
+        ) {
           await queryClient.invalidateQueries({
             queryKey: ["mobility-day", today],
           });
@@ -115,13 +123,10 @@ export function useMobilityRuntime(today: string) {
         reconcilingRef.current = false;
       }
     },
-    [activeRecording, dayQuery.data, queryClient, today],
+    [queryClient, today],
   );
 
   useEffect(() => {
-    const startupTimer = setTimeout(() => {
-      void reconcile();
-    }, 0);
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void refetchDay().then(({ data }) =>
@@ -129,21 +134,25 @@ export function useMobilityRuntime(today: string) {
         );
       }
     });
-    return () => {
-      clearTimeout(startupTimer);
-      subscription.remove();
-    };
+    return () => subscription.remove();
   }, [reconcile, refetchDay]);
 
   useEffect(() => {
-    if (!activeRecording) {
+    if (!dayLoaded) {
+      return;
+    }
+    void reconcile(activeRecordingRef.current, true);
+  }, [activeRecordingId, dayLoaded, reconcile]);
+
+  useEffect(() => {
+    if (!activeRecordingId) {
       return;
     }
     const timer = setInterval(() => {
-      void reconcile();
+      void reconcile(activeRecordingRef.current, true);
     }, 30_000);
     return () => clearInterval(timer);
-  }, [activeRecording, reconcile]);
+  }, [activeRecordingId, reconcile]);
 
   return runtime;
 }

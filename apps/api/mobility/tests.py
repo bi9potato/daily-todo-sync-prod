@@ -1,4 +1,6 @@
 import json
+from datetime import datetime
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
@@ -48,7 +50,9 @@ class MobilityApiTests(TestCase):
         self.assertIsNotNone(stopped.json()["endedAt"])
 
     def test_points_are_deduplicated_and_distance_is_calculated(self):
-        recording = self.post("/api/mobility/recordings/start").json()
+        started_at = datetime.fromisoformat("2026-06-30T07:59:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=started_at):
+            recording = self.post("/api/mobility/recordings/start").json()
         point_batch = {
             "points": [
                 {
