@@ -21,8 +21,8 @@ import { colors, radius, shadows, spacing, typography } from "@/theme";
 
 export function MainApp() {
   const today = toDateKey(new Date());
-  const mobilityRuntime = useMobilityRuntime(today);
   const [activeSection, setActiveSection] = useState<AppSection>("today");
+  const mobilityRuntime = useMobilityRuntime(today, activeSection === "mobility");
   const [calendarView, setCalendarView] = useState<CalendarViewMode>("week");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState(today);

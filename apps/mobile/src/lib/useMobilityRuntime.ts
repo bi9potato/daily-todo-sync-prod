@@ -66,7 +66,7 @@ async function getSafeMobilityDiagnostics() {
   }
 }
 
-export function useMobilityRuntime(today: string) {
+export function useMobilityRuntime(today: string, enabled = true) {
   const queryClient = useQueryClient();
   const [runtime, setRuntime] = useState(INITIAL_STATE);
   const reconcilingRef = useRef(false);
@@ -74,8 +74,9 @@ export function useMobilityRuntime(today: string) {
   const dayQuery = useQuery({
     queryKey: ["mobility-day", today],
     queryFn: () => getMobilityDay(today),
+    enabled,
     refetchInterval: (query) =>
-      query.state.data?.activeRecording ? 15_000 : false,
+      enabled && query.state.data?.activeRecording ? 15_000 : false,
   });
   const activeRecording = dayQuery.data?.activeRecording ?? null;
   const activeRecordingId = activeRecording?.id ?? null;
@@ -88,7 +89,7 @@ export function useMobilityRuntime(today: string) {
 
   const reconcile = useCallback(
     async (recording: MobilityRecording | null, dayLoaded: boolean) => {
-      if (Platform.OS === "web" || reconcilingRef.current) {
+      if (!enabled || Platform.OS === "web" || reconcilingRef.current) {
         return;
       }
       reconcilingRef.current = true;
@@ -141,10 +142,13 @@ export function useMobilityRuntime(today: string) {
         reconcilingRef.current = false;
       }
     },
-    [queryClient, today],
+    [enabled, queryClient, today],
   );
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void refetchDay().then(({ data }) =>
@@ -153,24 +157,24 @@ export function useMobilityRuntime(today: string) {
       }
     });
     return () => subscription.remove();
-  }, [reconcile, refetchDay]);
+  }, [enabled, reconcile, refetchDay]);
 
   useEffect(() => {
-    if (!dayLoaded) {
+    if (!enabled || !dayLoaded) {
       return;
     }
     void reconcile(activeRecordingRef.current, true);
-  }, [activeRecordingId, dayLoaded, reconcile]);
+  }, [activeRecordingId, dayLoaded, enabled, reconcile]);
 
   useEffect(() => {
-    if (!activeRecordingId) {
+    if (!enabled || !activeRecordingId) {
       return;
     }
     const timer = setInterval(() => {
       void reconcile(activeRecordingRef.current, true);
     }, 30_000);
     return () => clearInterval(timer);
-  }, [activeRecordingId, reconcile]);
+  }, [activeRecordingId, enabled, reconcile]);
 
   return runtime;
 }
