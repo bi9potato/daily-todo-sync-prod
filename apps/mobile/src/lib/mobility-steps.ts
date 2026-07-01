@@ -2,7 +2,6 @@ import { Pedometer } from "expo-sensors";
 import { Platform } from "react-native";
 
 import { setMobilityStepSample } from "./api";
-import { isMobilityNativeRuntimeDisabled } from "./mobility-tracking";
 import type { MobilityRecording } from "@/types";
 
 export type MobilityStepSource = "health-connect" | "device" | "unavailable";
@@ -19,7 +18,7 @@ let fallbackSubscription: ReturnType<typeof Pedometer.watchStepCount> | null =
   null;
 
 async function loadHealthConnect() {
-  if (Platform.OS !== "android" || isMobilityNativeRuntimeDisabled()) {
+  if (Platform.OS !== "android") {
     return null;
   }
   try {
@@ -131,7 +130,7 @@ async function syncFallbackSteps() {
 }
 
 export async function startFallbackStepTracking(recordingId: string) {
-  if (Platform.OS === "web" || isMobilityNativeRuntimeDisabled()) {
+  if (Platform.OS === "web") {
     return false;
   }
   if (fallbackRecordingId === recordingId && fallbackSubscription) {
@@ -180,17 +179,13 @@ export async function stopFallbackStepTracking() {
   return syncedRecording;
 }
 
-export async function reconcileMobilitySteps(recording: MobilityRecording) {
-  const healthRecording = await syncHealthConnectSteps(recording);
-  const fallbackAvailable = recording.isActive
-    ? await startFallbackStepTracking(recording.id)
-    : false;
+export async function reconcileMobilitySteps(_recording: MobilityRecording): Promise<{
+  recording: MobilityRecording | null;
+  source: MobilityStepSource;
+}> {
+  const syncedRecording: MobilityRecording | null = null;
   return {
-    recording: healthRecording,
-    source: healthRecording
-      ? ("health-connect" as const)
-      : fallbackAvailable
-        ? ("device" as const)
-        : ("unavailable" as const),
+    recording: syncedRecording,
+    source: "unavailable",
   };
 }

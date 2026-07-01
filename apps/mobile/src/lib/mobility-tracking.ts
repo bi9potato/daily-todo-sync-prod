@@ -4,43 +4,21 @@ import { Platform } from "react-native";
 
 import {
   getActiveMobilityRecordingId,
-  clearActiveMobilityRecordingId,
   setActiveMobilityRecordingId,
 } from "./mobility-storage";
-import {
-  clearMobilityPointQueue,
-  syncOrQueueMobilityPoints,
-} from "./mobility-queue";
+import { syncOrQueueMobilityPoints } from "./mobility-queue";
 import {
   readMobilityDiagnostics,
   updateMobilityDiagnostics,
 } from "./mobility-diagnostics";
 import type { MobilityPointInput } from "@/types";
 
-export const MOBILITY_LOCATION_TASK = "daily-todo-background-location";
-const ANDROID_DISABLED_BACKGROUND_VERSION = 36;
+export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v2";
+const LEGACY_MOBILITY_LOCATION_TASKS = ["daily-todo-background-location"];
 
 type LocationTaskData = {
   locations: Location.LocationObject[];
 };
-
-function androidVersionNumber() {
-  return typeof Platform.Version === "string"
-    ? Number.parseInt(Platform.Version, 10)
-    : Platform.Version;
-}
-
-export function isMobilityNativeRuntimeDisabled() {
-  const version = androidVersionNumber();
-  return (
-    Platform.OS === "android" &&
-    Number.isFinite(version) &&
-    version >= ANDROID_DISABLED_BACKGROUND_VERSION
-  );
-}
-
-export const MOBILITY_DISABLED_MESSAGE =
-  "Mobility tracking is temporarily disabled on Android 16 to prevent a native permission crash.";
 
 export function locationToMobilityPoint(
   location: Location.LocationObject,
@@ -61,9 +39,6 @@ export function locationToMobilityPoint(
 }
 
 function defineMobilityLocationTask() {
-  if (isMobilityNativeRuntimeDisabled()) {
-    return;
-  }
   try {
     if (
       Platform.OS !== "web" &&
@@ -117,8 +92,18 @@ function defineMobilityLocationTask() {
 
 defineMobilityLocationTask();
 
+for (const taskName of LEGACY_MOBILITY_LOCATION_TASKS) {
+  try {
+    if (Platform.OS !== "web" && !TaskManager.isTaskDefined(taskName)) {
+      TaskManager.defineTask(taskName, async () => undefined);
+    }
+  } catch {
+    // Legacy task cleanup is best effort only.
+  }
+}
+
 export async function isMobilityLocationTrackingActive() {
-  if (Platform.OS === "web" || isMobilityNativeRuntimeDisabled()) {
+  if (Platform.OS === "web") {
     return false;
   }
   try {
@@ -129,13 +114,17 @@ export async function isMobilityLocationTrackingActive() {
   }
 }
 
-export async function startMobilityLocationTracking() {
+export async function startMobilityLocationTracking({
+  manual = false,
+}: { manual?: boolean } = {}) {
   if (Platform.OS === "web") {
     return;
   }
-  if (isMobilityNativeRuntimeDisabled()) {
-    await cleanupUnsupportedMobilityRuntime();
-    throw new Error(MOBILITY_DISABLED_MESSAGE);
+  if (!manual) {
+    await updateMobilityDiagnostics({
+      lastError: "后台轨迹服务未运行，请关闭后重新开启持续记录。",
+    });
+    return;
   }
   defineMobilityLocationTask();
   const alreadyStarted = await isMobilityLocationTrackingActive();
@@ -157,7 +146,7 @@ export async function startMobilityLocationTracking() {
       notificationTitle: "Daily Todo 正在记录足迹",
       notificationBody: "持续记录行走路线；点击可返回应用。",
       notificationColor: "#2C5745",
-      killServiceOnDestroy: false,
+      killServiceOnDestroy: true,
     },
     pausesUpdatesAutomatically: false,
     showsBackgroundLocationIndicator: true,
@@ -172,10 +161,6 @@ export async function stopMobilityLocationTracking() {
   if (Platform.OS === "web") {
     return;
   }
-  if (isMobilityNativeRuntimeDisabled()) {
-    await cleanupUnsupportedMobilityRuntime();
-    return;
-  }
   try {
     if (await isMobilityLocationTrackingActive()) {
       await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
@@ -185,31 +170,25 @@ export async function stopMobilityLocationTracking() {
   }
 }
 
-export async function cleanupUnsupportedMobilityRuntime() {
-  if (!isMobilityNativeRuntimeDisabled()) {
+export async function cleanupLegacyMobilityRuntime() {
+  if (Platform.OS === "web") {
     return;
   }
-  await Promise.allSettled([
-    clearActiveMobilityRecordingId(),
-    clearMobilityPointQueue(),
-    updateMobilityDiagnostics({
-      lastError: MOBILITY_DISABLED_MESSAGE,
-      recoveredAt: new Date().toISOString(),
-    }),
-  ]);
-  try {
-    if (await Location.hasStartedLocationUpdatesAsync(MOBILITY_LOCATION_TASK)) {
-      await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+  for (const taskName of LEGACY_MOBILITY_LOCATION_TASKS) {
+    try {
+      if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
+        await Location.stopLocationUpdatesAsync(taskName);
+      }
+    } catch (error) {
+      console.warn("Legacy mobility location cleanup failed", error);
     }
-  } catch (error) {
-    console.warn("Legacy mobility location cleanup failed", error);
-  }
-  try {
-    if (await TaskManager.isTaskRegisteredAsync(MOBILITY_LOCATION_TASK)) {
-      await TaskManager.unregisterTaskAsync(MOBILITY_LOCATION_TASK);
+    try {
+      if (await TaskManager.isTaskRegisteredAsync(taskName)) {
+        await TaskManager.unregisterTaskAsync(taskName);
+      }
+    } catch (error) {
+      console.warn("Legacy mobility task cleanup failed", error);
     }
-  } catch (error) {
-    console.warn("Legacy mobility task cleanup failed", error);
   }
 }
 
@@ -224,16 +203,6 @@ export async function getMobilityTrackingDiagnostics() {
       foregroundPermission: false,
       nativeTaskActive: false,
       ...(await readMobilityDiagnostics()),
-    };
-  }
-  if (isMobilityNativeRuntimeDisabled()) {
-    const saved = await readMobilityDiagnostics();
-    return {
-      backgroundPermission: false,
-      foregroundPermission: false,
-      nativeTaskActive: false,
-      ...saved,
-      lastError: saved.lastError || MOBILITY_DISABLED_MESSAGE,
     };
   }
   const [foreground, background, nativeTaskActive, saved] = await Promise.all([
@@ -252,10 +221,6 @@ export async function getMobilityTrackingDiagnostics() {
 
 export async function recoverMobilityLocationTracking(recordingId: string) {
   if (Platform.OS === "web") {
-    return getMobilityTrackingDiagnostics();
-  }
-  if (isMobilityNativeRuntimeDisabled()) {
-    await cleanupUnsupportedMobilityRuntime();
     return getMobilityTrackingDiagnostics();
   }
   const [foreground, background] = await Promise.all([

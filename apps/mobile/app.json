@@ -18,6 +18,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.health.READ_STEPS"
       ],
       "adaptiveIcon": {

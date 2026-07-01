@@ -11,10 +11,7 @@ import {
   installClientLogCapture,
   recordClientLog,
 } from "@/lib/client-logs";
-import {
-  cleanupUnsupportedMobilityRuntime,
-  isMobilityNativeRuntimeDisabled,
-} from "@/lib/mobility-tracking";
+import { cleanupLegacyMobilityRuntime } from "@/lib/mobility-tracking";
 
 installClientLogCapture();
 
@@ -30,14 +27,11 @@ const queryClient = new QueryClient({
 export default function RootLayout() {
   useEffect(() => {
     void (async () => {
-      if (!isMobilityNativeRuntimeDisabled()) {
-        return;
-      }
-      recordClientLog("info", "Running unsupported mobility runtime cleanup", {
+      recordClientLog("info", "Running legacy mobility runtime cleanup", {
         source: "startup",
       });
       await flushClientLogs();
-      await cleanupUnsupportedMobilityRuntime();
+      await cleanupLegacyMobilityRuntime();
     })();
   }, []);
 

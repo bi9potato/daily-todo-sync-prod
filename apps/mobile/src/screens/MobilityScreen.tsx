@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  PermissionsAndroid,
   Platform,
   Pressable,
   ScrollView,
@@ -32,18 +33,13 @@ import {
   syncOrQueueMobilityPoints,
 } from "@/lib/mobility-queue";
 import {
-  cleanupUnsupportedMobilityRuntime,
-  isMobilityNativeRuntimeDisabled,
   locationToMobilityPoint,
-  MOBILITY_DISABLED_MESSAGE,
   startMobilityLocationTracking,
   stopMobilityLocationTracking,
 } from "@/lib/mobility-tracking";
 import {
-  requestHealthConnectStepAccess,
   startFallbackStepTracking,
   stopFallbackStepTracking,
-  syncHealthConnectSteps,
 } from "@/lib/mobility-steps";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
@@ -66,18 +62,36 @@ function explainBackgroundPermission() {
   });
 }
 
+async function requestAndroidNotificationPermission() {
+  const version =
+    typeof Platform.Version === "string"
+      ? Number.parseInt(Platform.Version, 10)
+      : Platform.Version;
+  if (
+    Platform.OS !== "android" ||
+    !Number.isFinite(version) ||
+    version < 33
+  ) {
+    return;
+  }
+  try {
+    await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+  } catch (error) {
+    console.warn("Notification permission request failed", error);
+  }
+}
+
 async function requestTrackingPermissions() {
   if (Platform.OS === "web") {
     throw new Error("网页端不能持续记录轨迹，请在 Android APK 中使用。");
-  }
-  if (isMobilityNativeRuntimeDisabled()) {
-    await cleanupUnsupportedMobilityRuntime();
-    throw new Error(MOBILITY_DISABLED_MESSAGE);
   }
   recordClientLog("info", "Requesting foreground location permission", {
     source: "mobility",
   });
   await flushClientLogs();
+  await requestAndroidNotificationPermission();
   if (!(await Location.hasServicesEnabledAsync())) {
     throw new Error("请先打开系统定位服务。");
   }
@@ -150,7 +164,6 @@ export function MobilityScreen({
   });
   const activeRecording = todayQuery.data?.activeRecording ?? null;
   const isToday = selectedDate === today;
-  const nativeRuntimeDisabled = isMobilityNativeRuntimeDisabled();
 
   const startMutation = useMutation({
     mutationFn: async () => {
@@ -160,13 +173,6 @@ export function MobilityScreen({
       });
       await flushClientLogs();
       await requestTrackingPermissions();
-      if (!nativeRuntimeDisabled) {
-        recordClientLog("info", "Requesting Health Connect step access", {
-          source: "mobility",
-        });
-        await flushClientLogs();
-        await requestHealthConnectStepAccess();
-      }
       const recording = await startMobilityRecording();
       await setActiveMobilityRecordingId(recording.id);
       try {
@@ -176,7 +182,7 @@ export function MobilityScreen({
           source: "mobility",
         });
         await flushClientLogs();
-        await startMobilityLocationTracking();
+        await startMobilityLocationTracking({ manual: true });
         try {
           await startFallbackStepTracking(recording.id);
         } catch {
@@ -204,18 +210,14 @@ export function MobilityScreen({
       setActionError("");
       recordClientLog("info", "Mobility recording stop requested", {
         source: "mobility",
-        context: { nativeRuntimeDisabled },
       });
       await flushClientLogs();
-      if (!nativeRuntimeDisabled) {
-        const fallbackRecording = await stopFallbackStepTracking();
-        await syncHealthConnectSteps(fallbackRecording ?? recording);
-        try {
-          const finalPoint = await captureNamedPoint();
-          await syncOrQueueMobilityPoints(recording.id, [finalPoint]);
-        } catch {
-          // Stopping must still succeed when a final GPS fix is unavailable.
-        }
+      await stopFallbackStepTracking();
+      try {
+        const finalPoint = await captureNamedPoint();
+        await syncOrQueueMobilityPoints(recording.id, [finalPoint]);
+      } catch {
+        // Stopping must still succeed when a final GPS fix is unavailable.
       }
       await stopMobilityLocationTracking();
       const stopped = await stopMobilityRecording(recording.id);
@@ -282,12 +284,10 @@ export function MobilityScreen({
         <View style={styles.authorizationCopy}>
           <Text style={styles.authorizationTitle}>持续后台记录授权</Text>
           <Text style={styles.authorizationDescription}>
-            {nativeRuntimeDisabled
-              ? "Android 16 上暂时停用足迹后台授权，避免系统权限崩溃"
-              : recordingEnabled
-                ? trackingHealthy
-                  ? "已授权，应用关闭后后台服务仍会继续记录"
-                  : "已授权，正在恢复 Android 后台服务"
+            {recordingEnabled
+              ? trackingHealthy
+                ? "已授权，应用关闭后后台服务仍会继续记录"
+                : "已授权，请保持应用打开或关闭后重新开启以恢复服务"
               : "未授权，不会在后台获取位置和活动数据"}
           </Text>
         </View>
