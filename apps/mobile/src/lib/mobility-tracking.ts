@@ -170,7 +170,7 @@ export async function recoverMobilityLocationTracking(recordingId: string) {
   ]);
   if (!foreground.granted || !background.granted) {
     await updateMobilityDiagnostics({
-      lastError: "后台定位权限已关闭，请重新开始记录并授权",
+      lastError: "后台定位权限已关闭，请重新打开持续记录授权",
     });
     return getMobilityTrackingDiagnostics();
   }

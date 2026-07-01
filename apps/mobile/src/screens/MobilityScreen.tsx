@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from "react-native";
@@ -42,7 +43,7 @@ import {
 } from "@/lib/mobility-steps";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
-import type { MobilityPoint, MobilityRecording } from "@/types";
+import type { MobilityDay, MobilityPoint, MobilityRecording } from "@/types";
 
 function explainBackgroundPermission() {
   if (Platform.OS !== "android") {
@@ -51,7 +52,7 @@ function explainBackgroundPermission() {
   return new Promise<boolean>((resolve) => {
     Alert.alert(
       "允许后台记录",
-      "开始后，Daily Todo 会通过常驻通知持续记录行走路线；你可以随时在本页停止。",
+      "授权打开后，Daily Todo 会通过常驻通知持续记录行走路线；关闭授权开关才会停止。",
       [
         { text: "暂不", style: "cancel", onPress: () => resolve(false) },
         { text: "继续", onPress: () => resolve(true) },
@@ -119,15 +120,19 @@ export function MobilityScreen({
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(today);
   const [actionError, setActionError] = useState("");
-  const [isEnablingSteps, setIsEnablingSteps] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   const dayQuery = useQuery({
     queryKey: ["mobility-day", selectedDate],
     queryFn: () => getMobilityDay(selectedDate),
+  });
+  const todayQuery = useQuery({
+    queryKey: ["mobility-day", today],
+    queryFn: () => getMobilityDay(today),
     refetchInterval: (query) =>
       query.state.data?.activeRecording ? 30_000 : false,
   });
-  const activeRecording = dayQuery.data?.activeRecording ?? null;
+  const activeRecording = todayQuery.data?.activeRecording ?? null;
   const isToday = selectedDate === today;
 
   const startMutation = useMutation({
@@ -155,11 +160,11 @@ export function MobilityScreen({
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: ["mobility-day", selectedDate],
+        queryKey: ["mobility-day"],
       });
     },
     onError: (error) => {
-      setActionError(error.message || "无法开始记录");
+      setActionError(error.message || "无法开启持续记录");
     },
   });
 
@@ -181,11 +186,11 @@ export function MobilityScreen({
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: ["mobility-day", selectedDate],
+        queryKey: ["mobility-day"],
       });
     },
     onError: (error) => {
-      setActionError(error.message || "无法停止记录");
+      setActionError(error.message || "无法关闭持续记录");
     },
   });
 
@@ -204,30 +209,18 @@ export function MobilityScreen({
   const totalSteps = dayQuery.data?.stepCount ?? 0;
   const trackingHealthy =
     runtime.backgroundPermission && runtime.nativeTaskActive;
+  const recordingEnabled = Boolean(activeRecording);
 
-  async function enableHealthSteps() {
-    setIsEnablingSteps(true);
-    setActionError("");
-    try {
-      const granted = await requestHealthConnectStepAccess();
-      if (!granted) {
-        throw new Error(
-          "Health Connect 不可用或未授权。Android 13 及以下请先安装并配置 Health Connect。",
-        );
-      }
-      if (activeRecording) {
-        await syncHealthConnectSteps(activeRecording);
-      }
-      await queryClient.invalidateQueries({
-        queryKey: ["mobility-day", selectedDate],
-      });
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "无法启用系统步数",
-      );
-    } finally {
-      setIsEnablingSteps(false);
-    }
+  if (showDetails) {
+    return (
+      <MobilityDetails
+        day={dayQuery.data}
+        onBack={() => setShowDetails(false)}
+        runtime={runtime}
+        selectedDate={selectedDate}
+        totalSteps={totalSteps}
+      />
+    );
   }
 
   return (
@@ -237,14 +230,47 @@ export function MobilityScreen({
       <View style={styles.heading}>
         <View>
           <Text style={styles.title}>足迹地图</Text>
-          <Text style={styles.subtitle}>路线只对你可见，主动开始后才会记录</Text>
+          <Text style={styles.subtitle}>授权打开后持续记录，关闭授权才会停止</Text>
         </View>
-        {activeRecording ? (
+        {recordingEnabled ? (
           <View style={styles.liveBadge}>
             <View style={styles.liveDot} />
-            <Text style={styles.liveText}>记录中</Text>
+            <Text style={styles.liveText}>持续记录</Text>
           </View>
         ) : null}
+      </View>
+
+      <View style={styles.authorizationCard}>
+        <View style={styles.authorizationCopy}>
+          <Text style={styles.authorizationTitle}>持续后台记录授权</Text>
+          <Text style={styles.authorizationDescription}>
+            {recordingEnabled
+              ? trackingHealthy
+                ? "已授权，应用关闭后后台服务仍会继续记录"
+                : "已授权，正在恢复 Android 后台服务"
+              : "未授权，不会在后台获取位置和活动数据"}
+          </Text>
+        </View>
+        {busy || todayQuery.isPending ? (
+          <ActivityIndicator color={colors.accent} />
+        ) : (
+          <Switch
+            accessibilityLabel="持续后台记录授权"
+            onValueChange={(enabled) => {
+              if (enabled) {
+                startMutation.mutate();
+              } else if (activeRecording) {
+                stopMutation.mutate(activeRecording);
+              }
+            }}
+            thumbColor={colors.white}
+            trackColor={{
+              false: colors.borderStrong,
+              true: colors.accent,
+            }}
+            value={recordingEnabled}
+          />
+        )}
       </View>
 
       <View style={styles.datePicker}>
@@ -273,57 +299,37 @@ export function MobilityScreen({
             <ActivityIndicator color={colors.accent} />
           </View>
         ) : (
-          <RouteMap points={dayQuery.data?.points ?? []} />
+          <RouteMap
+            key={selectedDate}
+            points={dayQuery.data?.points ?? []}
+          />
         )}
       </View>
+      <Text style={styles.mapHint}>双指缩放或使用地图按钮 · 拖动查看路线</Text>
 
-      <View style={styles.metrics}>
-        <Metric icon="footsteps-outline" label="步" value={totalSteps.toLocaleString()} />
-        <Metric
-          icon="navigate-outline"
-          label="公里"
-          value={((dayQuery.data?.distanceMeters ?? 0) / 1000).toFixed(2)}
-        />
-        <Metric
-          icon="time-outline"
-          label="记录分钟"
-          value={String(dayQuery.data?.durationMinutes ?? 0)}
-        />
-      </View>
-
-      {isToday ? (
+      <View style={styles.distanceSummary}>
+        <View style={styles.distanceCopy}>
+          <AppIcon name="navigate-outline" color={colors.accent} size={20} />
+          <View>
+            <Text style={styles.distanceValue}>
+              {((dayQuery.data?.distanceMeters ?? 0) / 1000).toFixed(2)} 公里
+            </Text>
+            <Text style={styles.distanceLabel}>
+              {isToday ? "今日记录距离" : "当日记录距离"}
+            </Text>
+          </View>
+        </View>
         <Pressable
           accessibilityRole="button"
-          disabled={busy}
-          onPress={() => {
-            if (activeRecording) {
-              stopMutation.mutate(activeRecording);
-            } else {
-              startMutation.mutate();
-            }
-          }}
+          onPress={() => setShowDetails(true)}
           style={({ pressed }) => [
-            styles.recordButton,
-            activeRecording && styles.stopButton,
-            busy && styles.recordButtonDisabled,
+            styles.detailsButton,
             pressed && styles.pressed,
           ]}>
-          {busy ? (
-            <ActivityIndicator color={colors.white} />
-          ) : (
-            <>
-              <AppIcon
-                name={activeRecording ? "stop" : "navigate"}
-                color={colors.white}
-                size={20}
-              />
-              <Text style={styles.recordButtonText}>
-                {activeRecording ? "停止记录" : "开始记录"}
-              </Text>
-            </>
-          )}
+          <Text style={styles.detailsButtonText}>查看详情</Text>
+          <AppIcon name="chevron-forward" color={colors.accent} size={18} />
         </Pressable>
-      ) : null}
+      </View>
 
       {actionError ? (
         <View style={styles.error}>
@@ -340,15 +346,15 @@ export function MobilityScreen({
       <View style={styles.privacy}>
         <AppIcon name="lock-closed-outline" color={colors.textMuted} size={15} />
         <Text style={styles.privacyText}>
-          {activeRecording
+          {recordingEnabled
             ? trackingHealthy
               ? "仅你可见 · Android 后台服务运行中"
               : "后台服务异常 · 请检查下方状态"
-            : "轨迹已停止 · 不会在后台获取位置"}
+            : "授权已关闭 · 不会在后台获取位置"}
         </Text>
       </View>
 
-      {activeRecording ? (
+      {recordingEnabled ? (
         <View
           style={[
             styles.runtimePanel,
@@ -377,34 +383,6 @@ export function MobilityScreen({
           {runtime.lastError ? (
             <Text style={styles.runtimeError}>{runtime.lastError}</Text>
           ) : null}
-          <View style={styles.stepSourceRow}>
-            <View style={styles.stepSourceCopy}>
-              <Text style={styles.stepSourceLabel}>步数来源</Text>
-              <Text style={styles.stepSourceValue}>
-                {runtime.stepSource === "health-connect"
-                  ? "Health Connect 系统聚合"
-                  : runtime.stepSource === "device"
-                    ? "设备传感器（前台补充）"
-                    : "尚未连接"}
-              </Text>
-            </View>
-            {runtime.stepSource !== "health-connect" &&
-            Platform.OS === "android" ? (
-              <Pressable
-                disabled={isEnablingSteps}
-                onPress={enableHealthSteps}
-                style={({ pressed }) => [
-                  styles.enableStepsButton,
-                  pressed && styles.pressed,
-                ]}>
-                {isEnablingSteps ? (
-                  <ActivityIndicator color={colors.accent} size="small" />
-                ) : (
-                  <Text style={styles.enableStepsText}>启用系统步数</Text>
-                )}
-              </Pressable>
-            ) : null}
-          </View>
         </View>
       ) : null}
 
@@ -432,11 +410,119 @@ export function MobilityScreen({
           <Text style={styles.emptyPlaces}>记录起点或终点后，这里会显示地点</Text>
         )}
       </View>
+    </ScrollView>
+  );
+}
+
+function MobilityDetails({
+  day,
+  onBack,
+  runtime,
+  selectedDate,
+  totalSteps,
+}: {
+  day: MobilityDay | undefined;
+  onBack: () => void;
+  runtime: MobilityRuntimeState;
+  selectedDate: string;
+  totalSteps: number;
+}) {
+  const stepSource =
+    runtime.stepSource === "health-connect"
+      ? "Health Connect 系统聚合"
+      : runtime.stepSource === "device"
+        ? "设备传感器（前台补充）"
+        : "暂无可用来源";
+
+  return (
+    <ScrollView
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}>
+      <View style={styles.detailsHeader}>
+        <Pressable
+          accessibilityLabel="返回足迹地图"
+          onPress={onBack}
+          style={({ pressed }) => [
+            styles.detailsBackButton,
+            pressed && styles.pressed,
+          ]}>
+          <AppIcon name="chevron-back" color={colors.text} size={21} />
+        </Pressable>
+        <View style={styles.detailsHeadingCopy}>
+          <Text style={styles.title}>足迹详情</Text>
+          <Text style={styles.subtitle}>{formatLongDate(selectedDate)}</Text>
+        </View>
+      </View>
+
+      <View style={styles.metrics}>
+        <Metric
+          icon="footsteps-outline"
+          label="步数"
+          value={totalSteps.toLocaleString()}
+        />
+        <Metric
+          icon="navigate-outline"
+          label="公里"
+          value={((day?.distanceMeters ?? 0) / 1000).toFixed(2)}
+        />
+        <Metric
+          icon="time-outline"
+          label="记录分钟"
+          value={String(day?.durationMinutes ?? 0)}
+        />
+      </View>
+
+      <View style={styles.detailsPanel}>
+        <DetailRow
+          icon="location-outline"
+          label="定位点"
+          value={`${day?.points.length ?? 0} 个`}
+        />
+        <DetailRow
+          icon="footsteps-outline"
+          label="步数来源"
+          value={stepSource}
+        />
+        <DetailRow
+          icon="cloud-upload-outline"
+          label="等待同步"
+          value={`${runtime.queuedPointCount} 个定位点`}
+        />
+        <DetailRow
+          icon="time-outline"
+          label="最近定位"
+          value={
+            runtime.lastLocationAt
+              ? formatRuntimeTime(runtime.lastLocationAt)
+              : "暂无"
+          }
+        />
+      </View>
 
       <Text style={styles.stepNote}>
-        Android 优先读取 Health Connect 去重后的步数；未连接时仅使用设备前台传感器补充，不再跨页面重复累计。
+        Android 优先使用 Health Connect 的系统聚合步数；没有系统数据时使用设备传感器补充。
       </Text>
     </ScrollView>
+  );
+}
+
+function DetailRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentProps<typeof AppIcon>["name"];
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.detailRow}>
+      <AppIcon name={icon} color={colors.accent} size={19} />
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text numberOfLines={2} style={styles.detailValue}>
+        {value}
+      </Text>
+    </View>
   );
 }
 
@@ -529,6 +615,30 @@ const styles = StyleSheet.create({
     ...typography.label,
     color: colors.accent,
   },
+  authorizationCard: {
+    ...shadows.card,
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.md,
+    padding: spacing.md,
+  },
+  authorizationCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  authorizationTitle: {
+    ...typography.section,
+    color: colors.text,
+  },
+  authorizationDescription: {
+    ...typography.caption,
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
   datePicker: {
     alignItems: "center",
     flexDirection: "row",
@@ -573,6 +683,12 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
   },
+  mapHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: -spacing.sm,
+    textAlign: "center",
+  },
   metrics: {
     ...shadows.card,
     backgroundColor: colors.surface,
@@ -598,25 +714,43 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
   },
-  recordButton: {
+  distanceSummary: {
+    ...shadows.card,
     alignItems: "center",
-    backgroundColor: colors.accent,
-    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    padding: spacing.md,
+  },
+  distanceCopy: {
+    alignItems: "center",
     flexDirection: "row",
     gap: spacing.sm,
-    justifyContent: "center",
-    minHeight: 50,
   },
-  stopButton: {
-    backgroundColor: colors.text,
+  distanceValue: {
+    ...typography.section,
+    color: colors.text,
   },
-  recordButtonDisabled: {
-    opacity: 0.6,
+  distanceLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: 1,
   },
-  recordButtonText: {
+  detailsButton: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+    flexDirection: "row",
+    gap: 2,
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+  },
+  detailsButtonText: {
     ...typography.label,
-    color: colors.white,
-    fontSize: 15,
+    color: colors.accent,
   },
   pressed: {
     opacity: 0.68,
@@ -678,40 +812,51 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.danger,
   },
-  stepSourceRow: {
+  detailsHeader: {
     alignItems: "center",
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
-    gap: spacing.sm,
-    paddingTop: spacing.sm,
+    gap: spacing.md,
   },
-  stepSourceCopy: {
-    flex: 1,
-    gap: 1,
-  },
-  stepSourceLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  stepSourceValue: {
-    ...typography.label,
-    color: colors.text,
-  },
-  enableStepsButton: {
+  detailsBackButton: {
     alignItems: "center",
     backgroundColor: colors.surface,
-    borderColor: colors.borderStrong,
+    borderColor: colors.border,
     borderRadius: radius.sm,
     borderWidth: 1,
+    height: 42,
     justifyContent: "center",
-    minHeight: 38,
-    minWidth: 112,
-    paddingHorizontal: spacing.sm,
+    width: 42,
   },
-  enableStepsText: {
+  detailsHeadingCopy: {
+    flex: 1,
+  },
+  detailsPanel: {
+    ...shadows.card,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+  },
+  detailRow: {
+    alignItems: "center",
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 54,
+    paddingVertical: spacing.sm,
+  },
+  detailLabel: {
+    ...typography.body,
+    color: colors.textMuted,
+    flex: 1,
+  },
+  detailValue: {
     ...typography.label,
-    color: colors.accent,
+    color: colors.text,
+    flex: 1.4,
+    textAlign: "right",
   },
   placesSection: {
     backgroundColor: colors.panel,

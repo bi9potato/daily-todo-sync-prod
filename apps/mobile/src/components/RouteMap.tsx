@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Line, Polyline } from "react-native-svg";
 import { WebView } from "react-native-webview";
@@ -13,10 +13,17 @@ type RouteMapProps = {
 
 const EMPTY_POINTS: MobilityPoint[] = [];
 
-function createMapHtml(points: MobilityPoint[]) {
-  const safePoints = JSON.stringify(
+function serializePoints(points: MobilityPoint[]) {
+  return JSON.stringify(
     points.map((point) => [point.latitude, point.longitude]),
   ).replace(/</g, "\\u003c");
+}
+
+function createRouteScript(points: MobilityPoint[], fitRoute: boolean) {
+  return `window.setRoute(${serializePoints(points)},${fitRoute});true;`;
+}
+
+function createMapHtml() {
   return `<!doctype html>
 <html>
   <head>
@@ -25,41 +32,81 @@ function createMapHtml(points: MobilityPoint[]) {
     <style>
       html,body,#map{height:100%;width:100%;margin:0;background:#e9ece7}
       .leaflet-control-attribution{font:10px system-ui;color:#687168;background:rgba(255,255,255,.82)!important}
+      .leaflet-control-zoom a{width:42px!important;height:42px!important;line-height:42px!important;font-size:24px!important;color:#2C5745!important}
     </style>
   </head>
   <body>
     <div id="map"></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-      const points=${safePoints};
       const fallback=[39.9042,116.4074];
-      const map=L.map('map',{zoomControl:false,attributionControl:true});
+      const map=L.map('map',{
+        attributionControl:true,
+        boxZoom:true,
+        doubleClickZoom:true,
+        dragging:true,
+        keyboard:true,
+        scrollWheelZoom:true,
+        touchZoom:true,
+        zoomControl:true
+      });
+      map.zoomControl.setPosition('bottomright');
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
         maxZoom:19,
         attribution:'© OpenStreetMap'
       }).addTo(map);
-      if(points.length){
-        const route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round'}).addTo(map);
-        L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map);
-        L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map);
-        if(points.length===1){map.setView(points[0],16)}else{map.fitBounds(route.getBounds(),{padding:[28,28]})}
-      }else{
-        map.setView(fallback,11);
-      }
+      let route=null;
+      let markers=[];
+      map.setView(fallback,11);
+      window.setRoute=(points,fitRoute)=>{
+        if(route){map.removeLayer(route)}
+        markers.forEach((marker)=>map.removeLayer(marker));
+        markers=[];
+        if(!points.length){return}
+        route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round'}).addTo(map);
+        markers=[
+          L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map),
+          L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map)
+        ];
+        if(fitRoute){
+          if(points.length===1){map.setView(points[0],16)}
+          else{map.fitBounds(route.getBounds(),{padding:[28,28]})}
+        }
+      };
+      window.ReactNativeWebView.postMessage('map-ready');
     </script>
   </body>
 </html>`;
 }
 
+const MAP_SOURCE = { html: createMapHtml() };
+
 function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
-  const html = useMemo(() => createMapHtml(points), [points]);
+  const webViewRef = useRef<WebView>(null);
+  const mapReadyRef = useRef(false);
+  const updateRoute = useCallback(
+    (fitRoute: boolean) => {
+      webViewRef.current?.injectJavaScript(
+        createRouteScript(points, fitRoute),
+      );
+    },
+    [points],
+  );
+
+  useEffect(() => {
+    if (mapReadyRef.current) {
+      updateRoute(false);
+    }
+  }, [updateRoute]);
 
   if (!points.length) {
     return (
       <View style={styles.empty}>
         <AppIcon name="map-outline" color={colors.accent} size={30} />
         <Text style={styles.emptyTitle}>今天还没有轨迹</Text>
-        <Text style={styles.emptyCopy}>开始记录后，走过的路线会出现在这里</Text>
+        <Text style={styles.emptyCopy}>
+          打开持续授权后，走过的路线会出现在这里
+        </Text>
       </View>
     );
   }
@@ -70,10 +117,20 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
 
   return (
     <WebView
+      ref={webViewRef}
       javaScriptEnabled
+      nestedScrollEnabled
+      onMessage={({ nativeEvent }) => {
+        if (nativeEvent.data === "map-ready") {
+          mapReadyRef.current = true;
+          updateRoute(true);
+        }
+      }}
       originWhitelist={["*"]}
+      overScrollMode="never"
       scrollEnabled={false}
-      source={{ html }}
+      setSupportMultipleWindows={false}
+      source={MAP_SOURCE}
       style={styles.webview}
     />
   );
@@ -127,7 +184,9 @@ function RoutePreview({ points }: RouteMapProps) {
           strokeWidth="3"
         />
       </Svg>
-      <Text style={styles.previewAttribution}>路线预览 · 地图仅在移动端加载</Text>
+      <Text style={styles.previewAttribution}>
+        路线预览 · 地图仅在移动端加载
+      </Text>
     </View>
   );
 }
