@@ -58,7 +58,8 @@
           "locationWhenInUsePermission": "允许 Daily Todo 获取当前位置并为任务记录地点。",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true
+          "isAndroidForegroundServiceEnabled": true,
+          "androidForegroundServiceIcon": "./assets/images/location-foreground-service-icon.png"
         }
       ],
       [

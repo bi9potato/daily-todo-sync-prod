@@ -14,6 +14,7 @@ import {
 import { cleanupLegacyMobilityRuntime } from "@/lib/mobility-tracking";
 
 installClientLogCapture();
+void cleanupLegacyMobilityRuntime({ includeCurrent: true });
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,8 +31,8 @@ export default function RootLayout() {
       recordClientLog("info", "Running legacy mobility runtime cleanup", {
         source: "startup",
       });
+      await cleanupLegacyMobilityRuntime({ includeCurrent: true });
       await flushClientLogs();
-      await cleanupLegacyMobilityRuntime();
     })();
   }, []);
 

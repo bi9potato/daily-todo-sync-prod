@@ -15,12 +15,14 @@ import {
   readMobilityDiagnostics,
   updateMobilityDiagnostics,
 } from "./mobility-diagnostics";
+import { flushClientLogs, recordClientLog } from "./client-logs";
 import type { MobilityPointInput } from "@/types";
 
-export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v3";
+export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v4";
 const LEGACY_MOBILITY_LOCATION_TASKS = [
   "daily-todo-background-location",
   "daily-todo-background-location-v2",
+  "daily-todo-background-location-v3",
 ];
 const KNOWN_MOBILITY_LOCATION_TASKS = [
   MOBILITY_LOCATION_TASK,
@@ -36,6 +38,22 @@ let foregroundSubscription: Location.LocationSubscription | null = null;
 let foregroundRecordingId: string | null = null;
 let foregroundSyncPromise: Promise<void> = Promise.resolve();
 let foregroundUploadTimer: ReturnType<typeof setInterval> | null = null;
+
+function getAndroidApiLevel() {
+  const version =
+    typeof Platform.Version === "string"
+      ? Number.parseInt(Platform.Version, 10)
+      : Platform.Version;
+  return Number.isFinite(version) ? version : null;
+}
+
+function shouldUseAndroidForegroundLocationService() {
+  if (Platform.OS !== "android") {
+    return false;
+  }
+  const apiLevel = getAndroidApiLevel();
+  return apiLevel === null || apiLevel < 36;
+}
 
 export function supportsNativeBackgroundLocationTracking() {
   if (Platform.OS === "web") {
@@ -143,9 +161,6 @@ for (const taskName of LEGACY_MOBILITY_LOCATION_TASKS) {
 
 export async function isMobilityLocationTrackingActive() {
   if (Platform.OS === "web") {
-    return false;
-  }
-  if (!supportsNativeBackgroundLocationTracking()) {
     return false;
   }
   for (const taskName of KNOWN_MOBILITY_LOCATION_TASKS) {
@@ -287,6 +302,7 @@ export async function startMobilityLocationTracking({
     throw new Error("没有活动足迹记录，无法开始定位。");
   }
   await setActiveMobilityRecordingId(activeRecordingId);
+  await cleanupLegacyMobilityRuntime();
   await startForegroundMobilityTracking(activeRecordingId);
   if (!manual) {
     return;
@@ -295,14 +311,22 @@ export async function startMobilityLocationTracking({
     return;
   }
   defineMobilityLocationTask();
-  await cleanupLegacyMobilityRuntime();
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(
     MOBILITY_LOCATION_TASK,
   ).catch(() => false);
   if (alreadyStarted) {
     return;
   }
+  const useForegroundService = shouldUseAndroidForegroundLocationService();
   try {
+    recordClientLog("info", "Mobility native background task registering", {
+      source: "mobility",
+      context: {
+        androidApiLevel: getAndroidApiLevel(),
+        useForegroundService,
+      },
+    });
+    await flushClientLogs();
     await Location.startLocationUpdatesAsync(MOBILITY_LOCATION_TASK, {
       accuracy: Location.Accuracy.High,
       activityType: Location.ActivityType.Fitness,
@@ -314,19 +338,33 @@ export async function startMobilityLocationTracking({
             deferredUpdatesInterval: 30_000,
           }
         : {}),
-      foregroundService: {
-        notificationTitle: "Daily Todo 正在记录足迹",
-        notificationBody: "持续记录行走路线；点击可返回应用。",
-        notificationColor: "#2C5745",
-        killServiceOnDestroy: false,
-      },
+      ...(useForegroundService
+        ? {
+            foregroundService: {
+              notificationTitle: "Daily Todo 正在记录足迹",
+              notificationBody: "持续记录行走路线；点击可返回应用。",
+              notificationColor: "#2C5745",
+              killServiceOnDestroy: false,
+            },
+          }
+        : {}),
       pausesUpdatesAutomatically: false,
       showsBackgroundLocationIndicator: true,
     });
     await updateMobilityDiagnostics({
-      lastError: "",
+      lastError: useForegroundService
+        ? ""
+        : "Android 16 已启用安全后台记录模式，避免系统位置前台服务导致闪退。",
       recoveredAt: new Date().toISOString(),
     });
+    recordClientLog("info", "Mobility native background task registered", {
+      source: "mobility",
+      context: {
+        androidApiLevel: getAndroidApiLevel(),
+        useForegroundService,
+      },
+    });
+    await flushClientLogs();
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "后台定位服务启动失败";
@@ -354,11 +392,16 @@ export async function stopMobilityLocationTracking() {
   }
 }
 
-export async function cleanupLegacyMobilityRuntime() {
+export async function cleanupLegacyMobilityRuntime({
+  includeCurrent = !supportsNativeBackgroundLocationTracking(),
+}: { includeCurrent?: boolean } = {}) {
   if (Platform.OS === "web") {
     return;
   }
-  for (const taskName of LEGACY_MOBILITY_LOCATION_TASKS) {
+  const taskNames = includeCurrent
+    ? KNOWN_MOBILITY_LOCATION_TASKS
+    : LEGACY_MOBILITY_LOCATION_TASKS;
+  for (const taskName of taskNames) {
     try {
       if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
         await Location.stopLocationUpdatesAsync(taskName);
