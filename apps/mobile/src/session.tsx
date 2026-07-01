@@ -16,6 +16,7 @@ import {
   saveTokens,
   subscribeToTokenClear,
 } from "@/lib/auth-storage";
+import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
 
 type SessionStatus = "loading" | "authenticated" | "unauthenticated";
 
@@ -59,10 +60,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
     [queryClient],
   );
 
+  useEffect(() => {
+    if (status === "authenticated") {
+      void flushClientLogs();
+    }
+  }, [status]);
+
   const signIn = useCallback(async (identifier: string, password: string) => {
     const tokens = await login({ identifier, password });
     await saveTokens(tokens);
     setStatus("authenticated");
+    recordClientLog("info", "User signed in", { source: "session" });
+    void flushClientLogs();
   }, []);
 
   const signUp = useCallback(
@@ -70,11 +79,15 @@ export function SessionProvider({ children }: PropsWithChildren) {
       const tokens = await register({ username, email, password });
       await saveTokens(tokens);
       setStatus("authenticated");
+      recordClientLog("info", "User signed up", { source: "session" });
+      void flushClientLogs();
     },
     [],
   );
 
   const signOut = useCallback(async () => {
+    recordClientLog("info", "User signed out", { source: "session" });
+    await flushClientLogs();
     await clearTokens();
     queryClient.clear();
     setStatus("unauthenticated");

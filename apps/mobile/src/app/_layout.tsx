@@ -5,7 +5,10 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { SessionProvider } from "@/session";
+import { installClientLogCapture } from "@/lib/client-logs";
 import "@/lib/mobility-tracking";
+
+installClientLogCapture();
 
 const queryClient = new QueryClient({
   defaultOptions: {

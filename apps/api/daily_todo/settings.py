@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "accounts",
+    "diagnostics",
     "integrations",
     "mobility",
     "todos",

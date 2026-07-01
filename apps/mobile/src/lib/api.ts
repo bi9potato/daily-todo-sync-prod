@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { clearTokens, getMemoryTokens, loadTokens, saveTokens } from "./auth-storage";
 import type {
   AiChatResult,
+  ClientLogBatchPayload,
   DayTodos,
   DeletedTodoOccurrence,
   GoogleCalendarAuthUrl,
@@ -234,6 +235,13 @@ export function updateMe(payload: { displayName: string }) {
 
 export function getLatestMobileRelease() {
   return request<MobileRelease>("/mobile/releases/latest", {}, false);
+}
+
+export function uploadClientLogs(payload: ClientLogBatchPayload) {
+  return request<{ accepted: number }>("/diagnostics/client-logs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getDay(date: string) {

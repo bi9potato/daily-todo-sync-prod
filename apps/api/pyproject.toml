@@ -29,6 +29,8 @@ include = [
     "daily_todo.*",
     "accounts",
     "accounts.*",
+    "diagnostics",
+    "diagnostics.*",
     "integrations",
     "integrations.*",
     "mobility",

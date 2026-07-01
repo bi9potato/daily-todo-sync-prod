@@ -213,3 +213,25 @@ export type MobileRelease = {
   releaseUrl: string;
   publishedAt: string;
 };
+
+export type ClientLogLevel = "debug" | "info" | "warn" | "error" | "fatal";
+
+export type ClientLogEntryPayload = {
+  clientId: string;
+  occurredAt: string;
+  level: ClientLogLevel;
+  source: string;
+  message: string;
+  stack?: string;
+  context?: Record<string, unknown>;
+};
+
+export type ClientLogBatchPayload = {
+  sessionId: string;
+  deviceId: string;
+  appVersion: string;
+  buildSha: string;
+  platform: string;
+  osVersion: string;
+  entries: ClientLogEntryPayload[];
+};

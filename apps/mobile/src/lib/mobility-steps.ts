@@ -21,7 +21,12 @@ async function loadHealthConnect() {
   if (Platform.OS !== "android") {
     return null;
   }
-  return import("react-native-health-connect");
+  try {
+    return await import("react-native-health-connect");
+  } catch (error) {
+    console.warn("Health Connect native module unavailable", error);
+    return null;
+  }
 }
 
 export async function getHealthConnectStepAccess() {

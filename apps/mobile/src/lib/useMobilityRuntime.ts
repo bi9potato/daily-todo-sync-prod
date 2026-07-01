@@ -48,6 +48,24 @@ const INITIAL_STATE: MobilityRuntimeState = {
   stepSource: "unavailable",
 };
 
+async function getSafeMobilityDiagnostics() {
+  try {
+    return await getMobilityTrackingDiagnostics();
+  } catch (error) {
+    console.warn("Mobility diagnostics unavailable", error);
+    return {
+      backgroundPermission: false,
+      foregroundPermission: false,
+      lastError:
+        error instanceof Error ? error.message : "Mobility diagnostics unavailable",
+      lastLocationAt: null,
+      lastSyncAt: null,
+      nativeTaskActive: false,
+      recoveredAt: null,
+    };
+  }
+}
+
 export function useMobilityRuntime(today: string) {
   const queryClient = useQueryClient();
   const [runtime, setRuntime] = useState(INITIAL_STATE);
@@ -82,7 +100,7 @@ export function useMobilityRuntime(today: string) {
             await clearMobilityDiagnostics();
           }
           await stopFallbackStepTracking();
-          const diagnostics = await getMobilityTrackingDiagnostics();
+          const diagnostics = await getSafeMobilityDiagnostics();
           setRuntime({
             ...diagnostics,
             queuedPointCount: await getQueuedMobilityPointCount(),
@@ -111,7 +129,7 @@ export function useMobilityRuntime(today: string) {
           stepSource: stepResult.source,
         });
       } catch (error) {
-        const diagnostics = await getMobilityTrackingDiagnostics();
+        const diagnostics = await getSafeMobilityDiagnostics();
         setRuntime({
           ...diagnostics,
           lastError:

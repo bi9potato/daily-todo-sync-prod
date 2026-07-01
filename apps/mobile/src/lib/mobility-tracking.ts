@@ -37,6 +37,7 @@ export function locationToMobilityPoint(
   };
 }
 
+try {
 if (
   Platform.OS !== "web" &&
   !TaskManager.isTaskDefined(MOBILITY_LOCATION_TASK)
@@ -81,6 +82,9 @@ if (
       }
     },
   );
+}
+} catch (error) {
+  console.warn("Mobility background task unavailable", error);
 }
 
 export async function isMobilityLocationTrackingActive() {
