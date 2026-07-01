@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ForwardedRef,
+} from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Line, Polyline } from "react-native-svg";
 import { WebView } from "react-native-webview";
@@ -8,15 +18,29 @@ import { recordClientLog } from "@/lib/client-logs";
 import { colors, radius, typography } from "@/theme";
 import type { MobilityPoint } from "@/types";
 
+export type RouteMapHandle = {
+  play: (speed: number) => void;
+  pause: () => void;
+  seek: (ratio: number) => void;
+  stop: () => void;
+};
+
 type RouteMapProps = {
   points: MobilityPoint[];
+  onFallback?: (fallback: boolean) => void;
+  onPlaybackEnded?: () => void;
+  onPlaybackProgress?: (ratio: number, timestampMs: number) => void;
 };
 
 const EMPTY_POINTS: MobilityPoint[] = [];
 
 function serializePoints(points: MobilityPoint[]) {
   return JSON.stringify(
-    points.map((point) => [point.latitude, point.longitude]),
+    points.map((point) => [
+      point.latitude,
+      point.longitude,
+      new Date(point.recordedAt).getTime(),
+    ]),
   ).replace(/</g, "\\u003c");
 }
 
@@ -58,9 +82,15 @@ function createMapHtml() {
       }).addTo(map);
       let route=null;
       let markers=[];
+      let routePoints=[];
+      let playbackMarker=null;
+      let playbackTimer=null;
+      let playbackState=null;
+      let lastProgressPostedAt=0;
       map.setView(fallback,11);
       window.setRoute=(points,fitRoute)=>{
         if(!points.length){return}
+        routePoints=points;
         if(route){
           route.setLatLngs(points);
           markers[0].setLatLng(points[0]);
@@ -77,6 +107,92 @@ function createMapHtml() {
           else{map.fitBounds(route.getBounds(),{padding:[28,28]})}
         }
       };
+
+      // Playback runs entirely inside the WebView (driven by
+      // requestAnimationFrame) instead of the RN bridge so the animation
+      // stays smooth regardless of the route-update throttle used while a
+      // recording is live. Only a throttled progress ping goes back to RN,
+      // to keep the scrubber in sync without flooding the bridge at 60fps.
+      function pointAtVirtualTime(vt){
+        if(!routePoints.length){return null}
+        if(vt<=routePoints[0][2]){return routePoints[0]}
+        const lastIndex=routePoints.length-1;
+        if(vt>=routePoints[lastIndex][2]){return routePoints[lastIndex]}
+        let lo=0,hi=lastIndex;
+        while(hi-lo>1){
+          const mid=(lo+hi)>>1;
+          if(routePoints[mid][2]<=vt){lo=mid}else{hi=mid}
+        }
+        const a=routePoints[lo],b=routePoints[hi];
+        const span=b[2]-a[2];
+        const t=span>0?(vt-a[2])/span:0;
+        return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,vt];
+      }
+      function ensurePlaybackMarker(){
+        if(!playbackMarker){
+          playbackMarker=L.circleMarker(routePoints[0],{radius:8,color:'#fff',weight:3,fillColor:'#E8853A',fillOpacity:1}).addTo(map);
+        }
+      }
+      function renderPlaybackAt(vt,notifyRN){
+        const point=pointAtVirtualTime(vt);
+        if(!point){return}
+        ensurePlaybackMarker();
+        playbackMarker.setLatLng(point);
+        if(notifyRN){
+          const first=routePoints[0][2],last=routePoints[routePoints.length-1][2];
+          const ratio=last>first?(vt-first)/(last-first):0;
+          window.ReactNativeWebView.postMessage(JSON.stringify({type:'playback-progress',ratio:Math.max(0,Math.min(1,ratio)),timestamp:vt}));
+        }
+      }
+      function stopPlaybackLoop(){
+        if(playbackTimer){cancelAnimationFrame(playbackTimer);playbackTimer=null}
+      }
+      window.startPlayback=(speed)=>{
+        if(!routePoints.length){return}
+        const first=routePoints[0][2],last=routePoints[routePoints.length-1][2];
+        const currentVt=playbackState?playbackState.currentVt:first;
+        playbackState={playing:true,speed:speed||1,anchorRealMs:Date.now(),anchorVt:currentVt,currentVt};
+        stopPlaybackLoop();
+        const step=()=>{
+          if(!playbackState||!playbackState.playing){return}
+          const elapsedReal=Date.now()-playbackState.anchorRealMs;
+          const vt=Math.min(playbackState.anchorVt+elapsedReal*playbackState.speed,last);
+          playbackState.currentVt=vt;
+          const now=Date.now();
+          const shouldNotify=now-lastProgressPostedAt>=120;
+          if(shouldNotify){lastProgressPostedAt=now}
+          renderPlaybackAt(vt,shouldNotify);
+          if(vt>=last){
+            playbackState.playing=false;
+            window.ReactNativeWebView.postMessage(JSON.stringify({type:'playback-ended'}));
+            return;
+          }
+          playbackTimer=requestAnimationFrame(step);
+        };
+        playbackTimer=requestAnimationFrame(step);
+      };
+      window.pausePlayback=()=>{
+        if(playbackState&&playbackState.playing){
+          const elapsedReal=Date.now()-playbackState.anchorRealMs;
+          playbackState.currentVt=playbackState.anchorVt+elapsedReal*playbackState.speed;
+          playbackState.playing=false;
+        }
+        stopPlaybackLoop();
+      };
+      window.seekPlayback=(ratio)=>{
+        if(!routePoints.length){return}
+        const first=routePoints[0][2],last=routePoints[routePoints.length-1][2];
+        const vt=first+(last-first)*Math.max(0,Math.min(1,ratio));
+        playbackState={playing:false,speed:(playbackState&&playbackState.speed)||1,anchorRealMs:Date.now(),anchorVt:vt,currentVt:vt};
+        stopPlaybackLoop();
+        renderPlaybackAt(vt,true);
+      };
+      window.stopPlayback=()=>{
+        stopPlaybackLoop();
+        playbackState=null;
+        if(playbackMarker){map.removeLayer(playbackMarker);playbackMarker=null}
+      };
+
       window.ReactNativeWebView.postMessage('map-ready');
     </script>
   </body>
@@ -91,7 +207,10 @@ const MAP_SOURCE = { html: createMapHtml() };
 // into at most one bridge call per interval.
 const ROUTE_UPDATE_THROTTLE_MS = 2_000;
 
-function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
+function RouteMapComponent(
+  { points = EMPTY_POINTS, onFallback, onPlaybackEnded, onPlaybackProgress }: RouteMapProps,
+  ref: ForwardedRef<RouteMapHandle>,
+) {
   const webViewRef = useRef<WebView>(null);
   const mapReadyRef = useRef(false);
   const webViewStartedRef = useRef(false);
@@ -163,6 +282,23 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
     return () => clearTimeout(timer);
   }, [points.length]);
 
+  useEffect(() => {
+    onFallback?.(Platform.OS === "web" || mapFailed || !points.length);
+  }, [mapFailed, onFallback, points.length]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      play: (speed) =>
+        webViewRef.current?.injectJavaScript(`window.startPlayback(${speed});true;`),
+      pause: () => webViewRef.current?.injectJavaScript("window.pausePlayback();true;"),
+      seek: (ratio) =>
+        webViewRef.current?.injectJavaScript(`window.seekPlayback(${ratio});true;`),
+      stop: () => webViewRef.current?.injectJavaScript("window.stopPlayback();true;"),
+    }),
+    [],
+  );
+
   if (!points.length) {
     return (
       <View style={styles.empty}>
@@ -189,6 +325,24 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
           mapReadyRef.current = true;
           setMapFailed(false);
           updateRoute(true);
+          return;
+        }
+        try {
+          const payload = JSON.parse(nativeEvent.data) as {
+            type?: string;
+            ratio?: number;
+            timestamp?: number;
+          };
+          if (
+            payload.type === "playback-progress" &&
+            typeof payload.ratio === "number"
+          ) {
+            onPlaybackProgress?.(payload.ratio, payload.timestamp ?? 0);
+          } else if (payload.type === "playback-ended") {
+            onPlaybackEnded?.();
+          }
+        } catch {
+          // Ignore malformed bridge messages.
         }
       }}
       onError={(event) => {
@@ -270,7 +424,7 @@ function RoutePreview({ points }: RouteMapProps) {
   );
 }
 
-export const RouteMap = memo(RouteMapComponent);
+export const RouteMap = memo(forwardRef(RouteMapComponent));
 
 const styles = StyleSheet.create({
   webview: {

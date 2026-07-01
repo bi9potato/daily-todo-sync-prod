@@ -15,6 +15,7 @@ import type {
   MobilityDay,
   MobilityPointInput,
   MobilityRecording,
+  MobilityTimelineExport,
   RangeTodos,
   TaskAttachment,
   TaskCreatePayload,
@@ -274,8 +275,9 @@ export function getRange(start: string, end: string) {
   return request<RangeTodos>(`/range?start=${start}&end=${end}`);
 }
 
-export function getMobilityDay(date: string) {
-  return request<MobilityDay>(`/mobility/days/${date}`);
+export function getMobilityDay(date: string, dwellMinutes?: number) {
+  const query = dwellMinutes ? `?dwellMinutes=${dwellMinutes}` : "";
+  return request<MobilityDay>(`/mobility/days/${date}${query}`);
 }
 
 export function startMobilityRecording() {
@@ -288,6 +290,16 @@ export function stopMobilityRecording(id: string) {
   return request<MobilityRecording>(`/mobility/recordings/${id}/stop`, {
     method: "POST",
   });
+}
+
+export function clearMobilityHistory() {
+  return request<void>("/mobility/history", { method: "DELETE" });
+}
+
+export function exportMobilityHistory(start: string, end: string) {
+  return request<MobilityTimelineExport>(
+    `/mobility/export?start=${start}&end=${end}`,
+  );
 }
 
 export function addMobilityPoints(id: string, points: MobilityPointInput[]) {

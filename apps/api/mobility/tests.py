@@ -1,11 +1,14 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
+from django.utils import timezone
 
 from accounts.tokens import issue_access_token
+from mobility.models import LocationPoint, MobilityRecording
+from mobility.segmentation import build_day_segments
 
 
 class MobilityApiTests(TestCase):
@@ -181,3 +184,179 @@ class MobilityApiTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {issue_access_token(other)}",
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_day_response_includes_segments(self):
+        started_at = datetime.fromisoformat("2026-06-30T07:59:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=started_at):
+            recording = self.post("/api/mobility/recordings/start").json()
+        self.post(
+            f"/api/mobility/recordings/{recording['id']}/points",
+            {
+                "points": [
+                    {
+                        "clientId": "p1",
+                        "recordedAt": "2026-06-30T08:00:00+08:00",
+                        "latitude": 39.9900,
+                        "longitude": 116.3000,
+                        "accuracy": 8,
+                    },
+                    {
+                        "clientId": "p2",
+                        "recordedAt": "2026-06-30T08:20:00+08:00",
+                        "latitude": 39.9901,
+                        "longitude": 116.3000,
+                        "accuracy": 8,
+                    },
+                ]
+            },
+        )
+
+        day = self.client.get(
+            "/api/mobility/days/2026-06-30",
+            HTTP_AUTHORIZATION=self.authorization,
+        )
+
+        self.assertEqual(day.status_code, 200)
+        segments = day.json()["segments"]
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0]["type"], "visit")
+
+    def test_clear_history_deletes_all_recordings_and_points(self):
+        recording = self.post("/api/mobility/recordings/start").json()
+        self.post(
+            f"/api/mobility/recordings/{recording['id']}/points",
+            {
+                "points": [
+                    {
+                        "clientId": "p1",
+                        "recordedAt": "2026-06-30T08:00:00+08:00",
+                        "latitude": 39.9900,
+                        "longitude": 116.3000,
+                        "accuracy": 8,
+                    }
+                ]
+            },
+        )
+
+        response = self.client.delete(
+            "/api/mobility/history", HTTP_AUTHORIZATION=self.authorization
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(MobilityRecording.objects.filter(user=self.user).count(), 0)
+        self.assertEqual(
+            LocationPoint.objects.filter(recording__user=self.user).count(), 0
+        )
+
+    def test_clear_history_only_affects_requesting_user(self):
+        other = get_user_model().objects.create_user(
+            username="other-clearer",
+            email="other-clearer@example.com",
+            password="test-password-123",
+        )
+        MobilityRecording.objects.create(user=other, started_at=timezone.now())
+        self.post("/api/mobility/recordings/start")
+
+        self.client.delete("/api/mobility/history", HTTP_AUTHORIZATION=self.authorization)
+
+        self.assertEqual(MobilityRecording.objects.filter(user=other).count(), 1)
+        self.assertEqual(MobilityRecording.objects.filter(user=self.user).count(), 0)
+
+    def test_export_returns_google_timeline_objects(self):
+        started_at = datetime.fromisoformat("2026-06-30T07:59:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=started_at):
+            recording = self.post("/api/mobility/recordings/start").json()
+        self.post(
+            f"/api/mobility/recordings/{recording['id']}/points",
+            {
+                "points": [
+                    {
+                        "clientId": "p1",
+                        "recordedAt": "2026-06-30T08:00:00+08:00",
+                        "latitude": 39.9900,
+                        "longitude": 116.3000,
+                        "accuracy": 8,
+                    },
+                    {
+                        "clientId": "p2",
+                        "recordedAt": "2026-06-30T08:20:00+08:00",
+                        "latitude": 39.9901,
+                        "longitude": 116.3000,
+                        "accuracy": 8,
+                    },
+                ]
+            },
+        )
+
+        response = self.client.get(
+            "/api/mobility/export?start=2026-06-30&end=2026-06-30",
+            HTTP_AUTHORIZATION=self.authorization,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.content)
+        self.assertIn("timelineObjects", payload)
+        self.assertEqual(len(payload["timelineObjects"]), 1)
+        self.assertIn("placeVisit", payload["timelineObjects"][0])
+
+    def test_export_rejects_end_before_start(self):
+        response = self.client.get(
+            "/api/mobility/export?start=2026-06-30&end=2026-06-29",
+            HTTP_AUTHORIZATION=self.authorization,
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class MobilitySegmentationTests(TestCase):
+    @staticmethod
+    def make_point(lat: float, lng: float, minutes_offset: int, accuracy: float = 8):
+        base = timezone.make_aware(datetime.fromisoformat("2026-06-30T08:00:00"))
+        return LocationPoint(
+            latitude=lat,
+            longitude=lng,
+            accuracy=accuracy,
+            recorded_at=base + timedelta(minutes=minutes_offset),
+        )
+
+    def test_empty_points_returns_no_segments(self):
+        self.assertEqual(build_day_segments([]), [])
+
+    def test_partitions_trip_visit_trip(self):
+        points = [
+            self.make_point(39.9000, 116.3000, 0),
+            self.make_point(39.9050, 116.3000, 10),
+            self.make_point(39.9100, 116.3000, 20),
+            self.make_point(39.9100, 116.30002, 22),
+            self.make_point(39.9100, 116.30003, 30),
+            self.make_point(39.9100, 116.30001, 40),
+            self.make_point(39.9200, 116.3000, 50),
+            self.make_point(39.9300, 116.3000, 60),
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip", "visit", "trip"])
+        self.assertGreater(segments[0]["distanceMeters"], 400)
+        self.assertGreaterEqual(segments[1]["durationMinutes"], 15)
+        self.assertGreater(segments[2]["distanceMeters"], 400)
+
+    def test_single_cluster_all_day_is_one_visit_no_trip(self):
+        points = [
+            self.make_point(39.9000, 116.3000, offset)
+            for offset in (0, 5, 10, 15, 20)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["visit"])
+
+    def test_short_dwell_does_not_qualify_as_visit(self):
+        points = [
+            self.make_point(39.9000, 116.3000, 0),
+            self.make_point(39.9000, 116.3000, 2),
+            self.make_point(39.9200, 116.3000, 5),
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertTrue(all(segment["type"] == "trip" for segment in segments))

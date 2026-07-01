@@ -1,8 +1,9 @@
-import math
+import json
 from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import Router, Schema
@@ -10,7 +11,10 @@ from ninja.errors import HttpError
 
 from accounts.authentication import bearer_auth
 
+from .export import build_export_payload
+from .geo import haversine_meters
 from .models import LocationPoint, MobilityRecording, StepSample
+from .segmentation import DEFAULT_DWELL_MINUTES, build_day_segments
 
 router = Router(tags=["mobility"])
 
@@ -56,6 +60,19 @@ class MobilityRecordingOut(Schema):
     durationMinutes: int
 
 
+class SegmentOut(Schema):
+    type: str
+    startTime: str
+    endTime: str
+    durationMinutes: int
+    latitude: float | None = None
+    longitude: float | None = None
+    endLatitude: float | None = None
+    endLongitude: float | None = None
+    distanceMeters: float | None = None
+    mode: str | None = None
+
+
 class MobilityDayOut(Schema):
     date: str
     stepCount: int
@@ -64,6 +81,7 @@ class MobilityDayOut(Schema):
     activeRecording: MobilityRecordingOut | None
     recordings: list[MobilityRecordingOut]
     points: list[LocationPointOut]
+    segments: list[SegmentOut]
 
 
 def serialize_recording(recording: MobilityRecording, now=None) -> dict:
@@ -86,38 +104,6 @@ def day_bounds(day: date):
     return start, start + timedelta(days=1)
 
 
-# GPS fixes routinely wobble by several meters even while standing still.
-# Two consecutive points closer together than the sum of their reported
-# accuracy radii (with a sane floor) are treated as noise rather than real
-# movement, mirroring how Google Maps suppresses jitter when you are
-# stationary instead of letting it silently inflate the distance walked.
-GPS_NOISE_FLOOR_METERS = 8.0
-MAX_PLAUSIBLE_SPEED_MPS = 55.0
-
-
-def haversine_meters(first: LocationPoint, second: LocationPoint) -> float:
-    earth_radius = 6_371_000
-    lat1 = math.radians(float(first.latitude))
-    lat2 = math.radians(float(second.latitude))
-    delta_lat = lat2 - lat1
-    delta_lon = math.radians(float(second.longitude) - float(first.longitude))
-    value = (
-        math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
-    )
-    distance = 2 * earth_radius * math.asin(math.sqrt(value))
-
-    noise_floor = max(
-        GPS_NOISE_FLOOR_METERS,
-        (first.accuracy or 0) + (second.accuracy or 0),
-    )
-    if distance < noise_floor:
-        return 0
-
-    elapsed = max((second.recorded_at - first.recorded_at).total_seconds(), 1)
-    return distance if distance / elapsed <= MAX_PLAUSIBLE_SPEED_MPS else 0
-
-
 def recalculate_distance(recording: MobilityRecording) -> None:
     points = list(recording.points.only("latitude", "longitude", "recorded_at"))
     distance = sum(
@@ -129,7 +115,7 @@ def recalculate_distance(recording: MobilityRecording) -> None:
 
 
 @router.get("/days/{day}", response=MobilityDayOut, auth=bearer_auth)
-def get_mobility_day(request, day: date):
+def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MINUTES):
     start, end = day_bounds(day)
     recordings = list(
         MobilityRecording.objects.filter(
@@ -148,11 +134,13 @@ def get_mobility_day(request, day: date):
     )
     recordings.sort(key=lambda item: item.started_at)
     recording_ids = [item.id for item in recordings]
-    points = LocationPoint.objects.filter(
-        recording_id__in=recording_ids,
-        recorded_at__gte=start,
-        recorded_at__lt=end,
-    ).order_by("recorded_at")
+    points = list(
+        LocationPoint.objects.filter(
+            recording_id__in=recording_ids,
+            recorded_at__gte=start,
+            recorded_at__lt=end,
+        ).order_by("recorded_at")
+    )
     serialized_recordings = [serialize_recording(item) for item in recordings]
     active = next((item for item in recordings if item.is_active), None)
     return {
@@ -173,6 +161,7 @@ def get_mobility_day(request, day: date):
             }
             for point in points
         ],
+        "segments": build_day_segments(points, dwellMinutes),
     }
 
 
@@ -296,3 +285,26 @@ def set_step_sample(request, recording_id: UUID, payload: StepSampleIn):
     )
     recording.save(update_fields=["step_count", "updated_at"])
     return serialize_recording(recording)
+
+
+@router.delete("/history", response={204: None}, auth=bearer_auth)
+def clear_history(request):
+    MobilityRecording.objects.filter(user=request.auth).delete()
+    return 204, None
+
+
+@router.get("/export", auth=bearer_auth)
+def export_history(request, start: date, end: date, dwellMinutes: float = DEFAULT_DWELL_MINUTES):
+    if end < start:
+        raise HttpError(400, "end must not be before start.")
+    if (end - start).days > 366:
+        raise HttpError(400, "Export range cannot exceed 366 days.")
+    payload = build_export_payload(request.auth, start, end, dwellMinutes)
+    response = HttpResponse(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        content_type="application/json",
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="location-history-{start.isoformat()}-to-{end.isoformat()}.json"'
+    )
+    return response

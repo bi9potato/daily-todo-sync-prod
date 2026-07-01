@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  PanResponder,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -11,14 +12,19 @@ import {
   Switch,
   Text,
   View,
+  type GestureResponderEvent,
 } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
+import * as Sharing from "expo-sharing";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
-import { RouteMap } from "@/components/RouteMap";
+import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
 import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
 import {
+  clearMobilityHistory,
+  exportMobilityHistory,
   getMobilityDay,
   startMobilityRecording,
   stopMobilityRecording,
@@ -28,13 +34,17 @@ import { beginMobilityActivation } from "@/lib/mobility-activation";
 import {
   clearActiveMobilityRecordingId,
   DEFAULT_VISIT_DWELL_MINUTES,
+  getAutoTrackingEnabled,
   getVisitDwellMinutes,
+  hasAutoTrackingPreference,
   setActiveMobilityRecordingId,
+  setAutoTrackingEnabled,
   setVisitDwellMinutes,
   VISIT_DWELL_MINUTE_OPTIONS,
 } from "@/lib/mobility-storage";
 import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import {
+  clearNativeMobilityQueue,
   getLatestNativeMobilityPoint,
   isBatteryOptimizationDisabled,
   openBatteryOptimizationSettings,
@@ -46,7 +56,14 @@ import {
 } from "@/lib/mobility-tracking";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
-import type { MobilityDay, MobilityPoint, MobilityRecording } from "@/types";
+import type {
+  MobilityDay,
+  MobilityPoint,
+  MobilityRecording,
+  MobilitySegment,
+} from "@/types";
+
+const PLAYBACK_SPEED_OPTIONS = [1, 2, 5, 10] as const;
 
 function explainBackgroundPermission() {
   if (Platform.OS !== "android") {
@@ -283,18 +300,36 @@ export function MobilityScreen({
   }, []);
 
   const dayQuery = useQuery({
-    queryKey: ["mobility-day", selectedDate],
-    queryFn: () => getMobilityDay(selectedDate),
+    queryKey: ["mobility-day", selectedDate, visitDwellMinutes],
+    queryFn: () => getMobilityDay(selectedDate, visitDwellMinutes),
   });
   const todayQuery = useQuery({
-    queryKey: ["mobility-day", today],
-    queryFn: () => getMobilityDay(today),
+    queryKey: ["mobility-day", today, visitDwellMinutes],
+    queryFn: () => getMobilityDay(today, visitDwellMinutes),
     refetchInterval: (query) =>
       query.state.data?.activeRecording ? 5_000 : false,
   });
   const activeRecording = todayQuery.data?.activeRecording ?? null;
   const isToday = selectedDate === today;
   const recordingEnabled = Boolean(activeRecording);
+
+  // Continuous tracking has no per-day start/stop button anymore, so the
+  // first time this runs after upgrading from the old manual toggle, adopt
+  // whatever is already running instead of leaving the preference unset.
+  useEffect(() => {
+    if (!activeRecording) {
+      return;
+    }
+    let cancelled = false;
+    void hasAutoTrackingPreference().then((hasPreference) => {
+      if (!cancelled && !hasPreference) {
+        void setAutoTrackingEnabled(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRecording]);
 
   const startMutation = useMutation({
     mutationFn: async () => {
@@ -353,6 +388,7 @@ export function MobilityScreen({
           });
           throw error;
         }
+        await setAutoTrackingEnabled(true);
         return recording;
       } finally {
         finishActivation();
@@ -364,7 +400,7 @@ export function MobilityScreen({
       });
     },
     onError: (error) => {
-      setActionError(error.message || "无法开启持续记录");
+      setActionError(error.message || "无法开启自动记录");
     },
   });
 
@@ -382,6 +418,7 @@ export function MobilityScreen({
         await clearActiveMobilityRecordingId().catch((error) => {
           console.warn("Mobility active recording cleanup failed", error);
         });
+        await setAutoTrackingEnabled(false);
       }
     },
     onSuccess: async () => {
@@ -390,9 +427,86 @@ export function MobilityScreen({
       });
     },
     onError: (error) => {
-      setActionError(error.message || "无法关闭持续记录");
+      setActionError(error.message || "无法关闭自动记录");
     },
   });
+
+  const clearHistoryMutation = useMutation({
+    mutationFn: async () => {
+      setActionError("");
+      recordClientLog("info", "Mobility clear history requested", {
+        source: "mobility",
+      });
+      await flushClientLogs();
+      await clearMobilityHistory();
+      await clearNativeMobilityQueue().catch((error) => {
+        console.warn("Mobility native queue clear failed", error);
+      });
+      setLivePoints([]);
+      latestLivePointRef.current = "";
+      const shouldResume = recordingEnabled && (await getAutoTrackingEnabled());
+      if (shouldResume) {
+        const recording = await startMobilityRecording();
+        await setActiveMobilityRecordingId(recording.id);
+        await startMobilityLocationTracking({
+          background: supportsNativeBackgroundLocationTracking(),
+          manual: true,
+          recordingId: recording.id,
+        }).catch((error) => {
+          console.warn("Mobility restart after clearing history failed", error);
+        });
+      }
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["mobility-day"] });
+    },
+    onError: (error) => {
+      setActionError(error.message || "无法清除足迹历史");
+    },
+  });
+
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      setActionError("");
+      recordClientLog("info", "Mobility export requested", {
+        source: "mobility",
+        context: { date: selectedDate },
+      });
+      await flushClientLogs();
+      const payload = await exportMobilityHistory(selectedDate, selectedDate);
+      const fileUri = `${FileSystem.cacheDirectory}mobility-timeline-${selectedDate}.json`;
+      await FileSystem.writeAsStringAsync(
+        fileUri,
+        JSON.stringify(payload, null, 2),
+      );
+      if (!(await Sharing.isAvailableAsync())) {
+        throw new Error("当前设备不支持分享文件。");
+      }
+      await Sharing.shareAsync(fileUri, {
+        dialogTitle: "导出足迹数据",
+        mimeType: "application/json",
+      });
+    },
+    onError: (error) => {
+      setActionError(error.message || "导出失败");
+    },
+  });
+
+  const confirmClearHistory = useCallback(() => {
+    Alert.alert(
+      "清除足迹历史记录",
+      "此操作将永久删除你的全部足迹记录（本地与服务器），且无法恢复。是否继续？",
+      [
+        { text: "取消", style: "cancel" },
+        {
+          text: "删除",
+          style: "destructive",
+          onPress: () => clearHistoryMutation.mutate(),
+        },
+      ],
+      { cancelable: true },
+    );
+  }, [clearHistoryMutation]);
 
   useEffect(() => {
     if (activeRecording?.id) {
@@ -447,8 +561,62 @@ export function MobilityScreen({
       ),
     [dayQuery.data?.points, isToday, livePoints, recordingEnabled],
   );
-  const places = useVisitedPlaces(routePoints, visitDwellMinutes);
+  const timelineSegments = dayQuery.data?.segments ?? [];
+  const segmentPlaceNames = useSegmentPlaceNames(timelineSegments);
   const latestLivePoint = recordingEnabled ? (livePoints.at(-1) ?? null) : null;
+
+  const routeMapRef = useRef<RouteMapHandle>(null);
+  const [mapAvailable, setMapAvailable] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRatio, setPlaybackRatio] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+
+  const changeSelectedDate = useCallback(
+    (updater: (date: string) => string) => {
+      setSelectedDate(updater);
+      setIsPlaying(false);
+      setPlaybackRatio(0);
+    },
+    [],
+  );
+
+  const handleMapFallback = useCallback((fallback: boolean) => {
+    setMapAvailable(!fallback);
+  }, []);
+
+  const handlePlaybackProgress = useCallback((ratio: number) => {
+    setPlaybackRatio(ratio);
+  }, []);
+
+  const handlePlaybackEnded = useCallback(() => {
+    setIsPlaying(false);
+  }, []);
+
+  const togglePlayback = useCallback(() => {
+    if (isPlaying) {
+      routeMapRef.current?.pause();
+      setIsPlaying(false);
+    } else {
+      routeMapRef.current?.play(playbackSpeed);
+      setIsPlaying(true);
+    }
+  }, [isPlaying, playbackSpeed]);
+
+  const seekPlayback = useCallback((ratio: number) => {
+    setPlaybackRatio(ratio);
+    setIsPlaying(false);
+    routeMapRef.current?.seek(ratio);
+  }, []);
+
+  const choosePlaybackSpeed = useCallback(
+    (speed: number) => {
+      setPlaybackSpeed(speed);
+      if (isPlaying) {
+        routeMapRef.current?.play(speed);
+      }
+    },
+    [isPlaying],
+  );
   const busy = startMutation.isPending || stopMutation.isPending;
   const totalSteps = dayQuery.data?.stepCount ?? 0;
   const backgroundTrackingHealthy =
@@ -476,7 +644,7 @@ export function MobilityScreen({
       <View style={styles.heading}>
         <View>
           <Text style={styles.title}>足迹地图</Text>
-          <Text style={styles.subtitle}>打开后实时记录路线，关闭开关才会停止</Text>
+          <Text style={styles.subtitle}>开启后持续自动记录，无需每天手动开关</Text>
         </View>
         {recordingEnabled ? (
           <View style={styles.liveBadge}>
@@ -488,11 +656,11 @@ export function MobilityScreen({
 
       <View style={styles.authorizationCard}>
         <View style={styles.authorizationCopy}>
-          <Text style={styles.authorizationTitle}>足迹记录</Text>
+          <Text style={styles.authorizationTitle}>自动记录足迹</Text>
           <Text style={styles.authorizationDescription}>
             {recordingEnabled
               ? backgroundTrackingHealthy
-                ? "正在记录；应用关闭后后台服务也会继续写入路线"
+                ? "正在持续记录；应用关闭后后台服务也会继续写入路线"
                 : "已开启记录，正在等待原生定位服务恢复"
               : "未开启，不会获取位置和活动数据"}
           </Text>
@@ -522,7 +690,7 @@ export function MobilityScreen({
       <View style={styles.datePicker}>
         <Pressable
           accessibilityLabel="前一天"
-          onPress={() => setSelectedDate((date) => addDays(date, -1))}
+          onPress={() => changeSelectedDate((date) => addDays(date, -1))}
           style={styles.dateButton}>
           <AppIcon name="chevron-back" color={colors.text} size={20} />
         </Pressable>
@@ -533,7 +701,7 @@ export function MobilityScreen({
         <Pressable
           accessibilityLabel="后一天"
           disabled={isToday}
-          onPress={() => setSelectedDate((date) => addDays(date, 1))}
+          onPress={() => changeSelectedDate((date) => addDays(date, 1))}
           style={[styles.dateButton, isToday && styles.dateButtonDisabled]}>
           <AppIcon name="chevron-forward" color={colors.text} size={20} />
         </Pressable>
@@ -547,11 +715,60 @@ export function MobilityScreen({
         ) : (
           <RouteMap
             key={selectedDate}
+            onFallback={handleMapFallback}
+            onPlaybackEnded={handlePlaybackEnded}
+            onPlaybackProgress={handlePlaybackProgress}
             points={routePoints}
+            ref={routeMapRef}
           />
         )}
       </View>
       <Text style={styles.mapHint}>双指缩放或使用地图按钮 · 拖动查看路线</Text>
+
+      {mapAvailable && routePoints.length > 1 ? (
+        <View style={styles.playbackBar}>
+          <Pressable
+            accessibilityLabel={isPlaying ? "暂停回放" : "回放轨迹"}
+            accessibilityRole="button"
+            onPress={togglePlayback}
+            style={({ pressed }) => [
+              styles.playbackButton,
+              pressed && styles.pressed,
+            ]}>
+            <AppIcon
+              color={colors.white}
+              name={isPlaying ? "pause" : "play"}
+              size={17}
+            />
+          </Pressable>
+          <PlaybackScrubber onSeek={seekPlayback} ratio={playbackRatio} />
+          <View style={styles.speedOptions}>
+            {PLAYBACK_SPEED_OPTIONS.map((speed) => {
+              const active = speed === playbackSpeed;
+              return (
+                <Pressable
+                  accessibilityLabel={`${speed} 倍速回放`}
+                  accessibilityRole="button"
+                  key={speed}
+                  onPress={() => choosePlaybackSpeed(speed)}
+                  style={({ pressed }) => [
+                    styles.speedChip,
+                    active && styles.speedChipActive,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text
+                    style={[
+                      styles.speedChipText,
+                      active && styles.speedChipTextActive,
+                    ]}>
+                    {speed}x
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.distanceSummary}>
         <View style={styles.distanceCopy}>
@@ -565,16 +782,33 @@ export function MobilityScreen({
             </Text>
           </View>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => setShowDetails(true)}
-          style={({ pressed }) => [
-            styles.detailsButton,
-            pressed && styles.pressed,
-          ]}>
-          <Text style={styles.detailsButtonText}>查看详情</Text>
-          <AppIcon name="chevron-forward" color={colors.accent} size={18} />
-        </Pressable>
+        <View style={styles.summaryActions}>
+          <Pressable
+            accessibilityLabel="导出本日足迹数据"
+            accessibilityRole="button"
+            disabled={exportMutation.isPending || !routePoints.length}
+            onPress={() => exportMutation.mutate()}
+            style={({ pressed }) => [
+              styles.iconButton,
+              pressed && styles.pressed,
+            ]}>
+            {exportMutation.isPending ? (
+              <ActivityIndicator color={colors.accent} size="small" />
+            ) : (
+              <AppIcon name="share-outline" color={colors.accent} size={19} />
+            )}
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowDetails(true)}
+            style={({ pressed }) => [
+              styles.detailsButton,
+              pressed && styles.pressed,
+            ]}>
+            <Text style={styles.detailsButtonText}>查看详情</Text>
+            <AppIcon name="chevron-forward" color={colors.accent} size={18} />
+          </Pressable>
+        </View>
       </View>
 
       {actionError ? (
@@ -638,7 +872,7 @@ export function MobilityScreen({
 
       <View style={styles.placesSection}>
         <View style={styles.placesHeading}>
-          <Text style={styles.sectionTitle}>自动到访地点</Text>
+          <Text style={styles.sectionTitle}>足迹时间轴</Text>
         </View>
         <View style={styles.dwellSettingRow}>
           <Text style={styles.dwellSettingLabel}>停留多久算到访</Text>
@@ -668,30 +902,81 @@ export function MobilityScreen({
             })}
           </View>
         </View>
-        {places.length ? (
-          places.map((place, index) => (
-            <View key={`${place.recordedAt}-${index}`} style={styles.placeRow}>
-              <View style={styles.timeline}>
-                <View style={styles.placeDot} />
-                {index < places.length - 1 ? <View style={styles.placeLine} /> : null}
+        {timelineSegments.length ? (
+          timelineSegments.map((segment, index) => {
+            const isLast = index === timelineSegments.length - 1;
+            if (segment.type === "visit") {
+              const label =
+                segmentPlaceNames[segmentKey(segment)] || `停留地点 ${index + 1}`;
+              return (
+                <View key={`${segment.startTime}-${index}`} style={styles.placeRow}>
+                  <View style={styles.timeline}>
+                    <View style={styles.placeDot} />
+                    {!isLast ? <View style={styles.placeLine} /> : null}
+                  </View>
+                  <View style={styles.placeCopy}>
+                    <Text style={styles.placeName}>{label}</Text>
+                    <Text style={styles.placeTime}>
+                      {formatSegmentTimeRange(segment)} · 停留{" "}
+                      {segment.durationMinutes} 分钟
+                    </Text>
+                  </View>
+                </View>
+              );
+            }
+            const modeLabel = segment.mode ? TRIP_MODE_LABEL[segment.mode] : null;
+            const modeIcon = segment.mode ? TRIP_MODE_ICON[segment.mode] : null;
+            return (
+              <View key={`${segment.startTime}-${index}`} style={styles.placeRow}>
+                <View style={styles.timeline}>
+                  <View style={styles.tripDot} />
+                  {!isLast ? <View style={styles.placeLine} /> : null}
+                </View>
+                <View style={styles.placeCopy}>
+                  <View style={styles.tripHeading}>
+                    <AppIcon
+                      color={colors.textMuted}
+                      name={modeIcon ?? "walk-outline"}
+                      size={15}
+                    />
+                    <Text style={styles.placeName}>
+                      {modeLabel ?? "移动"}
+                      {segment.distanceMeters != null
+                        ? ` · ${(segment.distanceMeters / 1000).toFixed(2)} 公里`
+                        : ""}
+                    </Text>
+                  </View>
+                  <Text style={styles.placeTime}>
+                    {formatSegmentTimeRange(segment)} · {segment.durationMinutes}{" "}
+                    分钟
+                  </Text>
+                </View>
               </View>
-              <View style={styles.placeCopy}>
-                <Text style={styles.placeName}>{place.label}</Text>
-                <Text style={styles.placeTime}>
-                  {new Date(place.recordedAt).toLocaleTimeString("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </Text>
-              </View>
-            </View>
-          ))
+            );
+          })
         ) : (
           <Text style={styles.emptyPlaces}>
-            在约 80 米范围停留满 {visitDwellMinutes} 分钟后自动显示，无需手动标记
+            在约 80 米范围停留满 {visitDwellMinutes} 分钟后自动显示到访地点，途中的移动会显示为行程
           </Text>
         )}
       </View>
+
+      <Pressable
+        accessibilityLabel="清除足迹历史记录"
+        accessibilityRole="button"
+        disabled={clearHistoryMutation.isPending}
+        onPress={confirmClearHistory}
+        style={({ pressed }) => [
+          styles.dangerRow,
+          pressed && styles.pressed,
+        ]}>
+        {clearHistoryMutation.isPending ? (
+          <ActivityIndicator color={colors.danger} size="small" />
+        ) : (
+          <AppIcon name="trash-outline" color={colors.danger} size={18} />
+        )}
+        <Text style={styles.dangerRowText}>清除足迹历史记录</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -841,79 +1126,69 @@ function mergeMobilityPoints(
   ];
 }
 
-function distanceMeters(first: MobilityPoint, second: MobilityPoint) {
-  const radians = (value: number) => (value * Math.PI) / 180;
-  const latitudeDelta = radians(second.latitude - first.latitude);
-  const longitudeDelta = radians(second.longitude - first.longitude);
-  const firstLatitude = radians(first.latitude);
-  const secondLatitude = radians(second.latitude);
-  const value =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(firstLatitude) *
-      Math.cos(secondLatitude) *
-      Math.sin(longitudeDelta / 2) ** 2;
-  return 12_742_000 * Math.asin(Math.sqrt(value));
+// Visit/Trip segmentation now happens server-side (mobility/segmentation.py)
+// so the Timeline UI, the map, and the Google Takeout export all agree on
+// the same boundaries. The client's only remaining job is turning a visit's
+// coordinate into a place name, the same on-device reverse geocode it did
+// before this moved server-side.
+function segmentKey(segment: MobilitySegment) {
+  return `${segment.startTime}:${segment.latitude?.toFixed(5)}:${segment.longitude?.toFixed(5)}`;
 }
 
-function getVisitCandidates(points: MobilityPoint[], dwellMinutes: number) {
-  const visits: MobilityPoint[] = [];
-  const dwellMs = dwellMinutes * 60_000;
-  let anchorIndex = 0;
-  for (let index = 1; index <= points.length; index += 1) {
-    const anchor = points[anchorIndex];
-    const point = points[index];
-    if (point && distanceMeters(anchor, point) <= 80) {
-      continue;
-    }
-    const lastNearbyPoint = points[index - 1];
-    const dwellTime =
-      new Date(lastNearbyPoint.recordedAt).getTime() -
-      new Date(anchor.recordedAt).getTime();
-    if (dwellTime >= dwellMs) {
-      const previousVisit = visits.at(-1);
-      if (!previousVisit || distanceMeters(previousVisit, anchor) > 120) {
-        visits.push(anchor);
-      }
-    }
-    anchorIndex = index;
-  }
-  return visits;
+function formatSegmentTimeRange(segment: MobilitySegment) {
+  const format = (value: string) =>
+    new Date(value).toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  return `${format(segment.startTime)} - ${format(segment.endTime)}`;
 }
 
-function visitKey(point: MobilityPoint) {
-  return `${point.recordedAt}:${point.latitude.toFixed(5)}:${point.longitude.toFixed(5)}`;
-}
+const TRIP_MODE_ICON: Record<string, React.ComponentProps<typeof AppIcon>["name"]> = {
+  WALKING: "walk-outline",
+  CYCLING: "bicycle-outline",
+  IN_VEHICLE: "car-outline",
+};
 
-function useVisitedPlaces(points: MobilityPoint[], dwellMinutes: number) {
-  const candidates = useMemo(
-    () => getVisitCandidates(points, dwellMinutes),
-    [points, dwellMinutes],
+const TRIP_MODE_LABEL: Record<string, string> = {
+  WALKING: "步行",
+  CYCLING: "骑行",
+  IN_VEHICLE: "乘车",
+};
+
+function useSegmentPlaceNames(segments: MobilitySegment[]) {
+  const visits = useMemo(
+    () => segments.filter((segment) => segment.type === "visit"),
+    [segments],
   );
   const [resolvedNames, setResolvedNames] = useState<Record<string, string>>(
     {},
   );
-  const unresolvedKeys = candidates
-    .filter((point) => !point.placeName && !resolvedNames[visitKey(point)])
-    .map(visitKey)
+  const unresolvedKeys = visits
+    .filter((segment) => !resolvedNames[segmentKey(segment)])
+    .map(segmentKey)
     .join("|");
 
   useEffect(() => {
-    const unresolved = candidates.filter(
-      (point) => !point.placeName && !resolvedNames[visitKey(point)],
+    const unresolved = visits.filter(
+      (segment) => !resolvedNames[segmentKey(segment)],
     );
     if (!unresolved.length) {
       return;
     }
     let cancelled = false;
     void Promise.all(
-      unresolved.map(async (point, index) => {
+      unresolved.map(async (segment, index) => {
+        if (segment.latitude == null || segment.longitude == null) {
+          return [segmentKey(segment), `停留地点 ${index + 1}`] as const;
+        }
         try {
           const addresses = await Location.reverseGeocodeAsync({
-            latitude: point.latitude,
-            longitude: point.longitude,
+            latitude: segment.latitude,
+            longitude: segment.longitude,
           });
           return [
-            visitKey(point),
+            segmentKey(segment),
             addressLabel(addresses[0]) || `停留地点 ${index + 1}`,
           ] as const;
         } catch (error) {
@@ -923,7 +1198,7 @@ function useVisitedPlaces(points: MobilityPoint[], dwellMinutes: number) {
               message: error instanceof Error ? error.message : String(error),
             },
           });
-          return [visitKey(point), `停留地点 ${index + 1}`] as const;
+          return [segmentKey(segment), `停留地点 ${index + 1}`] as const;
         }
       }),
     ).then((entries) => {
@@ -937,15 +1212,53 @@ function useVisitedPlaces(points: MobilityPoint[], dwellMinutes: number) {
     return () => {
       cancelled = true;
     };
-  }, [candidates, resolvedNames, unresolvedKeys]);
+  }, [visits, resolvedNames, unresolvedKeys]);
 
-  return candidates.map((point, index) => ({
-    ...point,
-    label:
-      point.placeName ||
-      resolvedNames[visitKey(point)] ||
-      `停留地点 ${index + 1}`,
-  }));
+  return resolvedNames;
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function PlaybackScrubber({
+  onSeek,
+  ratio,
+}: {
+  onSeek: (ratio: number) => void;
+  ratio: number;
+}) {
+  const [width, setWidth] = useState(0);
+  const handleTouch = (event: GestureResponderEvent) => {
+    if (width > 0) {
+      onSeek(clamp01(event.nativeEvent.locationX / width));
+    }
+  };
+  // Recreated every render (cheap: a plain config object) so the handlers
+  // always close over the latest `width`/`onSeek` without needing a ref,
+  // which this project's stricter react-hooks/refs rule disallows anywhere
+  // near a memoized initializer.
+  const panResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: handleTouch,
+    onPanResponderMove: handleTouch,
+  });
+
+  return (
+    <View
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+      style={styles.scrubberTrack}
+      {...panResponder.panHandlers}>
+      <View style={[styles.scrubberFill, { width: `${ratio * 100}%` }]} />
+      <View
+        style={[
+          styles.scrubberThumb,
+          { left: `${clamp01(ratio) * 100}%` },
+        ]}
+      />
+    </View>
+  );
 }
 
 function Metric({
@@ -1079,6 +1392,70 @@ const styles = StyleSheet.create({
     marginTop: -spacing.sm,
     textAlign: "center",
   },
+  playbackBar: {
+    ...shadows.card,
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.sm,
+    padding: spacing.sm,
+  },
+  playbackButton: {
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    height: 36,
+    justifyContent: "center",
+    width: 36,
+  },
+  scrubberTrack: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    flex: 1,
+    height: 20,
+    justifyContent: "center",
+  },
+  scrubberFill: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    height: 4,
+    position: "absolute",
+    left: 0,
+  },
+  scrubberThumb: {
+    backgroundColor: colors.accent,
+    borderColor: colors.white,
+    borderRadius: radius.full,
+    borderWidth: 2,
+    height: 16,
+    marginLeft: -8,
+    position: "absolute",
+    width: 16,
+  },
+  speedOptions: {
+    flexDirection: "row",
+    gap: 4,
+  },
+  speedChip: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  speedChipActive: {
+    backgroundColor: colors.accent,
+  },
+  speedChipText: {
+    ...typography.label,
+    color: colors.textMuted,
+    fontSize: 11,
+  },
+  speedChipTextActive: {
+    color: colors.white,
+  },
   metrics: {
     ...shadows.card,
     backgroundColor: colors.surface,
@@ -1128,6 +1505,19 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: 1,
+  },
+  summaryActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  iconButton: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
   },
   detailsButton: {
     alignItems: "center",
@@ -1314,6 +1704,20 @@ const styles = StyleSheet.create({
     marginVertical: 3,
     width: 1,
   },
+  tripDot: {
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.full,
+    borderWidth: 2,
+    height: 13,
+    marginTop: 3,
+    width: 13,
+  },
+  tripHeading: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 5,
+  },
   placeCopy: {
     flex: 1,
     gap: 2,
@@ -1339,5 +1743,16 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     lineHeight: 18,
     textAlign: "center",
+  },
+  dangerRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "center",
+    paddingVertical: spacing.sm,
+  },
+  dangerRowText: {
+    ...typography.label,
+    color: colors.danger,
   },
 });

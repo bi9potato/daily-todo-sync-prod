@@ -18,6 +18,7 @@ type NativeMobilityModule = {
   getQueuedPointCount: () => Promise<number>;
   isBatteryOptimizationDisabled: () => Promise<boolean>;
   openBatteryOptimizationSettings: () => Promise<boolean>;
+  clearLocalQueue: () => Promise<boolean>;
 };
 
 const NativeMobility = NativeModules.NativeMobility as
@@ -120,4 +121,11 @@ export async function getNativeMobilityQueuedPointCount() {
     return 0;
   }
   return NativeMobility.getQueuedPointCount();
+}
+
+export async function clearNativeMobilityQueue() {
+  if (!isNativeMobilityServiceAvailable() || !NativeMobility) {
+    return false;
+  }
+  return NativeMobility.clearLocalQueue();
 }

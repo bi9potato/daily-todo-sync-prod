@@ -4,6 +4,8 @@ import { Platform } from "react-native";
 const ACTIVE_RECORDING_KEY = "daily-todo-sync.active-mobility-recording";
 const VISIT_DWELL_MINUTES_KEY =
   "daily-todo-sync.mobility-visit-dwell-minutes";
+const AUTO_TRACKING_ENABLED_KEY =
+  "daily-todo-sync.mobility-auto-tracking-enabled";
 
 // Matches the dwell time the auto-visit detector used before this became a
 // user setting, so upgrading the app doesn't change anyone's existing
@@ -52,4 +54,36 @@ export async function setVisitDwellMinutes(minutes: number) {
     return;
   }
   await SecureStore.setItemAsync(VISIT_DWELL_MINUTES_KEY, value);
+}
+
+// Whether continuous, automatic footprint tracking is turned on (the
+// Google Maps "Location History" style master switch that replaced the old
+// per-session start/stop toggle).
+export async function getAutoTrackingEnabled() {
+  const raw =
+    Platform.OS === "web"
+      ? (globalThis.localStorage?.getItem(AUTO_TRACKING_ENABLED_KEY) ?? null)
+      : await SecureStore.getItemAsync(AUTO_TRACKING_ENABLED_KEY);
+  return raw === "true";
+}
+
+export async function setAutoTrackingEnabled(enabled: boolean) {
+  const value = enabled ? "true" : "false";
+  if (Platform.OS === "web") {
+    globalThis.localStorage?.setItem(AUTO_TRACKING_ENABLED_KEY, value);
+    return;
+  }
+  await SecureStore.setItemAsync(AUTO_TRACKING_ENABLED_KEY, value);
+}
+
+// True once the user has ever seen/touched the auto-tracking switch.
+// Lets a one-time migration tell "never configured" apart from "explicitly
+// turned off", so upgrading from the old manual start/stop toggle can adopt
+// an already-running recording instead of turning tracking off underfoot.
+export async function hasAutoTrackingPreference() {
+  const raw =
+    Platform.OS === "web"
+      ? (globalThis.localStorage?.getItem(AUTO_TRACKING_ENABLED_KEY) ?? null)
+      : await SecureStore.getItemAsync(AUTO_TRACKING_ENABLED_KEY);
+  return raw !== null;
 }

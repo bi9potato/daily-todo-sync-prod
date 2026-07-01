@@ -328,6 +328,16 @@ class NativeMobilityModule(
   fun getQueuedPointCount(promise: Promise) {
     promise.resolve(NativeMobilityService.getQueuedPointCount(reactContext))
   }
+
+  @ReactMethod
+  fun clearLocalQueue(promise: Promise) {
+    try {
+      NativeMobilityService.clearLocalQueue(reactContext)
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("native_mobility_clear_queue_failed", error)
+    }
+  }
 }
 `;
 
@@ -381,6 +391,11 @@ class NativeMobilityService : Service(), SensorEventListener {
   private var recordingId = ""
   private var apiBaseUrl = ""
   private var accessToken = ""
+  // The local calendar day the current recordingId was opened for. Continuous
+  // tracking never gets an explicit "stop" from the user, so the service
+  // itself has to notice a day boundary and roll the backend recording over,
+  // the same way Google Maps buckets Timeline data by day.
+  private var recordingDate = ""
   @Volatile private var stepCount = 0
   @Volatile private var syncedStepCount = 0
   private var lastStepSensorValue: Float? = null
@@ -466,6 +481,7 @@ class NativeMobilityService : Service(), SensorEventListener {
           recordingId = nextRecordingId
           apiBaseUrl = intent.getStringExtra(EXTRA_API_BASE_URL).orEmpty().trimEnd('/')
           accessToken = intent.getStringExtra(EXTRA_ACCESS_TOKEN).orEmpty()
+          recordingDate = currentLocalDateString()
           persistConfig()
           startTracking()
         }
@@ -625,6 +641,10 @@ class NativeMobilityService : Service(), SensorEventListener {
       return
     }
     if (!::sensorManager.isInitialized) return
+    // Idempotent: continuous tracking can re-enter startTracking() (e.g. a
+    // day-boundary recording rollover) while a listener is already
+    // registered, and registering twice would double-count every step.
+    sensorManager.unregisterListener(this)
     stepSensor =
       sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
         ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
@@ -727,6 +747,7 @@ class NativeMobilityService : Service(), SensorEventListener {
   private fun scheduleUpload() {
     if (uploadThread?.isAlive == true) return
     uploadThread = thread(name = "NativeMobilityUpload") {
+      rotateRecordingIfDayChanged()
       flushQueue()
     }
   }
@@ -845,6 +866,74 @@ class NativeMobilityService : Service(), SensorEventListener {
     }
   }
 
+  private fun currentLocalDateString(): String = LOCAL_DATE_FORMAT.get().format(Date())
+
+  // Continuous tracking has no user-driven stop/start, so this is what turns
+  // "one recording forever" into "one recording per day": whenever an upload
+  // runs and the wall-clock day no longer matches the day the current
+  // recording was opened for, close it out on the backend and open a fresh
+  // one before flushing anything. Runs on the background upload thread only.
+  private fun rotateRecordingIfDayChanged() {
+    val today = currentLocalDateString()
+    if (recordingId.isBlank() || apiBaseUrl.isBlank() || accessToken.isBlank()) return
+    if (recordingDate.isNotBlank() && recordingDate == today) return
+    val staleRecordingId = recordingId
+    stopRecordingOnServer(staleRecordingId)
+    val newRecordingId = startRecordingOnServer() ?: return
+    restoreStepState(newRecordingId)
+    recordingId = newRecordingId
+    recordingDate = today
+    persistConfig()
+  }
+
+  private fun stopRecordingOnServer(targetRecordingId: String): Boolean {
+    if (targetRecordingId.isBlank()) return false
+    return try {
+      val url = URL("\${apiBaseUrl}/mobility/recordings/\${targetRecordingId}/stop")
+      val connection = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        connectTimeout = NETWORK_TIMEOUT_MS
+        readTimeout = NETWORK_TIMEOUT_MS
+        doOutput = true
+        setRequestProperty("Authorization", "Bearer \${accessToken}")
+        setRequestProperty("Content-Type", "application/json")
+      }
+      connection.outputStream.use { it.write(ByteArray(0)) }
+      val status = connection.responseCode
+      if (status in 200..299) connection.inputStream?.close() else connection.errorStream?.close()
+      connection.disconnect()
+      status in 200..299 || status == 404
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun startRecordingOnServer(): String? {
+    return try {
+      val url = URL("\${apiBaseUrl}/mobility/recordings/start")
+      val connection = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        connectTimeout = NETWORK_TIMEOUT_MS
+        readTimeout = NETWORK_TIMEOUT_MS
+        doOutput = true
+        setRequestProperty("Authorization", "Bearer \${accessToken}")
+        setRequestProperty("Content-Type", "application/json")
+      }
+      connection.outputStream.use { it.write(ByteArray(0)) }
+      val status = connection.responseCode
+      val body = (if (status in 200..299) connection.inputStream else connection.errorStream)
+        ?.bufferedReader()?.use { it.readText() }
+      connection.disconnect()
+      if (status in 200..299 && body != null) {
+        JSONObject(body).optString("id").ifBlank { null }
+      } else {
+        null
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
   private fun readQueue(): JSONArray {
     return try {
       JSONArray(queueFile().readText())
@@ -927,6 +1016,7 @@ class NativeMobilityService : Service(), SensorEventListener {
       .putString("recordingId", recordingId)
       .putString("apiBaseUrl", apiBaseUrl)
       .putString("accessToken", accessToken)
+      .putString("recordingDate", recordingDate)
       .putInt("stepCount", stepCount)
       .putInt("syncedStepCount", syncedStepCount)
       .putFloat("lastStepSensorValue", lastStepSensorValue ?: -1f)
@@ -938,6 +1028,13 @@ class NativeMobilityService : Service(), SensorEventListener {
     recordingId = prefs.getString("recordingId", "").orEmpty()
     apiBaseUrl = prefs.getString("apiBaseUrl", "").orEmpty()
     accessToken = prefs.getString("accessToken", "").orEmpty()
+    recordingDate = prefs.getString("recordingDate", "").orEmpty()
+    if (recordingDate.isBlank() && recordingId.isNotBlank()) {
+      // Upgrading from a build that predates day-rotation: assume the
+      // existing recording started today rather than forcing an immediate,
+      // unnecessary rollover the first time this runs.
+      recordingDate = currentLocalDateString()
+    }
     stepCount = prefs.getInt("stepCount", 0)
     syncedStepCount = prefs.getInt("syncedStepCount", 0)
     lastStepSensorValue =
@@ -1008,6 +1105,11 @@ class NativeMobilityService : Service(), SensorEventListener {
       SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
       }
+    }
+    // Deliberately uses the device's default timezone (unlike ISO_FORMAT) so
+    // day rotation follows the user's local calendar day.
+    private val LOCAL_DATE_FORMAT = ThreadLocal.withInitial {
+      SimpleDateFormat("yyyy-MM-dd", Locale.US)
     }
 
     fun isRunning(): Boolean = serviceRunning
@@ -1090,6 +1192,23 @@ class NativeMobilityService : Service(), SensorEventListener {
       } catch (_: Throwable) {
         queuedPointCount
       }
+    }
+
+    // Wipes the not-yet-uploaded points queue after the user clears their
+    // history, so stale points from a just-deleted recording don't get
+    // re-uploaded. Any points already in flight that do land on a deleted
+    // recording simply hit a 404, which flushQueue already treats as done.
+    fun clearLocalQueue(context: Context) {
+      try {
+        val file = File(
+          File(context.filesDir, "ExperienceData/${PACKAGE_NAME}"),
+          QUEUE_FILE_NAME,
+        )
+        file.writeText(JSONArray().toString())
+      } catch (_: Throwable) {
+        // Best effort - a stale queue self-heals via the 404 handling above.
+      }
+      queuedPointCount = 0
     }
   }
 }

@@ -124,6 +124,19 @@ export type MobilityRecording = {
   durationMinutes: number;
 };
 
+export type MobilitySegment = {
+  type: "visit" | "trip";
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  latitude: number | null;
+  longitude: number | null;
+  endLatitude: number | null;
+  endLongitude: number | null;
+  distanceMeters: number | null;
+  mode: "WALKING" | "CYCLING" | "IN_VEHICLE" | null;
+};
+
 export type MobilityDay = {
   date: string;
   stepCount: number;
@@ -132,6 +145,11 @@ export type MobilityDay = {
   activeRecording: MobilityRecording | null;
   recordings: MobilityRecording[];
   points: MobilityPoint[];
+  segments: MobilitySegment[];
+};
+
+export type MobilityTimelineExport = {
+  timelineObjects: unknown[];
 };
 
 export type MobilityPointInput = {
