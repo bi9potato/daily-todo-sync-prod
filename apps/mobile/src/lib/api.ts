@@ -25,7 +25,7 @@ import type {
 } from "@/types";
 
 const DEFAULT_API_URL = "https://68.183.180.19.sslip.io/api";
-const API_BASE_URL = (
+export const API_BASE_URL = (
   process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_URL
 ).replace(/\/$/, "");
 

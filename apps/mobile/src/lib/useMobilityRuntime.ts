@@ -10,6 +10,7 @@ import {
 import {
   flushMobilityPointQueue,
   getQueuedMobilityPointCount,
+  importNativeMobilityPointQueue,
 } from "./mobility-queue";
 import {
   clearActiveMobilityRecordingId,
@@ -34,6 +35,7 @@ export type MobilityRuntimeState = MobilityDiagnosticState & {
   foregroundWatchActive: boolean;
   foregroundPermission: boolean;
   nativeBackgroundAvailable: boolean;
+  nativeQueuedPointCount?: number;
   nativeTaskActive: boolean;
   queuedPointCount: number;
   stepSource: MobilityStepSource;
@@ -47,6 +49,7 @@ const INITIAL_STATE: MobilityRuntimeState = {
   lastLocationAt: null,
   lastSyncAt: null,
   nativeBackgroundAvailable: false,
+  nativeQueuedPointCount: 0,
   nativeTaskActive: false,
   queuedPointCount: 0,
   recoveredAt: null,
@@ -67,10 +70,18 @@ async function getSafeMobilityDiagnostics() {
       lastLocationAt: null,
       lastSyncAt: null,
       nativeBackgroundAvailable: false,
+      nativeQueuedPointCount: 0,
       nativeTaskActive: false,
       recoveredAt: null,
     };
   }
+}
+
+function totalQueuedPointCount(
+  localQueuedPointCount: number,
+  diagnostics: Awaited<ReturnType<typeof getSafeMobilityDiagnostics>>,
+) {
+  return localQueuedPointCount + (diagnostics.nativeQueuedPointCount ?? 0);
 }
 
 export function useMobilityRuntime(today: string, enabled = true) {
@@ -113,15 +124,20 @@ export function useMobilityRuntime(today: string, enabled = true) {
           }
           await stopFallbackStepTracking();
           const diagnostics = await getSafeMobilityDiagnostics();
+          const queuedPointCount = totalQueuedPointCount(
+            await getQueuedMobilityPointCount(),
+            diagnostics,
+          );
           setRuntime({
             ...diagnostics,
-            queuedPointCount: await getQueuedMobilityPointCount(),
+            queuedPointCount,
             stepSource: "unavailable",
           });
           return;
         }
 
         await setActiveMobilityRecordingId(recording.id);
+        await importNativeMobilityPointQueue();
         const [diagnostics, stepResult] = await Promise.all([
           recoverMobilityLocationTracking(recording.id),
           reconcileMobilitySteps(recording),
@@ -135,18 +151,26 @@ export function useMobilityRuntime(today: string, enabled = true) {
             queryKey: ["mobility-day", today],
           });
         }
+        const queuedPointCount = totalQueuedPointCount(
+          await getQueuedMobilityPointCount(),
+          diagnostics,
+        );
         setRuntime({
           ...diagnostics,
-          queuedPointCount: await getQueuedMobilityPointCount(),
+          queuedPointCount,
           stepSource: stepResult.source,
         });
       } catch (error) {
         const diagnostics = await getSafeMobilityDiagnostics();
+        const queuedPointCount = totalQueuedPointCount(
+          await getQueuedMobilityPointCount(),
+          diagnostics,
+        );
         setRuntime({
           ...diagnostics,
           lastError:
             error instanceof Error ? error.message : "足迹后台服务恢复失败",
-          queuedPointCount: await getQueuedMobilityPointCount(),
+          queuedPointCount,
           stepSource: "unavailable",
         });
       } finally {

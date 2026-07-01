@@ -12,6 +12,12 @@ type QueuedBatch = {
 const QUEUE_FILE = FileSystem.documentDirectory
   ? `${FileSystem.documentDirectory}pending-mobility-points.json`
   : null;
+const NATIVE_QUEUE_FILE = FileSystem.documentDirectory
+  ? `${FileSystem.documentDirectory}native-mobility-points.json`
+  : null;
+const NATIVE_IMPORT_FILE = FileSystem.documentDirectory
+  ? `${FileSystem.documentDirectory}native-mobility-points-import.json`
+  : null;
 const FLUSH_MARKER_FILE = FileSystem.documentDirectory
   ? `${FileSystem.documentDirectory}pending-mobility-points-flush.json`
   : null;
@@ -29,11 +35,15 @@ function runQueueMutation<T>(operation: () => Promise<T>) {
 }
 
 async function readQueue(): Promise<QueuedBatch[]> {
-  if (Platform.OS === "web" || !QUEUE_FILE) {
+  return readQueueFile(QUEUE_FILE);
+}
+
+async function readQueueFile(uri: string | null): Promise<QueuedBatch[]> {
+  if (Platform.OS === "web" || !uri) {
     return [];
   }
   try {
-    const content = await FileSystem.readAsStringAsync(QUEUE_FILE);
+    const content = await FileSystem.readAsStringAsync(uri);
     const parsed = JSON.parse(content);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -138,6 +148,32 @@ export async function syncOrQueueMobilityPoints(
 ) {
   await queueMobilityPoints(recordingId, points);
   await flushMobilityPointQueue();
+}
+
+export async function importNativeMobilityPointQueue() {
+  if (Platform.OS === "web" || !NATIVE_QUEUE_FILE || !NATIVE_IMPORT_FILE) {
+    return false;
+  }
+  return runQueueMutation(async () => {
+    try {
+      await FileSystem.deleteAsync(NATIVE_IMPORT_FILE, { idempotent: true });
+      await FileSystem.moveAsync({
+        from: NATIVE_QUEUE_FILE,
+        to: NATIVE_IMPORT_FILE,
+      });
+    } catch {
+      return false;
+    }
+    const nativeBatches = await readQueueFile(NATIVE_IMPORT_FILE);
+    await FileSystem.deleteAsync(NATIVE_IMPORT_FILE, { idempotent: true }).catch(
+      () => undefined,
+    );
+    if (!nativeBatches.length) {
+      return false;
+    }
+    await writeQueue(mergeBatches([...(await readQueue()), ...nativeBatches]));
+    return true;
+  });
 }
 
 export async function flushMobilityPointQueue() {

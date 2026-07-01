@@ -8,6 +8,7 @@ import {
 } from "./mobility-storage";
 import {
   flushMobilityPointQueue,
+  importNativeMobilityPointQueue,
   maybeFlushMobilityPointQueue,
   queueMobilityPoints,
 } from "./mobility-queue";
@@ -16,6 +17,13 @@ import {
   updateMobilityDiagnostics,
 } from "./mobility-diagnostics";
 import { flushClientLogs, recordClientLog } from "./client-logs";
+import {
+  getNativeMobilityQueuedPointCount,
+  isNativeMobilityServiceAvailable,
+  isNativeMobilityServiceRunning,
+  startNativeMobilityService,
+  stopNativeMobilityService,
+} from "./mobility-native-service";
 import type { MobilityPointInput } from "@/types";
 
 export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v4";
@@ -53,6 +61,14 @@ function shouldUseAndroidForegroundLocationService() {
   }
   const apiLevel = getAndroidApiLevel();
   return apiLevel === null || apiLevel < 36;
+}
+
+function shouldUseNativeAndroidMobilityService() {
+  return (
+    Platform.OS === "android" &&
+    (getAndroidApiLevel() ?? 0) >= 36 &&
+    isNativeMobilityServiceAvailable()
+  );
 }
 
 export function supportsNativeBackgroundLocationTracking() {
@@ -163,6 +179,9 @@ export async function isMobilityLocationTrackingActive() {
   if (Platform.OS === "web") {
     return false;
   }
+  if (await isNativeMobilityServiceRunning().catch(() => false)) {
+    return true;
+  }
   for (const taskName of KNOWN_MOBILITY_LOCATION_TASKS) {
     try {
       if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
@@ -187,7 +206,8 @@ function startForegroundUploadTimer() {
     return;
   }
   foregroundUploadTimer = setInterval(() => {
-    void flushMobilityPointQueue()
+    void importNativeMobilityPointQueue()
+      .then(() => flushMobilityPointQueue())
       .then((didFlush) => {
         if (!didFlush) {
           return;
@@ -284,6 +304,9 @@ export async function stopForegroundMobilityTracking() {
   foregroundRecordingId = null;
   stopForegroundUploadTimer();
   await foregroundSyncPromise.catch(() => undefined);
+  await importNativeMobilityPointQueue().catch((error) => {
+    console.warn("Native mobility queue import failed", error);
+  });
   await flushMobilityPointQueue().catch((error) => {
     console.warn("Mobility final upload failed", error);
   });
@@ -309,6 +332,39 @@ export async function startMobilityLocationTracking({
   }
   if (!background || !supportsNativeBackgroundLocationTracking()) {
     return;
+  }
+  if (shouldUseNativeAndroidMobilityService()) {
+    try {
+      recordClientLog("info", "Mobility native Android service starting", {
+        source: "mobility",
+        context: {
+          androidApiLevel: getAndroidApiLevel(),
+        },
+      });
+      await flushClientLogs();
+      await startNativeMobilityService(activeRecordingId);
+      await updateMobilityDiagnostics({
+        lastError: "",
+        recoveredAt: new Date().toISOString(),
+      });
+      recordClientLog("info", "Mobility native Android service started", {
+        source: "mobility",
+        context: {
+          androidApiLevel: getAndroidApiLevel(),
+        },
+      });
+      await flushClientLogs();
+      return;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "原生足迹服务启动失败";
+      await updateMobilityDiagnostics({
+        lastError: `原生足迹服务启动失败，已保留前台实时记录：${message}`,
+        recoveredAt: new Date().toISOString(),
+      });
+      console.warn("Native mobility service start failed", error);
+      return;
+    }
   }
   defineMobilityLocationTask();
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(
@@ -381,6 +437,12 @@ export async function stopMobilityLocationTracking() {
     return;
   }
   await stopForegroundMobilityTracking();
+  await stopNativeMobilityService().catch((error) => {
+    console.warn("Native mobility service stop failed", error);
+  });
+  await importNativeMobilityPointQueue().catch((error) => {
+    console.warn("Native mobility queue import failed", error);
+  });
   for (const taskName of KNOWN_MOBILITY_LOCATION_TASKS) {
     try {
       if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
@@ -432,6 +494,7 @@ export async function getMobilityTrackingDiagnostics() {
       foregroundPermission: false,
       nativeTaskActive: false,
       nativeBackgroundAvailable,
+      nativeQueuedPointCount: 0,
       foregroundWatchActive,
       ...(await readMobilityDiagnostics()),
     };
@@ -446,12 +509,16 @@ export async function getMobilityTrackingDiagnostics() {
       : Promise.resolve(false),
     readMobilityDiagnostics(),
   ]);
+  const nativeQueuedPointCount = await getNativeMobilityQueuedPointCount().catch(
+    () => 0,
+  );
   return {
     backgroundPermission: background.granted,
     foregroundPermission: foreground.granted,
     foregroundWatchActive,
     nativeTaskActive,
     nativeBackgroundAvailable,
+    nativeQueuedPointCount,
     ...saved,
   };
 }

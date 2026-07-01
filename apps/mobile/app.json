@@ -68,6 +68,7 @@
           "motionPermission": "允许 Daily Todo 在足迹记录期间统计步数。"
         }
       ],
+      "./plugins/with-native-mobility-service",
       "./plugins/with-health-connect-main-activity",
       [
         "expo-image-picker",

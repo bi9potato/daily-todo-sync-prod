@@ -148,6 +148,18 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
   });
 }
 
+function getAndroidApiLevel() {
+  const version =
+    typeof Platform.Version === "string"
+      ? Number.parseInt(Platform.Version, 10)
+      : Platform.Version;
+  return Number.isFinite(version) ? version : null;
+}
+
+function shouldSkipOptionalNativeCapture() {
+  return Platform.OS === "android" && (getAndroidApiLevel() ?? 0) >= 36;
+}
+
 async function captureNamedPoint() {
   const location = await withTimeout(
     Location.getCurrentPositionAsync({
@@ -221,16 +233,32 @@ export function MobilityScreen({
           context: { nativeBackgroundAvailable },
         });
         await flushClientLogs();
-        try {
-          const initialPoint = await captureNamedPoint();
-          await queueMobilityPoints(recording.id, [initialPoint]);
-        } catch (error) {
-          console.warn("Initial mobility point capture failed", error);
-        }
-        try {
-          await startFallbackStepTracking(recording.id);
-        } catch {
-          // The route can still be recorded when this device has no step sensor.
+        if (!shouldSkipOptionalNativeCapture()) {
+          try {
+            recordClientLog("info", "Capturing initial mobility point", {
+              source: "mobility",
+            });
+            await flushClientLogs();
+            const initialPoint = await captureNamedPoint();
+            await queueMobilityPoints(recording.id, [initialPoint]);
+          } catch (error) {
+            console.warn("Initial mobility point capture failed", error);
+          }
+          try {
+            recordClientLog("info", "Starting fallback step tracking", {
+              source: "mobility",
+            });
+            await flushClientLogs();
+            await startFallbackStepTracking(recording.id);
+          } catch {
+            // The route can still be recorded when this device has no step sensor.
+          }
+        } else {
+          recordClientLog("info", "Skipping optional Android 16 native capture", {
+            source: "mobility",
+            context: { androidApiLevel: getAndroidApiLevel() },
+          });
+          await flushClientLogs();
         }
       } catch (error) {
         await stopFallbackStepTracking().catch((cleanupError) => {
@@ -267,11 +295,13 @@ export function MobilityScreen({
       });
       await flushClientLogs();
       await stopFallbackStepTracking();
-      try {
-        const finalPoint = await captureNamedPoint();
-        await queueMobilityPoints(recording.id, [finalPoint]);
-      } catch {
-        // Stopping must still succeed when a final GPS fix is unavailable.
+      if (!shouldSkipOptionalNativeCapture()) {
+        try {
+          const finalPoint = await captureNamedPoint();
+          await queueMobilityPoints(recording.id, [finalPoint]);
+        } catch {
+          // Stopping must still succeed when a final GPS fix is unavailable.
+        }
       }
       await stopMobilityLocationTracking();
       try {
