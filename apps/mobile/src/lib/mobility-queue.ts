@@ -107,3 +107,7 @@ export async function flushMobilityPointQueue() {
     // The sync helper has restored all unsent points to the queue.
   }
 }
+
+export async function clearMobilityPointQueue() {
+  await writeQueue([]);
+}

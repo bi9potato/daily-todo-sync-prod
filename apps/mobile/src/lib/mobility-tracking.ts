@@ -4,9 +4,13 @@ import { Platform } from "react-native";
 
 import {
   getActiveMobilityRecordingId,
+  clearActiveMobilityRecordingId,
   setActiveMobilityRecordingId,
 } from "./mobility-storage";
-import { syncOrQueueMobilityPoints } from "./mobility-queue";
+import {
+  clearMobilityPointQueue,
+  syncOrQueueMobilityPoints,
+} from "./mobility-queue";
 import {
   readMobilityDiagnostics,
   updateMobilityDiagnostics,
@@ -14,10 +18,29 @@ import {
 import type { MobilityPointInput } from "@/types";
 
 export const MOBILITY_LOCATION_TASK = "daily-todo-background-location";
+const ANDROID_DISABLED_BACKGROUND_VERSION = 36;
 
 type LocationTaskData = {
   locations: Location.LocationObject[];
 };
+
+function androidVersionNumber() {
+  return typeof Platform.Version === "string"
+    ? Number.parseInt(Platform.Version, 10)
+    : Platform.Version;
+}
+
+export function isMobilityNativeRuntimeDisabled() {
+  const version = androidVersionNumber();
+  return (
+    Platform.OS === "android" &&
+    Number.isFinite(version) &&
+    version >= ANDROID_DISABLED_BACKGROUND_VERSION
+  );
+}
+
+export const MOBILITY_DISABLED_MESSAGE =
+  "Mobility tracking is temporarily disabled on Android 16 to prevent a native permission crash.";
 
 export function locationToMobilityPoint(
   location: Location.LocationObject,
@@ -37,11 +60,15 @@ export function locationToMobilityPoint(
   };
 }
 
-try {
-if (
-  Platform.OS !== "web" &&
-  !TaskManager.isTaskDefined(MOBILITY_LOCATION_TASK)
-) {
+function defineMobilityLocationTask() {
+  if (isMobilityNativeRuntimeDisabled()) {
+    return;
+  }
+  try {
+    if (
+      Platform.OS !== "web" &&
+      !TaskManager.isTaskDefined(MOBILITY_LOCATION_TASK)
+    ) {
   TaskManager.defineTask<LocationTaskData>(
     MOBILITY_LOCATION_TASK,
     async ({ data, error }) => {
@@ -82,22 +109,35 @@ if (
       }
     },
   );
-}
-} catch (error) {
-  console.warn("Mobility background task unavailable", error);
+    }
+  } catch (error) {
+    console.warn("Mobility background task unavailable", error);
+  }
 }
 
+defineMobilityLocationTask();
+
 export async function isMobilityLocationTrackingActive() {
-  if (Platform.OS === "web") {
+  if (Platform.OS === "web" || isMobilityNativeRuntimeDisabled()) {
     return false;
   }
-  return Location.hasStartedLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+  try {
+    return await Location.hasStartedLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+  } catch (error) {
+    console.warn("Mobility location status unavailable", error);
+    return false;
+  }
 }
 
 export async function startMobilityLocationTracking() {
   if (Platform.OS === "web") {
     return;
   }
+  if (isMobilityNativeRuntimeDisabled()) {
+    await cleanupUnsupportedMobilityRuntime();
+    throw new Error(MOBILITY_DISABLED_MESSAGE);
+  }
+  defineMobilityLocationTask();
   const alreadyStarted = await isMobilityLocationTrackingActive();
   if (alreadyStarted) {
     return;
@@ -132,8 +172,44 @@ export async function stopMobilityLocationTracking() {
   if (Platform.OS === "web") {
     return;
   }
-  if (await isMobilityLocationTrackingActive()) {
-    await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+  if (isMobilityNativeRuntimeDisabled()) {
+    await cleanupUnsupportedMobilityRuntime();
+    return;
+  }
+  try {
+    if (await isMobilityLocationTrackingActive()) {
+      await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+    }
+  } catch (error) {
+    console.warn("Mobility location stop failed", error);
+  }
+}
+
+export async function cleanupUnsupportedMobilityRuntime() {
+  if (!isMobilityNativeRuntimeDisabled()) {
+    return;
+  }
+  await Promise.allSettled([
+    clearActiveMobilityRecordingId(),
+    clearMobilityPointQueue(),
+    updateMobilityDiagnostics({
+      lastError: MOBILITY_DISABLED_MESSAGE,
+      recoveredAt: new Date().toISOString(),
+    }),
+  ]);
+  try {
+    if (await Location.hasStartedLocationUpdatesAsync(MOBILITY_LOCATION_TASK)) {
+      await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+    }
+  } catch (error) {
+    console.warn("Legacy mobility location cleanup failed", error);
+  }
+  try {
+    if (await TaskManager.isTaskRegisteredAsync(MOBILITY_LOCATION_TASK)) {
+      await TaskManager.unregisterTaskAsync(MOBILITY_LOCATION_TASK);
+    }
+  } catch (error) {
+    console.warn("Legacy mobility task cleanup failed", error);
   }
 }
 
@@ -148,6 +224,16 @@ export async function getMobilityTrackingDiagnostics() {
       foregroundPermission: false,
       nativeTaskActive: false,
       ...(await readMobilityDiagnostics()),
+    };
+  }
+  if (isMobilityNativeRuntimeDisabled()) {
+    const saved = await readMobilityDiagnostics();
+    return {
+      backgroundPermission: false,
+      foregroundPermission: false,
+      nativeTaskActive: false,
+      ...saved,
+      lastError: saved.lastError || MOBILITY_DISABLED_MESSAGE,
     };
   }
   const [foreground, background, nativeTaskActive, saved] = await Promise.all([
@@ -166,6 +252,10 @@ export async function getMobilityTrackingDiagnostics() {
 
 export async function recoverMobilityLocationTracking(recordingId: string) {
   if (Platform.OS === "web") {
+    return getMobilityTrackingDiagnostics();
+  }
+  if (isMobilityNativeRuntimeDisabled()) {
+    await cleanupUnsupportedMobilityRuntime();
     return getMobilityTrackingDiagnostics();
   }
   const [foreground, background] = await Promise.all([

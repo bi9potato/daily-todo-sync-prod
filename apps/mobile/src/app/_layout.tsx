@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -5,8 +6,15 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { SessionProvider } from "@/session";
-import { installClientLogCapture } from "@/lib/client-logs";
-import "@/lib/mobility-tracking";
+import {
+  flushClientLogs,
+  installClientLogCapture,
+  recordClientLog,
+} from "@/lib/client-logs";
+import {
+  cleanupUnsupportedMobilityRuntime,
+  isMobilityNativeRuntimeDisabled,
+} from "@/lib/mobility-tracking";
 
 installClientLogCapture();
 
@@ -20,6 +28,19 @@ const queryClient = new QueryClient({
 });
 
 export default function RootLayout() {
+  useEffect(() => {
+    void (async () => {
+      if (!isMobilityNativeRuntimeDisabled()) {
+        return;
+      }
+      recordClientLog("info", "Running unsupported mobility runtime cleanup", {
+        source: "startup",
+      });
+      await flushClientLogs();
+      await cleanupUnsupportedMobilityRuntime();
+    })();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

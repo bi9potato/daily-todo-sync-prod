@@ -2,6 +2,7 @@ import { Pedometer } from "expo-sensors";
 import { Platform } from "react-native";
 
 import { setMobilityStepSample } from "./api";
+import { isMobilityNativeRuntimeDisabled } from "./mobility-tracking";
 import type { MobilityRecording } from "@/types";
 
 export type MobilityStepSource = "health-connect" | "device" | "unavailable";
@@ -18,7 +19,7 @@ let fallbackSubscription: ReturnType<typeof Pedometer.watchStepCount> | null =
   null;
 
 async function loadHealthConnect() {
-  if (Platform.OS !== "android") {
+  if (Platform.OS !== "android" || isMobilityNativeRuntimeDisabled()) {
     return null;
   }
   try {
@@ -130,7 +131,7 @@ async function syncFallbackSteps() {
 }
 
 export async function startFallbackStepTracking(recordingId: string) {
-  if (Platform.OS === "web") {
+  if (Platform.OS === "web" || isMobilityNativeRuntimeDisabled()) {
     return false;
   }
   if (fallbackRecordingId === recordingId && fallbackSubscription) {
