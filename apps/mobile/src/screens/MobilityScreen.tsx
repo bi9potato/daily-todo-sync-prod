@@ -216,6 +216,11 @@ export function MobilityScreen({
           manual: true,
           recordingId: recording.id,
         });
+        recordClientLog("info", "Mobility location tracking started", {
+          source: "mobility",
+          context: { nativeBackgroundAvailable },
+        });
+        await flushClientLogs();
         try {
           const initialPoint = await captureNamedPoint();
           await queueMobilityPoints(recording.id, [initialPoint]);
@@ -228,8 +233,18 @@ export function MobilityScreen({
           // The route can still be recorded when this device has no step sensor.
         }
       } catch (error) {
-        await stopMobilityRecording(recording.id);
-        await clearActiveMobilityRecordingId();
+        await stopFallbackStepTracking().catch((cleanupError) => {
+          console.warn("Mobility step cleanup after start failure failed", cleanupError);
+        });
+        await stopMobilityLocationTracking().catch((cleanupError) => {
+          console.warn("Mobility tracking cleanup after start failure failed", cleanupError);
+        });
+        await stopMobilityRecording(recording.id).catch((cleanupError) => {
+          console.warn("Mobility recording cleanup after start failure failed", cleanupError);
+        });
+        await clearActiveMobilityRecordingId().catch((cleanupError) => {
+          console.warn("Mobility active recording cleanup failed", cleanupError);
+        });
         throw error;
       }
       return recording;
@@ -259,9 +274,13 @@ export function MobilityScreen({
         // Stopping must still succeed when a final GPS fix is unavailable.
       }
       await stopMobilityLocationTracking();
-      const stopped = await stopMobilityRecording(recording.id);
-      await clearActiveMobilityRecordingId();
-      return stopped;
+      try {
+        return await stopMobilityRecording(recording.id);
+      } finally {
+        await clearActiveMobilityRecordingId().catch((error) => {
+          console.warn("Mobility active recording cleanup failed", error);
+        });
+      }
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({

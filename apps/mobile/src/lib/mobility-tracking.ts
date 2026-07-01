@@ -17,8 +17,15 @@ import {
 } from "./mobility-diagnostics";
 import type { MobilityPointInput } from "@/types";
 
-export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v2";
-const LEGACY_MOBILITY_LOCATION_TASKS = ["daily-todo-background-location"];
+export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v3";
+const LEGACY_MOBILITY_LOCATION_TASKS = [
+  "daily-todo-background-location",
+  "daily-todo-background-location-v2",
+];
+const KNOWN_MOBILITY_LOCATION_TASKS = [
+  MOBILITY_LOCATION_TASK,
+  ...LEGACY_MOBILITY_LOCATION_TASKS,
+];
 const MOBILITY_UPLOAD_INTERVAL_MS = 30_000;
 
 type LocationTaskData = {
@@ -141,12 +148,16 @@ export async function isMobilityLocationTrackingActive() {
   if (!supportsNativeBackgroundLocationTracking()) {
     return false;
   }
-  try {
-    return await Location.hasStartedLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
-  } catch (error) {
-    console.warn("Mobility location status unavailable", error);
-    return false;
+  for (const taskName of KNOWN_MOBILITY_LOCATION_TASKS) {
+    try {
+      if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
+        return true;
+      }
+    } catch (error) {
+      console.warn("Mobility location status unavailable", error);
+    }
   }
+  return false;
 }
 
 export function isForegroundMobilityTrackingActive(recordingId?: string) {
@@ -284,34 +295,47 @@ export async function startMobilityLocationTracking({
     return;
   }
   defineMobilityLocationTask();
-  const alreadyStarted = await isMobilityLocationTrackingActive();
+  await cleanupLegacyMobilityRuntime();
+  const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(
+    MOBILITY_LOCATION_TASK,
+  ).catch(() => false);
   if (alreadyStarted) {
     return;
   }
-  await Location.startLocationUpdatesAsync(MOBILITY_LOCATION_TASK, {
-    accuracy: Location.Accuracy.High,
-    activityType: Location.ActivityType.Fitness,
-    distanceInterval: 10,
-    timeInterval: 10_000,
-    ...(Platform.OS === "ios"
-      ? {
-          deferredUpdatesDistance: 30,
-          deferredUpdatesInterval: 30_000,
-        }
-      : {}),
-    foregroundService: {
-      notificationTitle: "Daily Todo 正在记录足迹",
-      notificationBody: "持续记录行走路线；点击可返回应用。",
-      notificationColor: "#2C5745",
-      killServiceOnDestroy: true,
-    },
-    pausesUpdatesAutomatically: false,
-    showsBackgroundLocationIndicator: true,
-  });
-  await updateMobilityDiagnostics({
-    lastError: "",
-    recoveredAt: new Date().toISOString(),
-  });
+  try {
+    await Location.startLocationUpdatesAsync(MOBILITY_LOCATION_TASK, {
+      accuracy: Location.Accuracy.High,
+      activityType: Location.ActivityType.Fitness,
+      distanceInterval: 10,
+      timeInterval: 10_000,
+      ...(Platform.OS === "ios"
+        ? {
+            deferredUpdatesDistance: 30,
+            deferredUpdatesInterval: 30_000,
+          }
+        : {}),
+      foregroundService: {
+        notificationTitle: "Daily Todo 正在记录足迹",
+        notificationBody: "持续记录行走路线；点击可返回应用。",
+        notificationColor: "#2C5745",
+        killServiceOnDestroy: false,
+      },
+      pausesUpdatesAutomatically: false,
+      showsBackgroundLocationIndicator: true,
+    });
+    await updateMobilityDiagnostics({
+      lastError: "",
+      recoveredAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "后台定位服务启动失败";
+    await updateMobilityDiagnostics({
+      lastError: `后台定位服务启动失败，已保留前台实时记录：${message}`,
+      recoveredAt: new Date().toISOString(),
+    });
+    console.warn("Mobility background location start failed", error);
+  }
 }
 
 export async function stopMobilityLocationTracking() {
@@ -319,12 +343,14 @@ export async function stopMobilityLocationTracking() {
     return;
   }
   await stopForegroundMobilityTracking();
-  try {
-    if (await isMobilityLocationTrackingActive()) {
-      await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
+  for (const taskName of KNOWN_MOBILITY_LOCATION_TASKS) {
+    try {
+      if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
+        await Location.stopLocationUpdatesAsync(taskName);
+      }
+    } catch (error) {
+      console.warn("Mobility location stop failed", error);
     }
-  } catch (error) {
-    console.warn("Mobility location stop failed", error);
   }
 }
 
