@@ -66,13 +66,21 @@ function mergeBatches(batches: QueuedBatch[]) {
   }));
 }
 
+function isMissingRecordingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("404") ||
+    message.toLowerCase().includes("not found")
+  );
+}
+
 export async function syncOrQueueMobilityPoints(
   recordingId: string,
   points: MobilityPointInput[],
 ) {
   const batches = mergeBatches([
-    ...(await readQueue()),
     { recordingId, points },
+    ...(await readQueue()),
   ]);
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
     const batch = batches[batchIndex];
@@ -83,6 +91,13 @@ export async function syncOrQueueMobilityPoints(
           batch.points.slice(offset, offset + 250),
         );
       } catch (error) {
+        if (isMissingRecordingError(error)) {
+          console.warn(
+            "Dropping stale mobility points for missing recording",
+            batch.recordingId,
+          );
+          break;
+        }
         await writeQueue([
           { ...batch, points: batch.points.slice(offset) },
           ...batches.slice(batchIndex + 1),

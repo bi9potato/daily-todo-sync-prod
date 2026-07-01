@@ -42,6 +42,20 @@ const repeatUnitOptions: { value: Exclude<RepeatKind, "none" | "weekdays">; labe
   { value: "yearly", label: "年" },
 ];
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
 function RepeatMenu({
   interval,
   isLongTerm,
@@ -208,9 +222,16 @@ export function TaskEditor({
       if (!permission.granted) {
         throw new Error("需要位置权限才能记录任务地点。");
       }
-      const current = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+      if (!(await Location.hasServicesEnabledAsync())) {
+        throw new Error("请先打开系统定位服务。");
+      }
+      const current = await withTimeout(
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        }),
+        8000,
+        "定位暂时不可用，请稍后重试。",
+      );
       let name = "";
       try {
         const [address] = await Location.reverseGeocodeAsync(current.coords);

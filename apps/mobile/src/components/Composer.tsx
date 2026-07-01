@@ -59,22 +59,34 @@ export function Composer({
   });
 
   async function toggleSpeechRecognition() {
-    if (isListening) {
-      ExpoSpeechRecognitionModule.stop();
-      return;
-    }
+    try {
+      if (isListening) {
+        await ExpoSpeechRecognitionModule.stop();
+        setIsListening(false);
+        return;
+      }
 
-    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert("需要权限", "请允许麦克风和语音识别权限后再使用语音输入。");
-      return;
-    }
+      const permission =
+        await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("需要权限", "请允许麦克风和语音识别权限后再使用语音输入。");
+        return;
+      }
 
-    ExpoSpeechRecognitionModule.start({
-      continuous: false,
-      interimResults: true,
-      lang: "zh-CN",
-    });
+      await ExpoSpeechRecognitionModule.start({
+        continuous: false,
+        interimResults: true,
+        lang: "zh-CN",
+      });
+    } catch (error) {
+      setIsListening(false);
+      Alert.alert(
+        "语音输入不可用",
+        error instanceof Error
+          ? error.message
+          : "当前设备没有可用的语音识别服务。",
+      );
+    }
   }
 
   async function submit() {
