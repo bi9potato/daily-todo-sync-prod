@@ -23,8 +23,7 @@
         "android.permission.ACTIVITY_RECOGNITION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.health.READ_STEPS"
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#FFFEFA",
@@ -62,14 +61,7 @@
           "androidForegroundServiceIcon": "./assets/images/location-foreground-service-icon.png"
         }
       ],
-      [
-        "expo-sensors",
-        {
-          "motionPermission": "允许 Daily Todo 在足迹记录期间统计步数。"
-        }
-      ],
       "./plugins/with-native-mobility-service",
-      "./plugins/with-health-connect-main-activity",
       [
         "expo-image-picker",
         {

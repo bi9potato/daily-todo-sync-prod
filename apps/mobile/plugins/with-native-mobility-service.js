@@ -11,6 +11,7 @@ const {
 } = require("@expo/config-plugins");
 
 const SERVICE_NAME = "NativeMobilityService";
+const BOOT_RECEIVER_NAME = "NativeMobilityBootReceiver";
 const PACKAGE_NAME = "com.dailytodosync.app";
 const MOBILITY_PACKAGE_IMPORT = `${PACKAGE_NAME}.mobility.NativeMobilityPackage`;
 const PLAY_SERVICES_LOCATION =
@@ -25,6 +26,20 @@ function upsertImport(source, importLine) {
 
 function withNativeMobilityManifest(config) {
   return withAndroidManifest(config, (manifestConfig) => {
+    const usesPermissions = (manifestConfig.modResults.manifest[
+      "uses-permission"
+    ] ??= []);
+    if (
+      !usesPermissions.some(
+        (permission) =>
+          permission.$["android:name"] ===
+          "android.permission.RECEIVE_BOOT_COMPLETED",
+      )
+    ) {
+      usesPermissions.push({
+        $: { "android:name": "android.permission.RECEIVE_BOOT_COMPLETED" },
+      });
+    }
     const mainApplication = AndroidConfig.Manifest.getMainApplicationOrThrow(
       manifestConfig.modResults,
     );
@@ -44,6 +59,33 @@ function withNativeMobilityManifest(config) {
           "android:foregroundServiceType": "location",
         },
       });
+    }
+    const receivers = (mainApplication.receiver ??= []);
+    const receiverName = `.${BOOT_RECEIVER_NAME}`;
+    const existingReceiver = receivers.find(
+      (receiver) => receiver.$["android:name"] === receiverName,
+    );
+    const receiver = existingReceiver ?? {
+      $: {},
+      "intent-filter": [],
+    };
+    receiver.$["android:name"] = receiverName;
+    receiver.$["android:enabled"] = "true";
+    receiver.$["android:exported"] = "true";
+    receiver["intent-filter"] = [
+      {
+        action: [
+          { $: { "android:name": "android.intent.action.BOOT_COMPLETED" } },
+          {
+            $: {
+              "android:name": "android.intent.action.MY_PACKAGE_REPLACED",
+            },
+          },
+        ],
+      },
+    ];
+    if (!existingReceiver) {
+      receivers.push(receiver);
     }
     return manifestConfig;
   });
@@ -120,6 +162,10 @@ function withNativeMobilityFiles(config) {
         nativeMobilityServiceSource,
       );
       writeFileIfChanged(
+        path.join(sourceRoot, `${BOOT_RECEIVER_NAME}.kt`),
+        nativeMobilityBootReceiverSource,
+      );
+      writeFileIfChanged(
         path.join(mobilityRoot, "NativeMobilityModule.kt"),
         nativeMobilityModuleSource,
       );
@@ -161,7 +207,10 @@ class NativeMobilityPackage : ReactPackage {
 const nativeMobilityModuleSource = `package ${PACKAGE_NAME}.mobility
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.dailytodosync.app.NativeMobilityService
 import com.facebook.react.bridge.Promise
@@ -194,7 +243,7 @@ class NativeMobilityModule(
         putExtra(NativeMobilityService.EXTRA_API_BASE_URL, apiBaseUrl)
         putExtra(NativeMobilityService.EXTRA_ACCESS_TOKEN, accessToken)
       }
-      NativeMobilityService.clearLastError()
+      NativeMobilityService.prepareForStart(recordingId)
       ContextCompat.startForegroundService(activity ?: reactContext, intent)
       promise.resolve(true)
     } catch (error: Throwable) {
@@ -234,6 +283,45 @@ class NativeMobilityModule(
   @ReactMethod
   fun getLastError(promise: Promise) {
     promise.resolve(NativeMobilityService.getLastError())
+  }
+
+  @ReactMethod
+  fun getLatestPoint(promise: Promise) {
+    promise.resolve(NativeMobilityService.getLatestPoint())
+  }
+
+  @ReactMethod
+  fun isBatteryOptimizationDisabled(promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      promise.resolve(true)
+      return
+    }
+    val powerManager = reactContext.getSystemService(PowerManager::class.java)
+    promise.resolve(
+      powerManager?.isIgnoringBatteryOptimizations(reactContext.packageName) == true,
+    )
+  }
+
+  @ReactMethod
+  fun openBatteryOptimizationSettings(promise: Promise) {
+    try {
+      val settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val fallbackIntent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:\${reactContext.packageName}"),
+      ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val intent =
+        if (settingsIntent.resolveActivity(reactContext.packageManager) != null) {
+          settingsIntent
+        } else {
+          fallbackIntent
+        }
+      (reactContext.currentActivity ?: reactContext).startActivity(intent)
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("battery_optimization_settings_failed", error)
+    }
   }
 
   @ReactMethod
@@ -297,6 +385,7 @@ class NativeMobilityService : Service(), SensorEventListener {
   @Volatile private var syncedStepCount = 0
   private var lastStepSensorValue: Float? = null
   private var lastStepUploadScheduledAt = 0L
+  private var lastLocationUploadScheduledAt = 0L
   private val queueLock = Any()
 
   private val locationCallback = object : LocationCallback() {
@@ -307,8 +396,13 @@ class NativeMobilityService : Service(), SensorEventListener {
           .filter { it.accuracy <= MAX_ACCURACY_METERS }
           .map { it.toJsonPoint() }
         if (points.isEmpty()) return
+        setLatestPoint(points.last().toString())
         appendPoints(points)
-        scheduleUpload()
+        val now = System.currentTimeMillis()
+        if (now - lastLocationUploadScheduledAt >= LOCATION_UPLOAD_INTERVAL_MS) {
+          lastLocationUploadScheduledAt = now
+          scheduleUpload()
+        }
       } catch (error: Throwable) {
         setLastError("保存后台定位点失败：\${error.message ?: error.javaClass.simpleName}")
       }
@@ -399,6 +493,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     stopStepTracking()
     scheduleUpload()
     clearConfig()
+    clearActiveSnapshot()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
       stopForeground(STOP_FOREGROUND_REMOVE)
     } else {
@@ -427,6 +522,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
       .setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
       .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
+      .setMaxUpdateDelayMillis(0)
       .setWaitForAccurateLocation(false)
       .build()
     fusedLocationClient.removeLocationUpdates(locationCallback)
@@ -844,12 +940,13 @@ class NativeMobilityService : Service(), SensorEventListener {
     const val EXTRA_ACCESS_TOKEN = "accessToken"
     private const val CHANNEL_ID = "daily_todo_mobility"
     private const val NOTIFICATION_ID = 4307
-    private const val LOCATION_INTERVAL_MS = 10_000L
-    private const val LOCATION_FASTEST_INTERVAL_MS = 5_000L
-    private const val MIN_DISTANCE_METERS = 10f
+    private const val LOCATION_INTERVAL_MS = 1_000L
+    private const val LOCATION_FASTEST_INTERVAL_MS = 500L
+    private const val LOCATION_UPLOAD_INTERVAL_MS = 5_000L
+    private const val MIN_DISTANCE_METERS = 1f
     private const val MAX_ACCURACY_METERS = 500f
     private const val MAX_UPLOAD_POINTS = 250
-    private const val MAX_QUEUED_POINTS = 10_000
+    private const val MAX_QUEUED_POINTS = 250_000
     private const val STEP_UPLOAD_COUNT_INTERVAL = 10
     private const val STEP_UPLOAD_TIME_INTERVAL_MS = 15_000L
     private const val NETWORK_TIMEOUT_MS = 15_000
@@ -860,6 +957,8 @@ class NativeMobilityService : Service(), SensorEventListener {
     @Volatile private var stepTrackingActive = false
     @Volatile private var queuedPointCount = 0
     @Volatile private var lastError = ""
+    @Volatile private var latestPoint = ""
+    @Volatile private var currentRecordingId = ""
     private val ISO_FORMAT = ThreadLocal.withInitial {
       SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
@@ -872,12 +971,27 @@ class NativeMobilityService : Service(), SensorEventListener {
 
     fun getLastError(): String = lastError
 
-    fun clearLastError() {
+    fun getLatestPoint(): String = latestPoint
+
+    fun prepareForStart(recordingId: String) {
+      if (currentRecordingId != recordingId) {
+        latestPoint = ""
+      }
+      currentRecordingId = recordingId
       lastError = ""
     }
 
     private fun setLastError(message: String) {
       lastError = message
+    }
+
+    private fun setLatestPoint(point: String) {
+      latestPoint = point
+    }
+
+    private fun clearActiveSnapshot() {
+      currentRecordingId = ""
+      latestPoint = ""
     }
 
     fun clearPersistedConfig(context: Context) {
@@ -887,6 +1001,32 @@ class NativeMobilityService : Service(), SensorEventListener {
         .apply()
       serviceRunning = false
       stepTrackingActive = false
+      clearActiveSnapshot()
+    }
+
+    fun restartPersisted(context: Context): Boolean {
+      val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      val persistedRecordingId = prefs.getString("recordingId", "").orEmpty()
+      val persistedApiBaseUrl = prefs.getString("apiBaseUrl", "").orEmpty()
+      val persistedAccessToken = prefs.getString("accessToken", "").orEmpty()
+      if (
+        persistedRecordingId.isBlank() ||
+        persistedApiBaseUrl.isBlank() ||
+        persistedAccessToken.isBlank()
+      ) {
+        return false
+      }
+      prepareForStart(persistedRecordingId)
+      ContextCompat.startForegroundService(
+        context,
+        Intent(context, NativeMobilityService::class.java).apply {
+          action = ACTION_START
+          putExtra(EXTRA_RECORDING_ID, persistedRecordingId)
+          putExtra(EXTRA_API_BASE_URL, persistedApiBaseUrl)
+          putExtra(EXTRA_ACCESS_TOKEN, persistedAccessToken)
+        },
+      )
+      return true
     }
 
     fun getQueuedPointCount(context: Context): Int {
@@ -905,6 +1045,30 @@ class NativeMobilityService : Service(), SensorEventListener {
       } catch (_: Throwable) {
         queuedPointCount
       }
+    }
+  }
+}
+`;
+
+const nativeMobilityBootReceiverSource = `package ${PACKAGE_NAME}
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+
+class NativeMobilityBootReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent) {
+    if (
+      intent.action != Intent.ACTION_BOOT_COMPLETED &&
+      intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
+    ) {
+      return
+    }
+    try {
+      NativeMobilityService.restartPersisted(context)
+    } catch (_: Throwable) {
+      // Android may temporarily reject a foreground-service restart. Opening
+      // the app will retry through the normal runtime reconciliation path.
     }
   }
 }

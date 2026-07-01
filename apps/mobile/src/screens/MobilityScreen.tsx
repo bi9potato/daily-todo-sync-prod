@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,6 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
-import * as TaskManager from "expo-task-manager";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
@@ -26,25 +25,21 @@ import {
 } from "@/lib/api";
 import { addDays, formatLongDate } from "@/lib/date";
 import { beginMobilityActivation } from "@/lib/mobility-activation";
-import { isNativeMobilityServiceRunning } from "@/lib/mobility-native-service";
 import {
   clearActiveMobilityRecordingId,
   setActiveMobilityRecordingId,
 } from "@/lib/mobility-storage";
+import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import {
-  flushMobilityPointQueue,
-  queueMobilityPoints,
-} from "@/lib/mobility-queue";
+  getLatestNativeMobilityPoint,
+  isBatteryOptimizationDisabled,
+  openBatteryOptimizationSettings,
+} from "@/lib/mobility-native-service";
 import {
-  locationToMobilityPoint,
   startMobilityLocationTracking,
   stopMobilityLocationTracking,
   supportsNativeBackgroundLocationTracking,
 } from "@/lib/mobility-tracking";
-import {
-  startFallbackStepTracking,
-  stopFallbackStepTracking,
-} from "@/lib/mobility-steps";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type { MobilityDay, MobilityPoint, MobilityRecording } from "@/types";
@@ -170,12 +165,6 @@ async function requestTrackingPermissions({
     throw new Error("需要选择“始终允许”才能在锁屏后继续记录。");
   }
   await waitForAndroidActivityToResume();
-  if (
-    !usesNativeAndroidCapture() &&
-    !(await TaskManager.isAvailableAsync())
-  ) {
-    throw new Error("当前运行环境不支持后台定位，请安装开发版或正式 APK。");
-  }
 }
 
 function addressLabel(address: Location.LocationGeocodedAddress | undefined) {
@@ -203,41 +192,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
   });
 }
 
-function getAndroidApiLevel() {
-  const version =
-    typeof Platform.Version === "string"
-      ? Number.parseInt(Platform.Version, 10)
-      : Platform.Version;
-  return Number.isFinite(version) ? version : null;
-}
-
-function usesNativeAndroidCapture() {
-  return Platform.OS === "android" && (getAndroidApiLevel() ?? 0) >= 36;
-}
-
-async function isNativeAndroidCaptureActive() {
-  return (
-    usesNativeAndroidCapture() &&
-    (await isNativeMobilityServiceRunning().catch(() => false))
-  );
-}
-
-async function captureNamedPoint() {
-  const location = await withTimeout(
-    Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
-    }),
-    8000,
-    "定位暂时不可用",
-  );
-  let name = "";
-  try {
-    const addresses = await Location.reverseGeocodeAsync(location.coords);
-    name = addressLabel(addresses[0]);
-  } catch {
-    // A coordinate is still useful when the device geocoder is unavailable.
+async function promptForBatteryOptimization() {
+  if (Platform.OS !== "android") {
+    return;
   }
-  return locationToMobilityPoint(location, name);
+  if (await isBatteryOptimizationDisabled().catch(() => true)) {
+    return;
+  }
+  Alert.alert(
+    "允许持续后台记录",
+    "为减少系统省电策略中断足迹，请在电池优化设置中将 Daily Todo 设为“不优化”。该设置必须由你在系统页面确认。",
+    [
+      { text: "稍后", style: "cancel" },
+      {
+        text: "去设置",
+        onPress: () => {
+          void openBatteryOptimizationSettings().catch((error) => {
+            console.warn("Battery optimization settings unavailable", error);
+          });
+        },
+      },
+    ],
+  );
 }
 
 export function MobilityScreen({
@@ -251,6 +227,8 @@ export function MobilityScreen({
   const [selectedDate, setSelectedDate] = useState(today);
   const [actionError, setActionError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
+  const [livePoints, setLivePoints] = useState<MobilityPoint[]>([]);
+  const latestLivePointRef = useRef("");
 
   const dayQuery = useQuery({
     queryKey: ["mobility-day", selectedDate],
@@ -260,15 +238,18 @@ export function MobilityScreen({
     queryKey: ["mobility-day", today],
     queryFn: () => getMobilityDay(today),
     refetchInterval: (query) =>
-      query.state.data?.activeRecording ? 30_000 : false,
+      query.state.data?.activeRecording ? 5_000 : false,
   });
   const activeRecording = todayQuery.data?.activeRecording ?? null;
   const isToday = selectedDate === today;
+  const recordingEnabled = Boolean(activeRecording);
 
   const startMutation = useMutation({
     mutationFn: async () => {
       const finishActivation = beginMobilityActivation();
       setActionError("");
+      setLivePoints([]);
+      latestLivePointRef.current = "";
       try {
         const nativeBackgroundAvailable =
           supportsNativeBackgroundLocationTracking();
@@ -298,42 +279,8 @@ export function MobilityScreen({
             context: { nativeBackgroundAvailable },
           });
           await flushClientLogs();
-          const nativeCaptureActive =
-            await isNativeAndroidCaptureActive();
-          if (!nativeCaptureActive) {
-            try {
-              recordClientLog("info", "Capturing initial mobility point", {
-                source: "mobility",
-              });
-              await flushClientLogs();
-              const initialPoint = await captureNamedPoint();
-              await queueMobilityPoints(recording.id, [initialPoint]);
-            } catch (error) {
-              console.warn("Initial mobility point capture failed", error);
-            }
-            try {
-              recordClientLog("info", "Starting fallback step tracking", {
-                source: "mobility",
-              });
-              await flushClientLogs();
-              await startFallbackStepTracking(recording.id);
-            } catch {
-              // The route can still be recorded when this device has no step sensor.
-            }
-          } else {
-            recordClientLog("info", "Android 16 native capture enabled", {
-              source: "mobility",
-              context: { androidApiLevel: getAndroidApiLevel() },
-            });
-            await flushClientLogs();
-          }
+          await promptForBatteryOptimization();
         } catch (error) {
-          await stopFallbackStepTracking().catch((cleanupError) => {
-            console.warn(
-              "Mobility step cleanup after start failure failed",
-              cleanupError,
-            );
-          });
           await stopMobilityLocationTracking().catch((cleanupError) => {
             console.warn(
               "Mobility tracking cleanup after start failure failed",
@@ -376,16 +323,6 @@ export function MobilityScreen({
         source: "mobility",
       });
       await flushClientLogs();
-      const nativeCaptureActive = await isNativeAndroidCaptureActive();
-      await stopFallbackStepTracking();
-      if (!nativeCaptureActive) {
-        try {
-          const finalPoint = await captureNamedPoint();
-          await queueMobilityPoints(recording.id, [finalPoint]);
-        } catch {
-          // Stopping must still succeed when a final GPS fix is unavailable.
-        }
-      }
       await stopMobilityLocationTracking();
       try {
         return await stopMobilityRecording(recording.id);
@@ -412,19 +349,63 @@ export function MobilityScreen({
     }
   }, [activeRecording?.id]);
 
-  const places = useMemo(
-    () => getVisitedPlaces(dayQuery.data?.points ?? []),
-    [dayQuery.data?.points],
+  useEffect(() => {
+    if (!recordingEnabled) {
+      latestLivePointRef.current = "";
+      return;
+    }
+    let cancelled = false;
+    const pollLatestPoint = async () => {
+      const point = await getLatestNativeMobilityPoint().catch(() => null);
+      if (
+        cancelled ||
+        !point ||
+        point.recordedAt === latestLivePointRef.current
+      ) {
+        return;
+      }
+      latestLivePointRef.current = point.recordedAt;
+      setLivePoints((current) =>
+        [...current, point]
+          .filter(
+            (item, index, list) =>
+              list.findIndex(
+                (candidate) =>
+                  candidate.recordedAt === item.recordedAt &&
+                  candidate.latitude === item.latitude &&
+                  candidate.longitude === item.longitude,
+              ) === index,
+          )
+          .slice(-5_000),
+      );
+    };
+    void pollLatestPoint();
+    const timer = setInterval(() => {
+      void pollLatestPoint();
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [recordingEnabled]);
+
+  const routePoints = useMemo(
+    () =>
+      mergeMobilityPoints(
+        dayQuery.data?.points ?? [],
+        isToday && recordingEnabled ? livePoints : [],
+      ),
+    [dayQuery.data?.points, isToday, livePoints, recordingEnabled],
   );
+  const places = useVisitedPlaces(routePoints);
+  const latestLivePoint = recordingEnabled ? (livePoints.at(-1) ?? null) : null;
   const busy = startMutation.isPending || stopMutation.isPending;
   const totalSteps = dayQuery.data?.stepCount ?? 0;
   const backgroundTrackingHealthy =
     runtime.nativeBackgroundAvailable &&
     runtime.backgroundPermission &&
     runtime.nativeTaskActive;
-  const trackingHealthy =
-    runtime.foregroundWatchActive || backgroundTrackingHealthy;
-  const recordingEnabled = Boolean(activeRecording);
+  const trackingHealthy = backgroundTrackingHealthy;
 
   if (showDetails) {
     return (
@@ -462,9 +443,7 @@ export function MobilityScreen({
             {recordingEnabled
               ? backgroundTrackingHealthy
                 ? "正在记录；应用关闭后后台服务也会继续写入路线"
-                : runtime.foregroundWatchActive
-                  ? "正在安全实时记录；保持应用打开即可持续写入路线"
-                  : "已开启记录，正在等待定位服务恢复"
+                : "已开启记录，正在等待原生定位服务恢复"
               : "未开启，不会获取位置和活动数据"}
           </Text>
         </View>
@@ -518,7 +497,7 @@ export function MobilityScreen({
         ) : (
           <RouteMap
             key={selectedDate}
-            points={dayQuery.data?.points ?? []}
+            points={routePoints}
           />
         )}
       </View>
@@ -566,9 +545,7 @@ export function MobilityScreen({
           {recordingEnabled
             ? backgroundTrackingHealthy
               ? "仅你可见 · 后台服务运行中"
-              : runtime.foregroundWatchActive
-                ? "仅你可见 · 安全实时记录中"
-                : "定位服务等待恢复 · 请检查下方状态"
+              : "原生定位服务等待恢复 · 请检查下方状态"
             : "记录已关闭 · 不会获取位置"}
         </Text>
       </View>
@@ -589,13 +566,13 @@ export function MobilityScreen({
               <Text style={styles.runtimeTitle}>
                 {backgroundTrackingHealthy
                   ? "后台轨迹服务正常"
-                  : runtime.foregroundWatchActive
-                    ? "安全实时记录正常"
-                    : "定位服务未运行"}
+                  : "原生定位服务未运行"}
               </Text>
               <Text style={styles.runtimeMeta}>
-                {runtime.lastLocationAt
-                  ? `最近定位 ${formatRuntimeTime(runtime.lastLocationAt)}`
+                {latestLivePoint?.recordedAt || runtime.lastLocationAt
+                  ? `最近定位 ${formatRuntimeTime(
+                      latestLivePoint?.recordedAt ?? runtime.lastLocationAt!,
+                    )}`
                   : "正在等待第一条定位"}
                 {runtime.queuedPointCount
                   ? ` · ${runtime.queuedPointCount} 个定位点待同步`
@@ -610,7 +587,7 @@ export function MobilityScreen({
       ) : null}
 
       <View style={styles.placesSection}>
-        <Text style={styles.sectionTitle}>到访地点</Text>
+        <Text style={styles.sectionTitle}>自动到访地点</Text>
         {places.length ? (
           places.map((place, index) => (
             <View key={`${place.recordedAt}-${index}`} style={styles.placeRow}>
@@ -630,7 +607,9 @@ export function MobilityScreen({
             </View>
           ))
         ) : (
-          <Text style={styles.emptyPlaces}>记录起点或终点后，这里会显示地点</Text>
+          <Text style={styles.emptyPlaces}>
+            在约 80 米范围停留满 5 分钟后自动显示，无需手动标记
+          </Text>
         )}
       </View>
     </ScrollView>
@@ -651,11 +630,9 @@ function MobilityDetails({
   totalSteps: number;
 }) {
   const stepSource =
-    runtime.stepSource === "health-connect"
-      ? "Health Connect 系统聚合"
-      : runtime.stepSource === "device"
-        ? "设备传感器（前台补充）"
-        : "暂无可用来源";
+    runtime.stepSource === "device"
+      ? "原生设备计步传感器"
+      : "暂无可用来源";
 
   return (
     <ScrollView
@@ -757,28 +734,128 @@ function formatRuntimeTime(value: string) {
   });
 }
 
-function getVisitedPlaces(points: MobilityPoint[]) {
-  const named = points
-    .filter((point) => point.placeName)
-    .filter(
-      (point, index, list) =>
-        index === 0 || point.placeName !== list[index - 1].placeName,
-    )
-    .map((point) => ({ ...point, label: point.placeName }));
-  if (named.length) {
-    return named;
+function mergeMobilityPoints(
+  persisted: MobilityPoint[],
+  live: MobilityPoint[],
+) {
+  const unique = new Map<string, MobilityPoint>();
+  [...persisted, ...live].forEach((point) => {
+    unique.set(
+      `${point.recordedAt}:${point.latitude.toFixed(6)}:${point.longitude.toFixed(6)}`,
+      point,
+    );
+  });
+  const sorted = [...unique.values()].sort(
+    (first, second) =>
+      new Date(first.recordedAt).getTime() -
+      new Date(second.recordedAt).getTime(),
+  );
+  if (sorted.length <= 6_000) {
+    return sorted;
   }
-  if (!points.length) {
-    return [];
-  }
-  const first = points[0];
-  const last = points.at(-1) ?? first;
+  const stride = Math.ceil(sorted.length / 5_999);
   return [
-    { ...first, label: "记录起点" },
-    ...(last.recordedAt !== first.recordedAt
-      ? [{ ...last, label: "记录终点" }]
-      : []),
+    sorted[0],
+    ...sorted.slice(1, -1).filter((_, index) => index % stride === 0),
+    sorted.at(-1)!,
   ];
+}
+
+function distanceMeters(first: MobilityPoint, second: MobilityPoint) {
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const latitudeDelta = radians(second.latitude - first.latitude);
+  const longitudeDelta = radians(second.longitude - first.longitude);
+  const firstLatitude = radians(first.latitude);
+  const secondLatitude = radians(second.latitude);
+  const value =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(firstLatitude) *
+      Math.cos(secondLatitude) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return 12_742_000 * Math.asin(Math.sqrt(value));
+}
+
+function getVisitCandidates(points: MobilityPoint[]) {
+  const visits: MobilityPoint[] = [];
+  let anchorIndex = 0;
+  for (let index = 1; index <= points.length; index += 1) {
+    const anchor = points[anchorIndex];
+    const point = points[index];
+    if (point && distanceMeters(anchor, point) <= 80) {
+      continue;
+    }
+    const lastNearbyPoint = points[index - 1];
+    const dwellTime =
+      new Date(lastNearbyPoint.recordedAt).getTime() -
+      new Date(anchor.recordedAt).getTime();
+    if (dwellTime >= 5 * 60_000) {
+      const previousVisit = visits.at(-1);
+      if (!previousVisit || distanceMeters(previousVisit, anchor) > 120) {
+        visits.push(anchor);
+      }
+    }
+    anchorIndex = index;
+  }
+  return visits;
+}
+
+function visitKey(point: MobilityPoint) {
+  return `${point.recordedAt}:${point.latitude.toFixed(5)}:${point.longitude.toFixed(5)}`;
+}
+
+function useVisitedPlaces(points: MobilityPoint[]) {
+  const candidates = useMemo(() => getVisitCandidates(points), [points]);
+  const [resolvedNames, setResolvedNames] = useState<Record<string, string>>(
+    {},
+  );
+  const unresolvedKeys = candidates
+    .filter((point) => !point.placeName && !resolvedNames[visitKey(point)])
+    .map(visitKey)
+    .join("|");
+
+  useEffect(() => {
+    const unresolved = candidates.filter(
+      (point) => !point.placeName && !resolvedNames[visitKey(point)],
+    );
+    if (!unresolved.length) {
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      unresolved.map(async (point, index) => {
+        try {
+          const addresses = await Location.reverseGeocodeAsync({
+            latitude: point.latitude,
+            longitude: point.longitude,
+          });
+          return [
+            visitKey(point),
+            addressLabel(addresses[0]) || `停留地点 ${index + 1}`,
+          ] as const;
+        } catch {
+          return [visitKey(point), `停留地点 ${index + 1}`] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) {
+        setResolvedNames((current) => ({
+          ...current,
+          ...Object.fromEntries(entries),
+        }));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [candidates, resolvedNames, unresolvedKeys]);
+
+  return candidates.map((point, index) => ({
+    ...point,
+    label:
+      point.placeName ||
+      resolvedNames[visitKey(point)] ||
+      `停留地点 ${index + 1}`,
+  }));
 }
 
 function Metric({

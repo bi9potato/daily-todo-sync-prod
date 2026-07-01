@@ -2,6 +2,7 @@ import { NativeModules, Platform } from "react-native";
 
 import { API_BASE_URL } from "./api";
 import { loadTokens } from "./auth-storage";
+import type { MobilityPoint } from "@/types";
 
 type NativeMobilityModule = {
   start: (
@@ -13,7 +14,10 @@ type NativeMobilityModule = {
   isRunning: () => Promise<boolean>;
   isStepTrackingActive: () => Promise<boolean>;
   getLastError: () => Promise<string>;
+  getLatestPoint: () => Promise<string>;
   getQueuedPointCount: () => Promise<number>;
+  isBatteryOptimizationDisabled: () => Promise<boolean>;
+  openBatteryOptimizationSettings: () => Promise<boolean>;
 };
 
 const NativeMobility = NativeModules.NativeMobility as
@@ -65,6 +69,50 @@ export async function isNativeStepTrackingActive() {
     return false;
   }
   return NativeMobility.isStepTrackingActive();
+}
+
+export async function getLatestNativeMobilityPoint(): Promise<MobilityPoint | null> {
+  if (!isNativeMobilityServiceAvailable() || !NativeMobility) {
+    return null;
+  }
+  const value = await NativeMobility.getLatestPoint();
+  if (!value) {
+    return null;
+  }
+  try {
+    const point = JSON.parse(value) as MobilityPoint;
+    if (
+      !point.recordedAt ||
+      !Number.isFinite(point.latitude) ||
+      !Number.isFinite(point.longitude)
+    ) {
+      return null;
+    }
+    return {
+      recordedAt: point.recordedAt,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      accuracy: Number.isFinite(point.accuracy) ? point.accuracy : null,
+      speed: Number.isFinite(point.speed) ? point.speed : null,
+      placeName: point.placeName || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function isBatteryOptimizationDisabled() {
+  if (!isNativeMobilityServiceAvailable() || !NativeMobility) {
+    return true;
+  }
+  return NativeMobility.isBatteryOptimizationDisabled();
+}
+
+export async function openBatteryOptimizationSettings() {
+  if (!isNativeMobilityServiceAvailable() || !NativeMobility) {
+    return false;
+  }
+  return NativeMobility.openBatteryOptimizationSettings();
 }
 
 export async function getNativeMobilityQueuedPointCount() {

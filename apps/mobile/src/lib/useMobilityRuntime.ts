@@ -19,21 +19,18 @@ import {
 } from "./mobility-storage";
 import {
   getMobilityTrackingDiagnostics,
-  isForegroundMobilityTrackingActive,
   isMobilityLocationTrackingActive,
   recoverMobilityLocationTracking,
   stopMobilityLocationTracking,
 } from "./mobility-tracking";
 import {
   reconcileMobilitySteps,
-  stopFallbackStepTracking,
   type MobilityStepSource,
 } from "./mobility-steps";
 import type { MobilityRecording } from "@/types";
 
 export type MobilityRuntimeState = MobilityDiagnosticState & {
   backgroundPermission: boolean;
-  foregroundWatchActive: boolean;
   foregroundPermission: boolean;
   nativeBackgroundAvailable: boolean;
   nativeQueuedPointCount?: number;
@@ -44,7 +41,6 @@ export type MobilityRuntimeState = MobilityDiagnosticState & {
 
 const INITIAL_STATE: MobilityRuntimeState = {
   backgroundPermission: false,
-  foregroundWatchActive: false,
   foregroundPermission: false,
   lastError: "",
   lastLocationAt: null,
@@ -65,7 +61,6 @@ async function getSafeMobilityDiagnostics() {
     return {
       backgroundPermission: false,
       foregroundPermission: false,
-      foregroundWatchActive: false,
       lastError:
         error instanceof Error ? error.message : "Mobility diagnostics unavailable",
       lastLocationAt: null,
@@ -116,14 +111,12 @@ export function useMobilityRuntime(today: string, enabled = true) {
         if (!recording) {
           if (
             dayLoaded &&
-            ((await isMobilityLocationTrackingActive()) ||
-              isForegroundMobilityTrackingActive())
+            (await isMobilityLocationTrackingActive())
           ) {
             await stopMobilityLocationTracking();
             await clearActiveMobilityRecordingId();
             await clearMobilityDiagnostics();
           }
-          await stopFallbackStepTracking();
           const diagnostics = await getSafeMobilityDiagnostics();
           const queuedPointCount = totalQueuedPointCount(
             await getQueuedMobilityPointCount(),

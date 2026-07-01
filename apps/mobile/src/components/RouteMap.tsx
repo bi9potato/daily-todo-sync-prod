@@ -59,15 +59,18 @@ function createMapHtml() {
       let markers=[];
       map.setView(fallback,11);
       window.setRoute=(points,fitRoute)=>{
-        if(route){map.removeLayer(route)}
-        markers.forEach((marker)=>map.removeLayer(marker));
-        markers=[];
         if(!points.length){return}
-        route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round'}).addTo(map);
-        markers=[
-          L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map),
-          L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map)
-        ];
+        if(route){
+          route.setLatLngs(points);
+          markers[0].setLatLng(points[0]);
+          markers[1].setLatLng(points[points.length-1]);
+        }else{
+          route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round'}).addTo(map);
+          markers=[
+            L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map),
+            L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map)
+          ];
+        }
         if(fitRoute){
           if(points.length===1){map.setView(points[0],16)}
           else{map.fitBounds(route.getBounds(),{padding:[28,28]})}
