@@ -6,7 +6,11 @@ import {
   getActiveMobilityRecordingId,
   setActiveMobilityRecordingId,
 } from "./mobility-storage";
-import { syncOrQueueMobilityPoints } from "./mobility-queue";
+import {
+  flushMobilityPointQueue,
+  maybeFlushMobilityPointQueue,
+  queueMobilityPoints,
+} from "./mobility-queue";
 import {
   readMobilityDiagnostics,
   updateMobilityDiagnostics,
@@ -15,6 +19,7 @@ import type { MobilityPointInput } from "@/types";
 
 export const MOBILITY_LOCATION_TASK = "daily-todo-background-location-v2";
 const LEGACY_MOBILITY_LOCATION_TASKS = ["daily-todo-background-location"];
+const MOBILITY_UPLOAD_INTERVAL_MS = 30_000;
 
 type LocationTaskData = {
   locations: Location.LocationObject[];
@@ -23,24 +28,13 @@ type LocationTaskData = {
 let foregroundSubscription: Location.LocationSubscription | null = null;
 let foregroundRecordingId: string | null = null;
 let foregroundSyncPromise: Promise<void> = Promise.resolve();
-
-function getAndroidApiLevel() {
-  const version =
-    typeof Platform.Version === "string"
-      ? Number.parseInt(Platform.Version, 10)
-      : Platform.Version;
-  return Number.isFinite(version) ? version : null;
-}
+let foregroundUploadTimer: ReturnType<typeof setInterval> | null = null;
 
 export function supportsNativeBackgroundLocationTracking() {
   if (Platform.OS === "web") {
     return false;
   }
-  if (Platform.OS !== "android") {
-    return true;
-  }
-  const apiLevel = getAndroidApiLevel();
-  return apiLevel === null || apiLevel < 36;
+  return true;
 }
 
 export function locationToMobilityPoint(
@@ -90,22 +84,35 @@ function defineMobilityLocationTask() {
             });
             return;
           }
+          const points = data.locations.map((location) =>
+            locationToMobilityPoint(location),
+          );
           try {
-            await syncOrQueueMobilityPoints(
-              recordingId,
-              data.locations.map((location) =>
-                locationToMobilityPoint(location),
-              ),
-            );
+            await queueMobilityPoints(recordingId, points);
             await updateMobilityDiagnostics({
               lastError: "",
-              lastSyncAt: new Date().toISOString(),
             });
+          } catch (queueError) {
+            await updateMobilityDiagnostics({
+              lastError: "定位点本地保存失败，请重新打开足迹记录",
+            });
+            console.warn("Mobility background queue failed", queueError);
+            return;
+          }
+          try {
+            const didFlush = await maybeFlushMobilityPointQueue(
+              MOBILITY_UPLOAD_INTERVAL_MS,
+            );
+            if (didFlush) {
+              await updateMobilityDiagnostics({
+                lastSyncAt: new Date().toISOString(),
+              });
+            }
           } catch (syncError) {
             await updateMobilityDiagnostics({
-              lastError: "定位点已离线保存，等待网络恢复后同步",
+              lastError: "定位点已保存本地，等待网络恢复后同步",
             });
-            console.warn("Mobility background sync failed", syncError);
+            console.warn("Mobility background upload failed", syncError);
           }
         },
       );
@@ -149,6 +156,38 @@ export function isForegroundMobilityTrackingActive(recordingId?: string) {
   );
 }
 
+function startForegroundUploadTimer() {
+  if (foregroundUploadTimer || Platform.OS === "web") {
+    return;
+  }
+  foregroundUploadTimer = setInterval(() => {
+    void flushMobilityPointQueue()
+      .then((didFlush) => {
+        if (!didFlush) {
+          return;
+        }
+        return updateMobilityDiagnostics({
+          lastError: "",
+          lastSyncAt: new Date().toISOString(),
+        });
+      })
+      .catch((error) => {
+        void updateMobilityDiagnostics({
+          lastError: "定位点已保存本地，等待网络恢复后同步",
+        });
+        console.warn("Mobility scheduled upload failed", error);
+      });
+  }, MOBILITY_UPLOAD_INTERVAL_MS);
+}
+
+function stopForegroundUploadTimer() {
+  if (!foregroundUploadTimer) {
+    return;
+  }
+  clearInterval(foregroundUploadTimer);
+  foregroundUploadTimer = null;
+}
+
 function enqueueForegroundLocation(
   recordingId: string,
   location: Location.LocationObject,
@@ -159,18 +198,25 @@ function enqueueForegroundLocation(
       const lastLocationAt = new Date(location.timestamp).toISOString();
       await updateMobilityDiagnostics({ lastLocationAt });
       try {
-        await syncOrQueueMobilityPoints(recordingId, [
+        await queueMobilityPoints(recordingId, [
           locationToMobilityPoint(location),
         ]);
         await updateMobilityDiagnostics({
           lastError: "",
-          lastSyncAt: new Date().toISOString(),
         });
+        const didFlush = await maybeFlushMobilityPointQueue(
+          MOBILITY_UPLOAD_INTERVAL_MS,
+        );
+        if (didFlush) {
+          await updateMobilityDiagnostics({
+            lastSyncAt: new Date().toISOString(),
+          });
+        }
       } catch (error) {
         await updateMobilityDiagnostics({
-          lastError: "定位点已离线保存，等待网络恢复后同步",
+          lastError: "定位点已保存本地，等待网络恢复后同步",
         });
-        console.warn("Mobility foreground sync failed", error);
+        console.warn("Mobility foreground queue/upload failed", error);
       }
     });
   void foregroundSyncPromise;
@@ -202,6 +248,7 @@ export async function startForegroundMobilityTracking(recordingId: string) {
     lastError: "",
     recoveredAt: new Date().toISOString(),
   });
+  startForegroundUploadTimer();
   return true;
 }
 
@@ -209,7 +256,11 @@ export async function stopForegroundMobilityTracking() {
   foregroundSubscription?.remove();
   foregroundSubscription = null;
   foregroundRecordingId = null;
+  stopForegroundUploadTimer();
   await foregroundSyncPromise.catch(() => undefined);
+  await flushMobilityPointQueue().catch((error) => {
+    console.warn("Mobility final upload failed", error);
+  });
 }
 
 export async function startMobilityLocationTracking({
@@ -268,9 +319,6 @@ export async function stopMobilityLocationTracking() {
     return;
   }
   await stopForegroundMobilityTracking();
-  if (!supportsNativeBackgroundLocationTracking()) {
-    return;
-  }
   try {
     if (await isMobilityLocationTrackingActive()) {
       await Location.stopLocationUpdatesAsync(MOBILITY_LOCATION_TASK);
@@ -357,21 +405,27 @@ export async function recoverMobilityLocationTracking(recordingId: string) {
     return getMobilityTrackingDiagnostics();
   }
   await setActiveMobilityRecordingId(recordingId);
-  try {
-    await startForegroundMobilityTracking(recordingId);
-  } catch (error) {
-    await updateMobilityDiagnostics({
-      lastError: error instanceof Error ? error.message : "实时定位恢复失败",
-    });
-  }
-  if (
-    nativeBackgroundAvailable &&
-    background.granted &&
-    !(await isMobilityLocationTrackingActive())
-  ) {
-    await updateMobilityDiagnostics({
-      lastError: "后台服务未运行，当前会在应用打开时继续记录。",
-    });
+  if (nativeBackgroundAvailable && background.granted) {
+    try {
+      await startMobilityLocationTracking({
+        background: true,
+        manual: true,
+        recordingId,
+      });
+    } catch (error) {
+      await updateMobilityDiagnostics({
+        lastError:
+          error instanceof Error ? error.message : "后台定位任务恢复失败",
+      });
+    }
+  } else {
+    try {
+      await startForegroundMobilityTracking(recordingId);
+    } catch (error) {
+      await updateMobilityDiagnostics({
+        lastError: error instanceof Error ? error.message : "实时定位恢复失败",
+      });
+    }
   }
   return getMobilityTrackingDiagnostics();
 }

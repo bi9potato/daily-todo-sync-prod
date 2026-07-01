@@ -30,7 +30,7 @@ import {
 } from "@/lib/mobility-storage";
 import {
   flushMobilityPointQueue,
-  syncOrQueueMobilityPoints,
+  queueMobilityPoints,
 } from "@/lib/mobility-queue";
 import {
   locationToMobilityPoint,
@@ -218,7 +218,7 @@ export function MobilityScreen({
         });
         try {
           const initialPoint = await captureNamedPoint();
-          await syncOrQueueMobilityPoints(recording.id, [initialPoint]);
+          await queueMobilityPoints(recording.id, [initialPoint]);
         } catch (error) {
           console.warn("Initial mobility point capture failed", error);
         }
@@ -254,7 +254,7 @@ export function MobilityScreen({
       await stopFallbackStepTracking();
       try {
         const finalPoint = await captureNamedPoint();
-        await syncOrQueueMobilityPoints(recording.id, [finalPoint]);
+        await queueMobilityPoints(recording.id, [finalPoint]);
       } catch {
         // Stopping must still succeed when a final GPS fix is unavailable.
       }
