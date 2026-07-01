@@ -189,3 +189,20 @@ class TaskAttachment(models.Model):
 def delete_attachment_file(sender, instance: TaskAttachment, **kwargs) -> None:
     if instance.file and not TaskAttachment.objects.filter(file=instance.file.name).exists():
         instance.file.delete(save=False)
+
+
+class TodoSyncCursor(models.Model):
+    """Remembers how far the daily carryover sweep has already run for a
+    user so `ensure_range` only has to walk forward from the last checkpoint
+    instead of replaying every day since the account's first task on every
+    request. See `todos.services._rewind_sync_cursor` for how past-dated
+    edits (restoring a task, reopening a completed one) roll this back so
+    the next request re-heals the affected range."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="todo_sync_cursor",
+    )
+    carryover_synced_until = models.DateField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)

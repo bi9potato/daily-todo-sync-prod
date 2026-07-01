@@ -388,12 +388,20 @@ class NativeMobilityService : Service(), SensorEventListener {
   private var lastLocationUploadScheduledAt = 0L
   private val queueLock = Any()
 
+  // Tracks the last point we accepted into the trajectory so we can tell real
+  // movement apart from GPS jitter, the same way Google Maps only advances
+  // your location dot once a fix clears the combined error margin instead of
+  // reacting to every noisy sample.
+  private var lastAcceptedLocation: Location? = null
+  private var lastAcceptedAt = 0L
+
   private val locationCallback = object : LocationCallback() {
     override fun onLocationResult(result: LocationResult) {
       if (!running || recordingId.isBlank()) return
       try {
         val points = result.locations
           .filter { it.accuracy <= MAX_ACCURACY_METERS }
+          .filter(::isMeaningfulMovement)
           .map { it.toJsonPoint() }
         if (points.isEmpty()) return
         setLatestPoint(points.last().toString())
@@ -407,6 +415,36 @@ class NativeMobilityService : Service(), SensorEventListener {
         setLastError("保存后台定位点失败：\${error.message ?: error.javaClass.simpleName}")
       }
     }
+  }
+
+  /**
+   * Decides whether a new fix represents real movement.
+   *
+   * Consumer GPS accuracy is rarely better than a few meters, so two fixes a
+   * couple of meters apart while you are standing still are noise, not a
+   * walk. We treat the sum of both fixes' reported accuracy radii as a noise
+   * floor (bounded below by [MIN_DISTANCE_METERS]) and only accept the point
+   * if it moved further than that. While stationary we still keep one
+   * "heartbeat" point every [STATIONARY_HEARTBEAT_MS] so dwell-time / visit
+   * detection still has data to work with.
+   */
+  private fun isMeaningfulMovement(location: Location): Boolean {
+    val previous = lastAcceptedLocation
+    if (previous == null) {
+      lastAcceptedLocation = location
+      lastAcceptedAt = location.time
+      return true
+    }
+    val distance = previous.distanceTo(location)
+    val noiseFloor = maxOf(MIN_DISTANCE_METERS, previous.accuracy + location.accuracy)
+    val movedEnough = distance >= noiseFloor
+    val heartbeatDue = location.time - lastAcceptedAt >= STATIONARY_HEARTBEAT_MS
+    if (!movedEnough && !heartbeatDue) {
+      return false
+    }
+    lastAcceptedLocation = location
+    lastAcceptedAt = location.time
+    return true
   }
 
   override fun onCreate() {
@@ -466,6 +504,8 @@ class NativeMobilityService : Service(), SensorEventListener {
     }
     startForegroundNotification()
     running = true
+    lastAcceptedLocation = null
+    lastAcceptedAt = 0L
     requestLocationUpdates()
     startStepTracking()
     setLastError("")
@@ -940,11 +980,16 @@ class NativeMobilityService : Service(), SensorEventListener {
     const val EXTRA_ACCESS_TOKEN = "accessToken"
     private const val CHANNEL_ID = "daily_todo_mobility"
     private const val NOTIFICATION_ID = 4307
-    private const val LOCATION_INTERVAL_MS = 1_000L
-    private const val LOCATION_FASTEST_INTERVAL_MS = 500L
+    // Sampling cadence and noise filtering are tuned to behave like Google
+    // Maps' location history: sample every few seconds instead of every
+    // second, require a displacement bigger than typical GPS jitter before
+    // treating it as movement, and reject wildly inaccurate fixes outright.
+    private const val LOCATION_INTERVAL_MS = 5_000L
+    private const val LOCATION_FASTEST_INTERVAL_MS = 3_000L
     private const val LOCATION_UPLOAD_INTERVAL_MS = 5_000L
-    private const val MIN_DISTANCE_METERS = 1f
-    private const val MAX_ACCURACY_METERS = 500f
+    private const val MIN_DISTANCE_METERS = 8f
+    private const val MAX_ACCURACY_METERS = 75f
+    private const val STATIONARY_HEARTBEAT_MS = 60_000L
     private const val MAX_UPLOAD_POINTS = 250
     private const val MAX_QUEUED_POINTS = 250_000
     private const val STEP_UPLOAD_COUNT_INTERVAL = 10

@@ -235,6 +235,21 @@ function installAppStateCapture() {
   });
 }
 
+// Logs used to only leave the device when the app backgrounded or at a
+// handful of explicit call sites. If the app later froze or was force-killed
+// mid-session, whatever happened right before that never made it to the
+// server, which made bugs like sporadic freezes very hard to diagnose
+// remotely. A periodic flush bounds how much diagnostic history can be lost.
+const PERIODIC_FLUSH_INTERVAL_MS = 60_000;
+
+function installPeriodicFlush() {
+  setInterval(() => {
+    if (queue.length) {
+      void flushClientLogs();
+    }
+  }, PERIODIC_FLUSH_INTERVAL_MS);
+}
+
 export function installClientLogCapture() {
   if (installed) {
     return;
@@ -243,6 +258,7 @@ export function installClientLogCapture() {
   installConsoleCapture();
   installGlobalErrorCapture();
   installAppStateCapture();
+  installPeriodicFlush();
   void initialize().then(() =>
     recordClientLog("info", "Client log capture installed", {
       source: "startup",

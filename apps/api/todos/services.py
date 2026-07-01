@@ -7,7 +7,7 @@ from django.db.models import Count, Max, Min
 from django.http import Http404
 from django.utils import timezone
 
-from .models import Task, TaskAttachment, TodoOccurrence
+from .models import Task, TaskAttachment, TodoOccurrence, TodoSyncCursor
 
 MAX_ATTACHMENT_SIZE_BYTES = 8 * 1024 * 1024
 ALLOWED_ATTACHMENT_TYPES = {
@@ -420,7 +420,7 @@ def create_task_for_day(
         recurrence_until=recurrence_until,
         recurrence_start_date=task_date if normalized_kind != Task.RecurrenceKind.NONE else None,
     )
-    return TodoOccurrence.objects.create(
+    created = TodoOccurrence.objects.create(
         user=user,
         task=task,
         root_id=task.root_id,
@@ -435,6 +435,11 @@ def create_task_for_day(
             is_long_term=normalized_content_mode == Task.ContentMode.FUTURE,
         ),
     )
+    # A freshly created pending occurrence on a bygone day needs the
+    # carryover sweep to re-walk forward from there, otherwise it would
+    # never advance to today under the incremental cursor.
+    _rewind_sync_cursor(user, task_date)
+    return created
 
 
 @transaction.atomic
@@ -491,6 +496,22 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
         current += timedelta(days=1)
 
 
+def _rewind_sync_cursor(user, from_date: date) -> None:
+    """Roll the carryover checkpoint back to just before `from_date`.
+
+    `ensure_range` normally only walks forward from the last date it already
+    synced, so it stays fast no matter how long the account has existed. If
+    a past-dated occurrence becomes pending again (restored from trash,
+    reopened, or newly created for a bygone day) that checkpoint could be
+    stale, so callers rewind it here to force the next `ensure_range` call to
+    re-walk forward from that day and heal any missing carryover chain.
+    """
+    TodoSyncCursor.objects.filter(
+        user=user,
+        carryover_synced_until__gte=from_date,
+    ).update(carryover_synced_until=from_date - timedelta(days=1))
+
+
 @transaction.atomic
 def ensure_day(user, target_date: date, *, today: date | None = None) -> None:
     ensure_range(user, target_date, target_date, today=today)
@@ -524,7 +545,18 @@ def ensure_range(
     if earliest is None:
         return
 
-    current = earliest + timedelta(days=1)
+    # `cursor.carryover_synced_until` is the last day we've already walked
+    # the carryover sweep through. Resuming from there (instead of from the
+    # user's very first task every single request) keeps this O(days since
+    # last sync) rather than O(days since account creation).
+    cursor, _ = TodoSyncCursor.objects.select_for_update().get_or_create(user=user)
+    resume_from = (
+        cursor.carryover_synced_until + timedelta(days=1)
+        if cursor.carryover_synced_until
+        else earliest + timedelta(days=1)
+    )
+    current = max(resume_from, earliest + timedelta(days=1))
+
     while current <= carryover_end:
         previous = current - timedelta(days=1)
         previous_pending = (
@@ -565,6 +597,10 @@ def ensure_range(
                 pass
 
         current += timedelta(days=1)
+
+    if cursor.carryover_synced_until is None or carryover_end > cursor.carryover_synced_until:
+        cursor.carryover_synced_until = carryover_end
+        cursor.save(update_fields=["carryover_synced_until", "updated_at"])
 
 
 @transaction.atomic
@@ -735,6 +771,9 @@ def update_occurrence(
         else:
             occurrence.status = TodoOccurrence.Status.PENDING
             occurrence.completed_at = None
+            # Reopening a task on a past day means it may need to flow
+            # forward through carryover again.
+            _rewind_sync_cursor(user, occurrence.task_date)
         occurrence.version += 1
         occurrence.save(update_fields=["status", "completed_at", "version", "updated_at"])
 
@@ -911,6 +950,10 @@ def restore_occurrence(user, occurrence_id: UUID) -> TodoOccurrence:
         deleted_occurrence.updated_at = now
         deleted_occurrence.version += 1
         deleted_occurrence.save(update_fields=["deleted_at", "updated_at", "version"])
+        if deleted_occurrence.status == TodoOccurrence.Status.PENDING:
+            # A restored pending occurrence on a bygone day may need to
+            # flow forward through carryover again.
+            _rewind_sync_cursor(user, deleted_occurrence.task_date)
 
     return (
         TodoOccurrence.objects.select_related("task")

@@ -29,7 +29,29 @@ export const API_BASE_URL = (
   process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_URL
 ).replace(/\/$/, "");
 
+// Requests used to have no timeout at all, so a slow or hung backend call
+// (e.g. a lock-contended request) left the UI stuck on a spinner
+// indefinitely with nothing the user could do — which reads as "the app is
+// frozen." Aborting after a generous timeout at least turns that into a
+// recoverable error.
+const REQUEST_TIMEOUT_MS = 20_000;
+
 let refreshPromise: Promise<string> | null = null;
+
+async function fetchWithTimeout(url: string, options: RequestInit) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("请求超时，请检查网络后重试。");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function formatErrorDetail(detail: unknown): string | null {
   if (typeof detail === "string") {
@@ -108,7 +130,7 @@ async function refreshAccessToken() {
       throw new Error("登录已过期，请重新登录。");
     }
 
-    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken: tokens.refreshToken }),
@@ -147,7 +169,7 @@ async function request<T>(
     headers.set("Authorization", `Bearer ${tokens.accessToken}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
   });
@@ -421,7 +443,7 @@ export async function getAuthenticatedMediaBlob(
   if (!tokens) {
     throw new Error("请先登录。");
   }
-  const response = await fetch(resolveMediaUrl(contentUrl), {
+  const response = await fetchWithTimeout(resolveMediaUrl(contentUrl), {
     headers: { Authorization: `Bearer ${tokens.accessToken}` },
   });
   if (response.status === 401 && canRetry) {

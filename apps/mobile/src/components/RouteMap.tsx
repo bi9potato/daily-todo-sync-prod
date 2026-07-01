@@ -4,6 +4,7 @@ import Svg, { Circle, Line, Polyline } from "react-native-svg";
 import { WebView } from "react-native-webview";
 
 import { AppIcon } from "./AppIcon";
+import { recordClientLog } from "@/lib/client-logs";
 import { colors, radius, typography } from "@/theme";
 import type { MobilityPoint } from "@/types";
 
@@ -83,19 +84,55 @@ function createMapHtml() {
 }
 
 const MAP_SOURCE = { html: createMapHtml() };
+// While a recording is active, new points can arrive every few seconds.
+// Pushing the full route across the WebView bridge on every single arrival
+// (re-serializing potentially thousands of points each time) is what made
+// the map feel slow or briefly lock up, so trailing updates are coalesced
+// into at most one bridge call per interval.
+const ROUTE_UPDATE_THROTTLE_MS = 2_000;
 
 function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
   const webViewRef = useRef<WebView>(null);
   const mapReadyRef = useRef(false);
   const webViewStartedRef = useRef(false);
   const [mapFailed, setMapFailed] = useState(false);
+  const lastPushedAtRef = useRef(0);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const updateRoute = useCallback(
     (fitRoute: boolean) => {
-      webViewRef.current?.injectJavaScript(
-        createRouteScript(points, fitRoute),
-      );
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+      const push = () => {
+        lastPushedAtRef.current = Date.now();
+        webViewRef.current?.injectJavaScript(
+          createRouteScript(points, fitRoute),
+        );
+      };
+      if (fitRoute) {
+        // Explicit fit requests (map just became ready, or the user changed
+        // the selected day) should always apply immediately.
+        push();
+        return;
+      }
+      const elapsed = Date.now() - lastPushedAtRef.current;
+      if (elapsed >= ROUTE_UPDATE_THROTTLE_MS) {
+        push();
+      } else {
+        pendingTimerRef.current = setTimeout(push, ROUTE_UPDATE_THROTTLE_MS - elapsed);
+      }
     },
     [points],
+  );
+
+  useEffect(
+    () => () => {
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current);
+      }
+    },
+    [],
   );
 
   useEffect(() => {
@@ -118,6 +155,9 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
     const timer = setTimeout(() => {
       if (!mapReadyRef.current) {
         setMapFailed(true);
+        recordClientLog("warn", "Mobility route map failed to become ready in time", {
+          source: "mobility-map",
+        });
       }
     }, 4000);
     return () => clearTimeout(timer);
@@ -151,8 +191,20 @@ function RouteMapComponent({ points = EMPTY_POINTS }: RouteMapProps) {
           updateRoute(true);
         }
       }}
-      onError={() => setMapFailed(true)}
-      onHttpError={() => setMapFailed(true)}
+      onError={(event) => {
+        setMapFailed(true);
+        recordClientLog("warn", "Mobility route map WebView error", {
+          source: "mobility-map",
+          context: { description: event.nativeEvent.description },
+        });
+      }}
+      onHttpError={(event) => {
+        setMapFailed(true);
+        recordClientLog("warn", "Mobility route map WebView HTTP error", {
+          source: "mobility-map",
+          context: { statusCode: event.nativeEvent.statusCode },
+        });
+      }}
       originWhitelist={["*"]}
       overScrollMode="never"
       scrollEnabled={false}

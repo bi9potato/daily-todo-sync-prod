@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -27,7 +27,11 @@ import { addDays, formatLongDate } from "@/lib/date";
 import { beginMobilityActivation } from "@/lib/mobility-activation";
 import {
   clearActiveMobilityRecordingId,
+  DEFAULT_VISIT_DWELL_MINUTES,
+  getVisitDwellMinutes,
   setActiveMobilityRecordingId,
+  setVisitDwellMinutes,
+  VISIT_DWELL_MINUTE_OPTIONS,
 } from "@/lib/mobility-storage";
 import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import {
@@ -167,15 +171,39 @@ async function requestTrackingPermissions({
   await waitForAndroidActivityToResume();
 }
 
+// Android's on-device geocoder frequently has no point-of-interest name for
+// a spot and falls back to returning the bare house/street number as the
+// placemark "name" (e.g. "1500"), which is what showed up as a meaningless
+// string of digits for auto-detected visits. Treat a purely numeric (or
+// numeric-and-punctuation) name as "no name" and compose something readable
+// from the street/district instead.
+function isNumericOnlyLabel(value: string) {
+  return /^[\d\s.,\-/#号栋幢楼层]+$/.test(value.trim());
+}
+
 function addressLabel(address: Location.LocationGeocodedAddress | undefined) {
   if (!address) {
     return "";
   }
-  return (
-    address.name ||
-    address.formattedAddress ||
-    [address.district, address.city].filter(Boolean).join(" · ")
-  );
+  if (address.name && !isNumericOnlyLabel(address.name)) {
+    return address.name;
+  }
+  const streetLabel = [address.street, address.streetNumber]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join(" ");
+  const districtLabel = [address.district, address.city]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join(" · ");
+  if (districtLabel && streetLabel) {
+    return `${districtLabel} · ${streetLabel}`;
+  }
+  if (
+    address.formattedAddress &&
+    !isNumericOnlyLabel(address.formattedAddress)
+  ) {
+    return address.formattedAddress;
+  }
+  return districtLabel || streetLabel;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
@@ -228,7 +256,31 @@ export function MobilityScreen({
   const [actionError, setActionError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
   const [livePoints, setLivePoints] = useState<MobilityPoint[]>([]);
+  const [visitDwellMinutes, setVisitDwellMinutesState] = useState(
+    DEFAULT_VISIT_DWELL_MINUTES,
+  );
   const latestLivePointRef = useRef("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void getVisitDwellMinutes().then((minutes) => {
+      if (!cancelled) {
+        setVisitDwellMinutesState(minutes);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const chooseVisitDwellMinutes = useCallback((minutes: number) => {
+    setVisitDwellMinutesState(minutes);
+    void setVisitDwellMinutes(minutes);
+    recordClientLog("info", "Mobility visit dwell threshold changed", {
+      source: "mobility",
+      context: { minutes },
+    });
+  }, []);
 
   const dayQuery = useQuery({
     queryKey: ["mobility-day", selectedDate],
@@ -365,18 +417,16 @@ export function MobilityScreen({
         return;
       }
       latestLivePointRef.current = point.recordedAt;
+      // Points arrive one at a time and `latestLivePointRef` above already
+      // guarantees we never re-process the same recorded point twice, so
+      // there is no need to re-scan (and dedupe) the whole array on every
+      // tick — doing that with `findIndex` inside `filter` was O(n^2) and,
+      // once a recording ran long enough to approach the 5,000 point cap,
+      // was slow enough to visibly freeze the app on every poll.
       setLivePoints((current) =>
-        [...current, point]
-          .filter(
-            (item, index, list) =>
-              list.findIndex(
-                (candidate) =>
-                  candidate.recordedAt === item.recordedAt &&
-                  candidate.latitude === item.latitude &&
-                  candidate.longitude === item.longitude,
-              ) === index,
-          )
-          .slice(-5_000),
+        current.length >= 5_000
+          ? [...current.slice(1), point]
+          : [...current, point],
       );
     };
     void pollLatestPoint();
@@ -397,7 +447,7 @@ export function MobilityScreen({
       ),
     [dayQuery.data?.points, isToday, livePoints, recordingEnabled],
   );
-  const places = useVisitedPlaces(routePoints);
+  const places = useVisitedPlaces(routePoints, visitDwellMinutes);
   const latestLivePoint = recordingEnabled ? (livePoints.at(-1) ?? null) : null;
   const busy = startMutation.isPending || stopMutation.isPending;
   const totalSteps = dayQuery.data?.stepCount ?? 0;
@@ -587,7 +637,37 @@ export function MobilityScreen({
       ) : null}
 
       <View style={styles.placesSection}>
-        <Text style={styles.sectionTitle}>自动到访地点</Text>
+        <View style={styles.placesHeading}>
+          <Text style={styles.sectionTitle}>自动到访地点</Text>
+        </View>
+        <View style={styles.dwellSettingRow}>
+          <Text style={styles.dwellSettingLabel}>停留多久算到访</Text>
+          <View style={styles.dwellOptions}>
+            {VISIT_DWELL_MINUTE_OPTIONS.map((minutes) => {
+              const active = minutes === visitDwellMinutes;
+              return (
+                <Pressable
+                  accessibilityLabel={`停留满 ${minutes} 分钟后自动到访`}
+                  accessibilityRole="button"
+                  key={minutes}
+                  onPress={() => chooseVisitDwellMinutes(minutes)}
+                  style={({ pressed }) => [
+                    styles.dwellChip,
+                    active && styles.dwellChipActive,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text
+                    style={[
+                      styles.dwellChipText,
+                      active && styles.dwellChipTextActive,
+                    ]}>
+                    {minutes} 分钟
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
         {places.length ? (
           places.map((place, index) => (
             <View key={`${place.recordedAt}-${index}`} style={styles.placeRow}>
@@ -608,7 +688,7 @@ export function MobilityScreen({
           ))
         ) : (
           <Text style={styles.emptyPlaces}>
-            在约 80 米范围停留满 5 分钟后自动显示，无需手动标记
+            在约 80 米范围停留满 {visitDwellMinutes} 分钟后自动显示，无需手动标记
           </Text>
         )}
       </View>
@@ -775,8 +855,9 @@ function distanceMeters(first: MobilityPoint, second: MobilityPoint) {
   return 12_742_000 * Math.asin(Math.sqrt(value));
 }
 
-function getVisitCandidates(points: MobilityPoint[]) {
+function getVisitCandidates(points: MobilityPoint[], dwellMinutes: number) {
   const visits: MobilityPoint[] = [];
+  const dwellMs = dwellMinutes * 60_000;
   let anchorIndex = 0;
   for (let index = 1; index <= points.length; index += 1) {
     const anchor = points[anchorIndex];
@@ -788,7 +869,7 @@ function getVisitCandidates(points: MobilityPoint[]) {
     const dwellTime =
       new Date(lastNearbyPoint.recordedAt).getTime() -
       new Date(anchor.recordedAt).getTime();
-    if (dwellTime >= 5 * 60_000) {
+    if (dwellTime >= dwellMs) {
       const previousVisit = visits.at(-1);
       if (!previousVisit || distanceMeters(previousVisit, anchor) > 120) {
         visits.push(anchor);
@@ -803,8 +884,11 @@ function visitKey(point: MobilityPoint) {
   return `${point.recordedAt}:${point.latitude.toFixed(5)}:${point.longitude.toFixed(5)}`;
 }
 
-function useVisitedPlaces(points: MobilityPoint[]) {
-  const candidates = useMemo(() => getVisitCandidates(points), [points]);
+function useVisitedPlaces(points: MobilityPoint[], dwellMinutes: number) {
+  const candidates = useMemo(
+    () => getVisitCandidates(points, dwellMinutes),
+    [points, dwellMinutes],
+  );
   const [resolvedNames, setResolvedNames] = useState<Record<string, string>>(
     {},
   );
@@ -832,7 +916,13 @@ function useVisitedPlaces(points: MobilityPoint[]) {
             visitKey(point),
             addressLabel(addresses[0]) || `停留地点 ${index + 1}`,
           ] as const;
-        } catch {
+        } catch (error) {
+          recordClientLog("warn", "Mobility reverse geocode failed", {
+            source: "mobility",
+            context: {
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
           return [visitKey(point), `停留地点 ${index + 1}`] as const;
         }
       }),
@@ -1168,7 +1258,38 @@ const styles = StyleSheet.create({
   sectionTitle: {
     ...typography.section,
     color: colors.text,
+  },
+  placesHeading: {
+    marginBottom: spacing.sm,
+  },
+  dwellSettingRow: {
+    gap: spacing.xs,
     marginBottom: spacing.md,
+  },
+  dwellSettingLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  dwellOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+  },
+  dwellChip: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  dwellChipActive: {
+    backgroundColor: colors.accent,
+  },
+  dwellChipText: {
+    ...typography.label,
+    color: colors.textMuted,
+  },
+  dwellChipTextActive: {
+    color: colors.white,
   },
   placeRow: {
     flexDirection: "row",
