@@ -416,7 +416,7 @@ class NativeMobilityService : Service(), SensorEventListener {
       try {
         val points = result.locations
           .filter { it.accuracy <= MAX_ACCURACY_METERS }
-          .filter(::isMeaningfulMovement)
+          .mapNotNull(::acceptedLocationOrNull)
           .map { it.toJsonPoint() }
         if (points.isEmpty()) return
         setLatestPoint(points.last().toString())
@@ -433,7 +433,8 @@ class NativeMobilityService : Service(), SensorEventListener {
   }
 
   /**
-   * Decides whether a new fix represents real movement.
+   * Decides whether a new fix represents real movement, and if so, what
+   * location to actually record.
    *
    * Consumer GPS accuracy is rarely better than a few meters, so two fixes a
    * couple of meters apart while you are standing still are noise, not a
@@ -441,25 +442,36 @@ class NativeMobilityService : Service(), SensorEventListener {
    * floor (bounded below by [MIN_DISTANCE_METERS]) and only accept the point
    * if it moved further than that. While stationary we still keep one
    * "heartbeat" point every [STATIONARY_HEARTBEAT_MS] so dwell-time / visit
-   * detection still has data to work with.
+   * detection still has data to work with - but that heartbeat must NOT
+   * become the new reference point. Earlier this re-anchored to whatever
+   * (possibly noisy) fix triggered the heartbeat, so on a long stay each
+   * heartbeat's own GPS error compounded onto the last one, random-walking
+   * the recorded position tens or hundreds of meters away from where the
+   * phone actually sat - continuous 24/7 tracking gives this far more time
+   * to accumulate than the old manual start/stop sessions did. The fix
+   * keeps the anchor fixed to the last point that represented real movement
+   * and snaps heartbeat emissions to that same anchor, so a genuine stay
+   * reports as a single stable point instead of drifting.
    */
-  private fun isMeaningfulMovement(location: Location): Boolean {
+  private fun acceptedLocationOrNull(location: Location): Location? {
     val previous = lastAcceptedLocation
     if (previous == null) {
       lastAcceptedLocation = location
       lastAcceptedAt = location.time
-      return true
+      return location
     }
     val distance = previous.distanceTo(location)
     val noiseFloor = maxOf(MIN_DISTANCE_METERS, previous.accuracy + location.accuracy)
-    val movedEnough = distance >= noiseFloor
-    val heartbeatDue = location.time - lastAcceptedAt >= STATIONARY_HEARTBEAT_MS
-    if (!movedEnough && !heartbeatDue) {
-      return false
+    if (distance >= noiseFloor) {
+      lastAcceptedLocation = location
+      lastAcceptedAt = location.time
+      return location
     }
-    lastAcceptedLocation = location
-    lastAcceptedAt = location.time
-    return true
+    if (location.time - lastAcceptedAt >= STATIONARY_HEARTBEAT_MS) {
+      lastAcceptedAt = location.time
+      return Location(previous).apply { time = location.time }
+    }
+    return null
   }
 
   override fun onCreate() {

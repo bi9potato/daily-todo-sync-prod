@@ -215,6 +215,13 @@ function RouteMapComponent(
   const mapReadyRef = useRef(false);
   const webViewStartedRef = useRef(false);
   const [mapFailed, setMapFailed] = useState(false);
+  // Separate from mapFailed: becomes true only once the WebView has
+  // actually loaded Leaflet and confirmed via the "map-ready" postMessage
+  // that window.startPlayback/etc. exist. Playback controls must stay
+  // hidden until this flips - otherwise tapping play while the page is
+  // still loading calls a function that doesn't exist yet in the WebView's
+  // JS context and silently does nothing.
+  const [mapReady, setMapReady] = useState(false);
   const lastPushedAtRef = useRef(0);
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const updateRoute = useCallback(
@@ -271,6 +278,7 @@ function RouteMapComponent(
     webViewStartedRef.current = true;
     mapReadyRef.current = false;
     setMapFailed(false);
+    setMapReady(false);
     const timer = setTimeout(() => {
       if (!mapReadyRef.current) {
         setMapFailed(true);
@@ -283,8 +291,10 @@ function RouteMapComponent(
   }, [points.length]);
 
   useEffect(() => {
-    onFallback?.(Platform.OS === "web" || mapFailed || !points.length);
-  }, [mapFailed, onFallback, points.length]);
+    onFallback?.(
+      Platform.OS === "web" || mapFailed || !points.length || !mapReady,
+    );
+  }, [mapFailed, mapReady, onFallback, points.length]);
 
   useImperativeHandle(
     ref,
@@ -324,6 +334,7 @@ function RouteMapComponent(
         if (nativeEvent.data === "map-ready") {
           mapReadyRef.current = true;
           setMapFailed(false);
+          setMapReady(true);
           updateRoute(true);
           return;
         }

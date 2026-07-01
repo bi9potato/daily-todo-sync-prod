@@ -12,7 +12,6 @@ import {
   Switch,
   Text,
   View,
-  type GestureResponderEvent,
 } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
@@ -1229,20 +1228,34 @@ function PlaybackScrubber({
   ratio: number;
 }) {
   const [width, setWidth] = useState(0);
-  const handleTouch = (event: GestureResponderEvent) => {
-    if (width > 0) {
-      onSeek(clamp01(event.nativeEvent.locationX / width));
-    }
-  };
+  // Snapshot of `ratio` as of the start of the current drag (see
+  // onPanResponderGrant below), held for the rest of that gesture. Plain
+  // state rather than a ref: this project's react-hooks/refs lint rule
+  // disallows ref reads/writes anywhere inside closures handed to
+  // PanResponder.create, ref or not.
+  const [startRatio, setStartRatio] = useState(ratio);
+  // Tracks the drag with gestureState.dx (the accumulated horizontal delta
+  // since the gesture began) rather than nativeEvent.locationX during
+  // onPanResponderMove - the latter is well documented to report jumpy,
+  // unreliable coordinates on Android mid-gesture, which made dragging the
+  // scrubber feel broken. dx is computed by PanResponder itself from raw
+  // touch deltas and doesn't have that problem, and staying relative to
+  // wherever the drag started means it isn't thrown off by scrolling
+  // either.
+  //
   // Recreated every render (cheap: a plain config object) so the handlers
-  // always close over the latest `width`/`onSeek` without needing a ref,
-  // which this project's stricter react-hooks/refs rule disallows anywhere
-  // near a memoized initializer.
+  // always close over the latest `width`/`startRatio`/`onSeek`.
   const panResponder = PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: handleTouch,
-    onPanResponderMove: handleTouch,
+    onPanResponderGrant: () => {
+      setStartRatio(ratio);
+    },
+    onPanResponderMove: (_event, gestureState) => {
+      if (width > 0) {
+        onSeek(clamp01(startRatio + gestureState.dx / width));
+      }
+    },
   });
 
   return (
