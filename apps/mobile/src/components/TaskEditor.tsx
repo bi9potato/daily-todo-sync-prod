@@ -12,6 +12,8 @@ import {
   TextInput,
   View,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import dayjs from "dayjs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
@@ -41,6 +43,18 @@ const repeatUnitOptions: { value: Exclude<RepeatKind, "none" | "weekdays">; labe
   { value: "monthly", label: "月" },
   { value: "yearly", label: "年" },
 ];
+
+function reminderTimeAsDate(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  const date = new Date();
+  date.setHours(
+    Number.isFinite(hours) ? hours : 9,
+    Number.isFinite(minutes) ? minutes : 0,
+    0,
+    0,
+  );
+  return date;
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -210,6 +224,7 @@ export function TaskEditor({
   );
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState("");
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
 
   async function useCurrentLocation() {
     setIsLocating(true);
@@ -386,17 +401,67 @@ export function TaskEditor({
             <View style={styles.detailRow}>
               <AppIcon name="notifications-outline" color={colors.text} size={21} />
               <Text style={styles.detailLabel}>提醒</Text>
-              <TextInput
-                accessibilityLabel="提醒时间"
-                keyboardType="numbers-and-punctuation"
-                maxLength={5}
-                onChangeText={setReminderTime}
-                placeholder="无"
-                placeholderTextColor={colors.textMuted}
-                style={styles.detailValueInput}
-                value={reminderTime}
-              />
+              {Platform.OS === "web" ? (
+                <TextInput
+                  accessibilityLabel="提醒时间"
+                  keyboardType="numbers-and-punctuation"
+                  maxLength={5}
+                  onChangeText={setReminderTime}
+                  placeholder="无"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.detailValueInput}
+                  value={reminderTime}
+                />
+              ) : (
+                <View style={styles.reminderControls}>
+                  {reminderTime ? (
+                    <Pressable
+                      accessibilityLabel="清除提醒时间"
+                      accessibilityRole="button"
+                      onPress={() => setReminderTime("")}
+                      style={({ pressed }) => [
+                        styles.reminderClear,
+                        pressed && styles.pressed,
+                      ]}>
+                      <AppIcon
+                        name="close-circle"
+                        color={colors.textMuted}
+                        size={19}
+                      />
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    accessibilityLabel="选择提醒时间"
+                    accessibilityRole="button"
+                    onPress={() => setTimePickerOpen(true)}
+                    style={({ pressed }) => [
+                      styles.reminderButton,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Text
+                      style={[
+                        styles.reminderValue,
+                        !reminderTime && styles.reminderPlaceholder,
+                      ]}>
+                      {reminderTime ? reminderTime.slice(0, 5) : "无"}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
             </View>
+            {timePickerOpen && Platform.OS !== "web" ? (
+              <DateTimePicker
+                is24Hour
+                mode="time"
+                onChange={(event, date) => {
+                  setTimePickerOpen(false);
+                  if (event.type === "set" && date) {
+                    setReminderTime(dayjs(date).format("HH:mm"));
+                  }
+                }}
+                value={reminderTimeAsDate(reminderTime)}
+              />
+            ) : null}
             <View style={styles.locationBlock}>
               <View style={[styles.detailRow, styles.locationRow]}>
                 <AppIcon name="location-outline" color={colors.text} size={21} />
@@ -668,6 +733,30 @@ const styles = StyleSheet.create({
     minWidth: 76,
     paddingVertical: spacing.sm,
     textAlign: "right",
+  },
+  reminderControls: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  reminderClear: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 40,
+    minWidth: 32,
+  },
+  reminderButton: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+    minHeight: 40,
+    minWidth: 64,
+  },
+  reminderValue: {
+    color: colors.text,
+    fontSize: 16,
+  },
+  reminderPlaceholder: {
+    color: colors.textMuted,
   },
   locationBlock: {
     borderBottomColor: colors.border,

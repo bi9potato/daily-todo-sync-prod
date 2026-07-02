@@ -1,14 +1,21 @@
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
+from datetime import UTC, timedelta
 from statistics import median, quantiles
+
+import geopandas as gpd
+import movingpandas as mpd
+import pandas as pd
+from shapely.geometry import Point
 
 from .geo import haversine_distance_meters, haversine_meters
 from .models import LocationPoint
 
-# Mirrors the client-side clustering thresholds used by the (now retired)
-# MobilityScreen.getVisitCandidates(): points within this radius of an anchor
-# are treated as "the same place", and a newly detected visit within this
-# radius of the previously accepted one is folded into it rather than shown
-# as a separate stop.
+# Points within this distance of where a stop began are treated as "the
+# same place" (movingpandas' stop detector measures it as the max diameter
+# of the stop), and a newly detected visit within the dedup radius of the
+# previously accepted one is folded into it rather than shown as a separate
+# stop.
 VISIT_RADIUS_METERS = 80
 VISIT_DEDUP_RADIUS_METERS = 120
 DEFAULT_DWELL_MINUTES = 5
@@ -136,63 +143,87 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
     )
 
 
+def _detect_visit_windows(
+    points: list[LocationPoint], dwell_minutes: float
+) -> list[tuple[int, int]]:
+    """Find (start_index, end_index) windows where the trajectory stayed
+    put, using movingpandas' stop detector. Timestamps are converted to
+    naive UTC up front because Trajectory drops timezone info anyway (and
+    warns about it), and the naive values are what the returned stop ranges
+    are mapped back against."""
+    if len(points) < 2:
+        return []
+    times = [
+        point.recorded_at.astimezone(UTC).replace(tzinfo=None) for point in points
+    ]
+    frame = gpd.GeoDataFrame(
+        {
+            "geometry": [
+                Point(float(point.longitude), float(point.latitude))
+                for point in points
+            ]
+        },
+        index=pd.DatetimeIndex(times),
+        crs="EPSG:4326",
+    )
+    detector = mpd.TrajectoryStopDetector(mpd.Trajectory(frame, traj_id=0))
+    stop_ranges = detector.get_stop_time_ranges(
+        max_diameter=VISIT_RADIUS_METERS,
+        min_duration=timedelta(minutes=dwell_minutes),
+    )
+    windows: list[tuple[int, int]] = []
+    for stop in stop_ranges:
+        start_index = bisect_left(times, stop.t_0.to_pydatetime())
+        end_index = bisect_right(times, stop.t_n.to_pydatetime()) - 1
+        if 0 <= start_index <= end_index < len(points):
+            windows.append((start_index, end_index))
+    return windows
+
+
+def _merge_nearby_visits(
+    points: list[LocationPoint], windows: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Fold a visit into the previous one when their anchors are within the
+    dedup radius, so wobbling in and out of one place doesn't show up as a
+    string of separate stops."""
+    merged: list[tuple[int, int]] = []
+    for start_index, end_index in windows:
+        if merged:
+            previous_anchor = points[merged[-1][0]]
+            anchor = points[start_index]
+            if (
+                haversine_distance_meters(
+                    float(previous_anchor.latitude),
+                    float(previous_anchor.longitude),
+                    float(anchor.latitude),
+                    float(anchor.longitude),
+                )
+                <= VISIT_DEDUP_RADIUS_METERS
+            ):
+                merged[-1] = (merged[-1][0], end_index)
+                continue
+        merged.append((start_index, end_index))
+    return merged
+
+
 def build_day_segments(
     points: list[LocationPoint], dwell_minutes: float = DEFAULT_DWELL_MINUTES
 ) -> list[dict]:
-    """Partition a day's ordered LocationPoints into Visit and Trip segments,
-    mirroring the client's dwell-clustering heuristic (80m radius, dedup
-    within 120m) while also covering the travel gaps between visits so the
-    whole day is accounted for."""
+    """Partition a day's ordered LocationPoints into Visit and Trip segments
+    (stop detection by movingpandas, dedup within 120m) while also covering
+    the travel gaps between visits so the whole day is accounted for."""
     if not points:
         return []
 
-    dwell_seconds = dwell_minutes * 60
-
-    visits: list[tuple[int, int, LocationPoint]] = []  # (start_index, end_index, anchor)
-    current: list | None = None  # mutable [start_index, end_index, anchor] while being extended
-
-    anchor_index = 0
-    index = 1
-    total = len(points)
-    while index <= total:
-        anchor = points[anchor_index]
-        point = points[index] if index < total else None
-        if point is not None and haversine_distance_meters(
-            float(anchor.latitude),
-            float(anchor.longitude),
-            float(point.latitude),
-            float(point.longitude),
-        ) <= VISIT_RADIUS_METERS:
-            index += 1
-            continue
-
-        window_end = index - 1
-        dwell_span = (points[window_end].recorded_at - anchor.recorded_at).total_seconds()
-        if dwell_span >= dwell_seconds:
-            if current is not None and haversine_distance_meters(
-                float(current[2].latitude),
-                float(current[2].longitude),
-                float(anchor.latitude),
-                float(anchor.longitude),
-            ) <= VISIT_DEDUP_RADIUS_METERS:
-                current[1] = window_end
-            else:
-                if current is not None:
-                    visits.append(tuple(current))
-                current = [anchor_index, window_end, anchor]
-
-        anchor_index = index
-        index += 1
-
-    if current is not None:
-        visits.append(tuple(current))
+    visits = _merge_nearby_visits(points, _detect_visit_windows(points, dwell_minutes))
 
     segments: list[Segment] = []
     cursor = 0
-    for start_index, end_index, anchor in visits:
+    for start_index, end_index in visits:
         trip = _trip_segment(points, cursor, start_index - 1)
         if trip is not None:
             segments.append(trip)
+        anchor = points[start_index]
         segments.append(
             Segment(
                 type="visit",
@@ -207,7 +238,7 @@ def build_day_segments(
         )
         cursor = end_index + 1
 
-    trailing_trip = _trip_segment(points, cursor, total - 1)
+    trailing_trip = _trip_segment(points, cursor, len(points) - 1)
     if trailing_trip is not None:
         segments.append(trailing_trip)
 
