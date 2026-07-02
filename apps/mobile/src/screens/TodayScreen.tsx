@@ -673,7 +673,7 @@ function TaskDragList({
     <TaskRow
       isDragActive={isActive}
       onDelete={onDelete}
-      onDragHandleLongPress={drag}
+      onDragLongPress={drag}
       onPin={onPin}
       onPress={onPress}
       onToggle={onToggle}

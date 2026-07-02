@@ -9,7 +9,7 @@ type TaskRowProps = {
   task: TodoOccurrence;
   isDragActive?: boolean;
   onDelete: (task: TodoOccurrence) => void;
-  onDragHandleLongPress?: () => void;
+  onDragLongPress?: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
@@ -19,7 +19,7 @@ export function TaskRow({
   task,
   isDragActive,
   onDelete,
-  onDragHandleLongPress,
+  onDragLongPress,
   onPin,
   onPress,
   onToggle,
@@ -35,7 +35,14 @@ export function TaskRow({
     <Pressable
       accessibilityHint="打开任务详情"
       accessibilityRole="button"
-      onPress={() => onPress(task)}
+      delayLongPress={220}
+      disabled={isDragActive}
+      onLongPress={onDragLongPress}
+      onPress={() => {
+        if (!isDragActive) {
+          onPress(task);
+        }
+      }}
       style={({ pressed }) => [
         styles.container,
         task.isLongTerm && styles.longTermContainer,
@@ -46,14 +53,12 @@ export function TaskRow({
         isDragActive && styles.dragActiveContainer,
         pressed && styles.pressed,
       ]}>
-      <Pressable
+      <View
         accessibilityLabel="拖动排序"
-        accessibilityRole="button"
-        hitSlop={8}
-        onLongPress={onDragHandleLongPress}
+        accessibilityRole="image"
         style={styles.dragHandle}>
         <AppIcon name="reorder-two-outline" color={colors.textMuted} size={18} />
-      </Pressable>
+      </View>
       <Pressable
         accessibilityLabel={done ? "标记为未完成" : "标记为已完成"}
         accessibilityRole="checkbox"

@@ -64,7 +64,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "doctor": "expo-doctor .",
-    "typecheck": "tsc --noEmit"
+    "generate:types": "expo customize tsconfig.json",
+    "typecheck": "expo customize tsconfig.json && tsc --noEmit"
   },
   "private": true
 }
