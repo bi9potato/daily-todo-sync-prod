@@ -105,9 +105,7 @@ export default function RootLayout() {
           client={queryClient}
           persistOptions={{ buster: QUERY_CACHE_BUSTER, persister }}>
           <SessionProvider>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-            </Stack>
+            <Stack screenOptions={{ headerShown: false }} />
             <OfflineBanner />
             <StatusBar style="dark" />
           </SessionProvider>
