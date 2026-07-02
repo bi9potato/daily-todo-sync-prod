@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { QueryClient } from "@tanstack/react-query";
+import {
+  defaultShouldDehydrateQuery,
+  QueryClient,
+} from "@tanstack/react-query";
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import * as SplashScreen from "expo-splash-screen";
@@ -103,7 +106,18 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <PersistQueryClientProvider
           client={queryClient}
-          persistOptions={{ buster: QUERY_CACHE_BUSTER, persister }}>
+          persistOptions={{
+            buster: QUERY_CACHE_BUSTER,
+            persister,
+            dehydrateOptions: {
+              // The persisted cache is plaintext AsyncStorage; queries that
+              // read the device's secure storage (the password vault) must
+              // never be written into it.
+              shouldDehydrateQuery: (query) =>
+                defaultShouldDehydrateQuery(query) &&
+                query.meta?.sensitive !== true,
+            },
+          }}>
           <SessionProvider>
             <Stack screenOptions={{ headerShown: false }} />
             <OfflineBanner />

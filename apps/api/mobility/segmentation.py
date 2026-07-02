@@ -40,6 +40,17 @@ MIN_NON_WALKING_DISTANCE_METERS = 200.0
 VEHICLE_PEAK_MPS = 10.0
 MIN_SPEED_SAMPLES = 5
 
+# A vehicle ride through a GPS-less stretch (subway, tunnel) records no fixes
+# while covering real distance, so the trace shows long time gaps that "jump"
+# far. Doppler speeds then only sample the walk to/from the outage (station
+# entrances), which drags the median down to walking pace. Legs at least this
+# long and far count as coverage outages; when they carry most of the trip's
+# distance and the pace implied across them is beyond walking, the trip was a
+# ride, whatever the fringe Doppler samples say.
+GPS_OUTAGE_MIN_GAP_SECONDS = 150.0
+GPS_OUTAGE_MIN_JUMP_METERS = 400.0
+GPS_OUTAGE_DISTANCE_SHARE = 0.5
+
 
 @dataclass
 class Segment:
@@ -76,13 +87,45 @@ def _duration_minutes(points: list[LocationPoint], start_index: int, end_index: 
     return max(0, int(delta.total_seconds() // 60))
 
 
+def _outage_ride_mode(
+    distance_meters: float, legs: list[tuple[float, float]]
+) -> str | None:
+    """Return "IN_VEHICLE" when most of the trip's distance was covered
+    inside GPS coverage outages at beyond-walking pace, None otherwise (the
+    trip is then classified from speeds as usual). A long underground walkway
+    also loses GPS, but its implied pace stays at walking speed."""
+    outage_seconds = 0.0
+    outage_meters = 0.0
+    for gap_seconds, gap_meters in legs:
+        if (
+            gap_seconds >= GPS_OUTAGE_MIN_GAP_SECONDS
+            and gap_meters >= GPS_OUTAGE_MIN_JUMP_METERS
+        ):
+            outage_seconds += gap_seconds
+            outage_meters += gap_meters
+    if outage_meters <= 0 or distance_meters <= 0:
+        return None
+    if outage_meters / distance_meters < GPS_OUTAGE_DISTANCE_SHARE:
+        return None
+    if outage_meters / max(outage_seconds, 1.0) <= WALKING_MAX_MPS:
+        return None
+    return "IN_VEHICLE"
+
+
 def _infer_mode(
     distance_meters: float,
     duration_seconds: float,
     recorded_speeds: list[float],
+    legs: list[tuple[float, float]] | None = None,
 ) -> str:
     if distance_meters < MIN_NON_WALKING_DISTANCE_METERS:
         return "WALKING"
+    # Checked before the Doppler medians: during an outage there are no
+    # Doppler samples at all, so the samples that do exist are not
+    # representative of how the trip actually moved.
+    outage_mode = _outage_ride_mode(distance_meters, legs or [])
+    if outage_mode is not None:
+        return outage_mode
     if len(recorded_speeds) >= MIN_SPEED_SAMPLES:
         peak_mps = quantiles(recorded_speeds, n=10, method="inclusive")[-1]
         if peak_mps >= VEHICLE_PEAK_MPS:
@@ -110,12 +153,16 @@ def _infer_mode(
 def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int) -> Segment | None:
     if end_index <= start_index:
         return None
-    distance = sum(
-        haversine_meters(first, second)
+    legs = [
+        (
+            max((second.recorded_at - first.recorded_at).total_seconds(), 0.0),
+            haversine_meters(first, second),
+        )
         for first, second in zip(
             points[start_index:end_index], points[start_index + 1 : end_index + 1], strict=False
         )
-    )
+    ]
+    distance = sum(meters for _seconds, meters in legs)
     duration_minutes = _duration_minutes(points, start_index, end_index)
     start_point = points[start_index]
     end_point = points[end_index]
@@ -139,7 +186,7 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
         end_latitude=float(end_point.latitude),
         end_longitude=float(end_point.longitude),
         distance_meters=round(distance, 1),
-        mode=_infer_mode(distance, duration_seconds, recorded_speeds),
+        mode=_infer_mode(distance, duration_seconds, recorded_speeds, legs),
     )
 
 

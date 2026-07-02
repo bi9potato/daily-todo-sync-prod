@@ -4,11 +4,18 @@ import Animated, { SlideInLeft, SlideOutLeft } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
+import { enterEasing, exitEasing, motionDurations } from "@/lib/motion";
 import type { CalendarViewMode } from "@/screens/CalendarScreen";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
-const PANEL_ENTERING = SlideInLeft.springify().damping(20).mass(0.9);
-const PANEL_EXITING = SlideOutLeft.duration(180);
+// Timing on the emphasized curves instead of a spring: the panel glides in
+// and settles without wobble, and leaves faster than it arrived.
+const PANEL_ENTERING = SlideInLeft.duration(motionDurations.panelEnter).easing(
+  enterEasing,
+);
+const PANEL_EXITING = SlideOutLeft.duration(motionDurations.panelExit).easing(
+  exitEasing,
+);
 
 export type AppSection =
   | "today"
@@ -17,6 +24,7 @@ export type AppSection =
   | "analytics"
   | "calendar"
   | "mobility"
+  | "passwords"
   | "ai"
   | "profile";
 
@@ -67,6 +75,12 @@ const navItems = [
     label: "足迹地图",
     meta: "轨迹、步数与地点",
     icon: "map-outline",
+  },
+  {
+    key: "passwords",
+    label: "密码管理",
+    meta: "本机加密保存",
+    icon: "key-outline",
   },
   {
     key: "ai",

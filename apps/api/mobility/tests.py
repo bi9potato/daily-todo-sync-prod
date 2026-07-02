@@ -440,6 +440,40 @@ class MobilitySegmentationTests(TestCase):
         self.assertEqual([segment["type"] for segment in segments], ["trip"])
         self.assertEqual(segments[0]["mode"], "CYCLING")
 
+    def test_subway_ride_with_gps_outage_is_vehicle(self):
+        # A metro ride records nothing underground: walking-pace Doppler
+        # fixes around both stations, and one 20-minute leg that jumps ~6km.
+        # The walking-pace samples used to drag the median down and label
+        # the whole trip WALKING.
+        points = [
+            self.make_point(39.9000, 116.3000, 0, speed=1.2),
+            self.make_point(39.9010, 116.3000, 1.5, speed=1.3),
+            self.make_point(39.9020, 116.3000, 3, speed=1.2),
+            self.make_point(39.9560, 116.3000, 23, speed=1.3),
+            self.make_point(39.9570, 116.3000, 24.5, speed=1.2),
+            self.make_point(39.9580, 116.3000, 26, speed=1.3),
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "IN_VEHICLE")
+
+    def test_sparse_walking_fixes_across_long_gaps_stay_walking(self):
+        # Battery-saving recorders can leave many minutes between fixes on a
+        # plain walk. The gaps qualify as coverage outages, but the pace
+        # implied across them is still walking pace, so they must not flip
+        # the walk into a ride.
+        points = [
+            self.make_point(39.9000 + 0.0050 * step, 116.3000, 10 * step)
+            for step in range(4)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+
     def test_short_dwell_does_not_qualify_as_visit(self):
         points = [
             self.make_point(39.9000, 116.3000, 0),

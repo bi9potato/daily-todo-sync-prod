@@ -27,7 +27,7 @@ import {
   reconcileMobilitySteps,
   type MobilityStepSource,
 } from "./mobility-steps";
-import type { MobilityRecording } from "@/types";
+import type { MobilityDay, MobilityRecording } from "@/types";
 
 export type MobilityRuntimeState = MobilityDiagnosticState & {
   backgroundPermission: boolean;
@@ -80,11 +80,34 @@ function totalQueuedPointCount(
   return localQueuedPointCount + (diagnostics.nativeQueuedPointCount ?? 0);
 }
 
+// Resuming from another app or the lock screen replays the window
+// transition; kicking the reconcile pipeline at that exact moment makes the
+// first frames stutter. Android's own transition finishes well inside this.
+const RESUME_RECONCILE_DELAY_MS = 600;
+
+function sameRuntimeState(a: MobilityRuntimeState, b: MobilityRuntimeState) {
+  const keys = new Set([
+    ...Object.keys(a),
+    ...Object.keys(b),
+  ]) as Set<keyof MobilityRuntimeState>;
+  return [...keys].every((key) => a[key] === b[key]);
+}
+
 export function useMobilityRuntime(today: string, enabled = true) {
   const queryClient = useQueryClient();
-  const [runtime, setRuntime] = useState(INITIAL_STATE);
+  const [runtime, setRuntimeState] = useState(INITIAL_STATE);
+  const runtimeRef = useRef(runtime);
   const reconcilingRef = useRef(false);
+  const hasReconciledRef = useRef(false);
   const activeRecordingRef = useRef<MobilityRecording | null>(null);
+
+  // Every reconcile builds a fresh state object even when nothing changed,
+  // and this state is folded into the app-shell context value - so an
+  // identical-but-new object would re-render every screen in the shell.
+  const setRuntime = useCallback((next: MobilityRuntimeState) => {
+    runtimeRef.current = next;
+    setRuntimeState((current) => (sameRuntimeState(current, next) ? current : next));
+  }, []);
   const dayQuery = useQuery({
     queryKey: ["mobility-day", today],
     queryFn: () => getMobilityDay(today),
@@ -169,27 +192,59 @@ export function useMobilityRuntime(today: string, enabled = true) {
         });
       } finally {
         reconcilingRef.current = false;
+        hasReconciledRef.current = true;
       }
     },
-    [enabled, queryClient, today],
+    [enabled, queryClient, setRuntime, today],
   );
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
+      if (state !== "active") {
+        return;
+      }
+      resumeTimer = setTimeout(() => {
+        resumeTimer = null;
         if (isMobilityActivationInProgress()) {
+          return;
+        }
+        // Nothing to recover, upload, or shut down: skip the refetch and
+        // the native probes entirely instead of paying for them (and the
+        // re-renders they cause) on every unlock.
+        const cachedDay = queryClient.getQueryData<MobilityDay>([
+          "mobility-day",
+          today,
+        ]);
+        const known = runtimeRef.current;
+        if (
+          hasReconciledRef.current &&
+          !cachedDay?.activeRecording &&
+          !known.nativeTaskActive &&
+          known.queuedPointCount === 0 &&
+          (known.nativeQueuedPointCount ?? 0) === 0
+        ) {
           return;
         }
         void refetchDay().then(({ data }) =>
           reconcile(data?.activeRecording ?? null, Boolean(data)),
         );
-      }
+      }, RESUME_RECONCILE_DELAY_MS);
     });
-    return () => subscription.remove();
-  }, [enabled, reconcile, refetchDay]);
+    return () => {
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+      }
+      subscription.remove();
+    };
+  }, [enabled, queryClient, reconcile, refetchDay, today]);
 
   useEffect(() => {
     if (!enabled || !dayLoaded) {

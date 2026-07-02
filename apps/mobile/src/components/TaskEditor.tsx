@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppIcon } from "./AppIcon";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { ScreenEnter } from "./ScreenEnter";
+import { closeUnlessTypingGuard } from "@/lib/keyboard";
 import { colors, radius, spacing, typography } from "@/theme";
 import type {
   LocalAttachmentFile,
@@ -89,7 +90,11 @@ function RepeatMenu({
   visible: boolean;
 }) {
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
+    <Modal
+      animationType="fade"
+      onRequestClose={closeUnlessTypingGuard(onClose)}
+      transparent
+      visible={visible}>
       <View style={styles.menuBackdrop}>
         <Pressable
           accessibilityLabel="关闭重复设置"
@@ -308,7 +313,7 @@ export function TaskEditor({
   return (
     <Modal
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={closeUnlessTypingGuard(onClose)}
       presentationStyle="pageSheet"
       visible={Boolean(task)}>
       <KeyboardAvoidingView
