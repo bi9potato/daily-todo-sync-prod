@@ -309,12 +309,19 @@ class MobilityApiTests(TestCase):
 
 class MobilitySegmentationTests(TestCase):
     @staticmethod
-    def make_point(lat: float, lng: float, minutes_offset: float, accuracy: float = 8):
+    def make_point(
+        lat: float,
+        lng: float,
+        minutes_offset: float,
+        accuracy: float = 8,
+        speed: float | None = None,
+    ):
         base = timezone.make_aware(datetime.fromisoformat("2026-06-30T08:00:00"))
         return LocationPoint(
             latitude=lat,
             longitude=lng,
             accuracy=accuracy,
+            speed=speed,
             recorded_at=base + timedelta(minutes=minutes_offset),
         )
 
@@ -382,6 +389,50 @@ class MobilitySegmentationTests(TestCase):
         points = [
             self.make_point(39.9000 + 0.00405 * step, 116.3000, 1.5 * step)
             for step in range(5)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "CYCLING")
+
+    def test_stationary_drift_with_near_zero_doppler_speed_is_walking(self):
+        # Position fixes drifting ~150m per minute look like a 2.5 m/s
+        # "trip" (cycling pace) from displacement alone, but the Doppler
+        # speed recorded with each fix says the device barely moved.
+        points = [
+            self.make_point(39.9000 + 0.00135 * step, 116.3000, step, speed=0.3)
+            for step in range(6)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_stop_and_go_vehicle_ride_is_not_cycling(self):
+        # A bus in traffic averages bicycle pace overall, but the recorded
+        # speeds between stops burst well past anything a cyclist sustains.
+        speeds = [0, 0, 3, 5, 6, 7, 8, 11, 12, 13]
+        points = [
+            self.make_point(
+                39.9000 + 0.0018 * step, 116.3000, 0.5 * step, speed=speeds[step]
+            )
+            for step in range(10)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "IN_VEHICLE")
+
+    def test_cycling_doppler_speeds_stay_cycling(self):
+        speeds = [3.5, 4, 4.2, 4.5, 4.8, 5, 5.2, 5.5]
+        points = [
+            self.make_point(
+                39.9000 + 0.00122 * step, 116.3000, 0.5 * step, speed=speeds[step]
+            )
+            for step in range(8)
         ]
 
         segments = build_day_segments(points, dwell_minutes=5)
