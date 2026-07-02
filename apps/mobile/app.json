@@ -10,7 +10,11 @@
     "ios": {
       "icon": "./assets/images/app-icon.png",
       "supportsTablet": true,
-      "bundleIdentifier": "com.dailytodosync.app"
+      "bundleIdentifier": "com.dailytodosync.app",
+      "infoPlist": {
+        "UIBackgroundModes": ["location"],
+        "NSMotionUsageDescription": "允许 Daily Todo 读取计步数据，为你记录每日步数。"
+      }
     },
     "android": {
       "package": "com.dailytodosync.app",

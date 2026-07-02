@@ -8,10 +8,19 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     10,
   );
 
+  // iOS ships from the same build-number env the Android release uses, so a
+  // given CI run stamps a matching, monotonic build across both platforms.
+  const configuredBuildNumber = config.ios?.buildNumber ?? "1";
+  const iosBuildNumber = process.env.EXPO_PUBLIC_BUILD_NUMBER ?? configuredBuildNumber;
+
   return {
     ...config,
     name: config.name ?? "Daily Todo",
     slug: config.slug ?? "daily-todo-sync",
+    ios: {
+      ...config.ios,
+      buildNumber: iosBuildNumber,
+    },
     android: {
       ...config.android,
       versionCode: Number.isFinite(versionCode) ? versionCode : configuredVersionCode,

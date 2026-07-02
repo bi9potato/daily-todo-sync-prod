@@ -2,6 +2,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -40,7 +41,10 @@ import type {
 } from "@/types";
 
 const currentVersion = Constants.expoConfig?.version ?? "1.0.0";
-const currentVersionCode = Constants.expoConfig?.android?.versionCode ?? 1;
+const currentVersionCode =
+  Platform.OS === "ios"
+    ? (Constants.expoConfig?.ios?.buildNumber ?? "1")
+    : (Constants.expoConfig?.android?.versionCode ?? 1);
 const currentBuildSha = String(
   Constants.expoConfig?.extra?.buildSha ?? "development",
 );
@@ -63,6 +67,9 @@ export function ProfileScreen() {
     queryFn: getLatestMobileRelease,
     retry: false,
     staleTime: 5 * 60 * 1000,
+    // The in-app updater downloads an APK; iOS is refreshed through SideStore
+    // instead, so there is no release manifest to check there.
+    enabled: Platform.OS === "android",
   });
   const syncMutation = useMutation({
     mutationFn: () => syncGoogleCalendar(45),
@@ -254,18 +261,26 @@ export function ProfileScreen() {
             label="当前版本"
             value={`${currentVersion} (${currentVersionCode})`}
           />
-          <UpdatePanel
-            isChecking={releaseQuery.isFetching}
-            latest={releaseQuery.data}
-            onCheck={() => releaseQuery.refetch()}
-          />
+          {Platform.OS === "android" ? (
+            <UpdatePanel
+              isChecking={releaseQuery.isFetching}
+              latest={releaseQuery.data}
+              onCheck={() => releaseQuery.refetch()}
+            />
+          ) : (
+            <SettingRow
+              icon="download-outline"
+              label="更新方式"
+              value="通过 SideStore 刷新"
+            />
+          )}
         </Section>
 
         <Section title="关于">
           <SettingRow
             icon="phone-portrait-outline"
             label="客户端"
-            value="Expo · Android"
+            value={Platform.OS === "ios" ? "Expo · iOS" : "Expo · Android"}
           />
           <SettingRow
             icon="shield-checkmark-outline"

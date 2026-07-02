@@ -54,7 +54,7 @@ import {
 import {
   startMobilityLocationTracking,
   stopMobilityLocationTracking,
-  supportsNativeBackgroundLocationTracking,
+  supportsBackgroundLocationTracking,
 } from "@/lib/mobility-tracking";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
@@ -341,7 +341,7 @@ export function MobilityScreen({
       latestLivePointRef.current = "";
       try {
         const nativeBackgroundAvailable =
-          supportsNativeBackgroundLocationTracking();
+          supportsBackgroundLocationTracking();
         recordClientLog("info", "Mobility recording start requested", {
           source: "mobility",
           context: { nativeBackgroundAvailable },
@@ -451,7 +451,7 @@ export function MobilityScreen({
         const recording = await startMobilityRecording();
         await setActiveMobilityRecordingId(recording.id);
         await startMobilityLocationTracking({
-          background: supportsNativeBackgroundLocationTracking(),
+          background: supportsBackgroundLocationTracking(),
           manual: true,
           recordingId: recording.id,
         }).catch((error) => {
