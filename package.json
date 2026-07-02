@@ -14,5 +14,10 @@
     "check:api": "cd apps/api && python manage.py check",
     "test:api": "cd apps/api && python manage.py test"
   },
-  "devDependencies": {}
+  "devDependencies": {},
+  "pnpm": {
+    "patchedDependencies": {
+      "react-native-draggable-flatlist@4.0.3": "patches/react-native-draggable-flatlist@4.0.3.patch"
+    }
+  }
 }

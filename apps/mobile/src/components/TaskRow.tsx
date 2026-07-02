@@ -197,8 +197,7 @@ const styles = StyleSheet.create({
     opacity: 0.76,
   },
   dragActiveContainer: {
-    elevation: 12,
-    opacity: 0.96,
+    opacity: 0.98,
   },
   pressed: {
     opacity: 0.64,

@@ -1,0 +1,108 @@
+diff --git a/src/types.ts b/src/types.ts
+index d6755c8..598f349 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -30,6 +30,7 @@ export type DraggableFlatListProps<T> = Modify<
+     animationConfig?: Partial<WithSpringConfig>;
+     autoscrollSpeed?: number;
+     autoscrollThreshold?: number;
++    dragAnchor?: "touch" | "center";
+     containerStyle?: StyleProp<ViewStyle>;
+     debug?: boolean;
+     dragItemOverflow?: boolean;
+diff --git a/lib/typescript/types.d.ts b/lib/typescript/types.d.ts
+index 2abb4a2..ce87111 100644
+--- a/lib/typescript/types.d.ts
++++ b/lib/typescript/types.d.ts
+@@ -17,6 +17,7 @@ export declare type DraggableFlatListProps<T> = Modify<FlatListProps<T>, {
+     animationConfig?: Partial<WithSpringConfig>;
+     autoscrollSpeed?: number;
+     autoscrollThreshold?: number;
++    dragAnchor?: "touch" | "center";
+     containerStyle?: StyleProp<ViewStyle>;
+     debug?: boolean;
+     dragItemOverflow?: boolean;
+diff --git a/src/components/DraggableFlatList.tsx b/src/components/DraggableFlatList.tsx
+index 7c88afc..1d306c2 100644
+--- a/src/components/DraggableFlatList.tsx
++++ b/src/components/DraggableFlatList.tsx
+@@ -83,11 +83,14 @@ function DraggableFlatListInner<T>(props: DraggableFlatListProps<T>) {
+     viewableIndexMax,
+     disabled,
+   } = useAnimatedValues();
++  const gestureTouchPosition = useSharedValue(0);
++  const dragAnchorOffset = useSharedValue(0);
+ 
+   const reset = useStableCallback(() => {
+     activeIndexAnim.value = -1;
+     spacerIndexAnim.value = -1;
+     touchTranslate.value = 0;
++    dragAnchorOffset.value = 0;
+     activeCellSize.value = -1;
+     activeCellOffset.value = -1;
+     setActiveKey(null);
+@@ -151,6 +154,13 @@ function DraggableFlatListInner<T>(props: DraggableFlatListProps<T>) {
+     if (cellData) {
+       activeCellOffset.value = cellData.measurements.offset;
+       activeCellSize.value = cellData.measurements.size;
++      dragAnchorOffset.value =
++        propsRef.current.dragAnchor === "center"
++          ? gestureTouchPosition.value -
++            cellData.measurements.offset -
++            cellData.measurements.size / 2
++          : 0;
++      touchTranslate.value = dragAnchorOffset.value;
+     }
+ 
+     const { onDragBegin } = propsRef.current;
+@@ -276,6 +286,7 @@ function DraggableFlatListInner<T>(props: DraggableFlatListProps<T>) {
+     .onBegin((evt) => {
+       gestureDisabled.value = disabled.value;
+       if (gestureDisabled.value) return;
++      gestureTouchPosition.value = horizontalAnim.value ? evt.x : evt.y;
+       panGestureState.value = evt.state;
+     })
+     .onUpdate((evt) => {
+@@ -284,7 +295,7 @@ function DraggableFlatListInner<T>(props: DraggableFlatListProps<T>) {
+       const translation = horizontalAnim.value
+         ? evt.translationX
+         : evt.translationY;
+-      touchTranslate.value = translation;
++      touchTranslate.value = translation + dragAnchorOffset.value;
+     })
+     .onEnd((evt) => {
+       if (gestureDisabled.value) return;
+@@ -294,7 +305,8 @@ function DraggableFlatListInner<T>(props: DraggableFlatListProps<T>) {
+         ? evt.translationX
+         : evt.translationY;
+ 
+-      touchTranslate.value = translation + autoScrollDistance.value;
++      touchTranslate.value =
++        translation + dragAnchorOffset.value + autoScrollDistance.value;
+       panGestureState.value = evt.state;
+ 
+       // Only call onDragEnd if actually dragging a cell
+diff --git a/lib/typescript/components/DraggableFlatList.d.ts b/lib/typescript/components/DraggableFlatList.d.ts
+index d249f4f..6f5788a 100644
+--- a/lib/typescript/components/DraggableFlatList.d.ts
++++ b/lib/typescript/components/DraggableFlatList.d.ts
+@@ -8,6 +8,7 @@ declare const _default: <T>(props: Omit<FlatListProps<T>, "keyExtractor" | "da
+     animationConfig?: Partial<import("react-native-reanimated").WithSpringConfig> | undefined;
+     autoscrollSpeed?: number | undefined;
+     autoscrollThreshold?: number | undefined;
++    dragAnchor?: "touch" | "center" | undefined;
+     containerStyle?: import("react-native").StyleProp<import("react-native").ViewStyle>;
+     debug?: boolean | undefined;
+     dragItemOverflow?: boolean | undefined;
+diff --git a/lib/typescript/components/NestableDraggableFlatList.d.ts b/lib/typescript/components/NestableDraggableFlatList.d.ts
+index 0ebeb13..4bd52be 100644
+--- a/lib/typescript/components/NestableDraggableFlatList.d.ts
++++ b/lib/typescript/components/NestableDraggableFlatList.d.ts
+@@ -8,6 +8,7 @@ export declare const NestableDraggableFlatList: <T>(props: Omit<import("react-na
+     animationConfig?: Partial<import("react-native-reanimated").WithSpringConfig> | undefined;
+     autoscrollSpeed?: number | undefined;
+     autoscrollThreshold?: number | undefined;
++    dragAnchor?: "touch" | "center" | undefined;
+     containerStyle?: import("react-native").StyleProp<import("react-native").ViewStyle>;
+     debug?: boolean | undefined;
+     dragItemOverflow?: boolean | undefined;

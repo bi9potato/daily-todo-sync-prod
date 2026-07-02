@@ -4,7 +4,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  RefreshControl,
   StyleSheet,
   Text,
   View,
@@ -14,9 +13,12 @@ import * as Haptics from "expo-haptics";
 import {
   NestableDraggableFlatList,
   NestableScrollContainer,
+  ScaleDecorator,
+  ShadowDecorator,
   type DragEndParams,
   type RenderItemParams,
 } from "react-native-draggable-flatlist";
+import { RefreshControl } from "react-native-gesture-handler";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
@@ -109,6 +111,19 @@ type TodayScreenProps = {
   viewMode?: "my-day" | "long-term" | "low-priority";
 };
 
+const TASK_REORDER_SPRING = {
+  damping: 22,
+  mass: 0.45,
+  overshootClamping: true,
+  restDisplacementThreshold: 0.2,
+  restSpeedThreshold: 0.2,
+  stiffness: 260,
+} as const;
+
+function handleTaskDragBegin() {
+  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+}
+
 function compareOccurrences(left: TodoOccurrence, right: TodoOccurrence) {
   if (left.isPinned !== right.isPinned) {
     return left.isPinned ? -1 : 1;
@@ -157,6 +172,7 @@ export function TodayScreen({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [longTermOpen, setLongTermOpen] = useState(false);
   const [lowPriorityOpen, setLowPriorityOpen] = useState(false);
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
   const dayQuery = useQuery({
     queryKey: ["day", selectedDate],
@@ -475,6 +491,18 @@ export function TodayScreen({
     ]);
   }
 
+  async function refreshDay() {
+    if (isPullRefreshing) {
+      return;
+    }
+    setIsPullRefreshing(true);
+    try {
+      await dayQuery.refetch();
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }
+
   // Each TaskGroup/CollapsibleTaskGroup renders pinned and unpinned tasks
   // as two separate NestableDraggableFlatLists (see below), so a drag can
   // never cross the pinned/unpinned boundary in the first place - this
@@ -511,15 +539,18 @@ export function TodayScreen({
       contentContainerStyle={styles.scrollContent}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
+      overScrollMode="always"
       refreshControl={
         <RefreshControl
           colors={[colors.accent]}
-          onRefresh={dayQuery.refetch}
-          refreshing={dayQuery.isRefetching}
+          onRefresh={refreshDay}
+          progressBackgroundColor={colors.surfaceStrong}
+          refreshing={isPullRefreshing}
           tintColor={colors.accent}
         />
       }
-      showsVerticalScrollIndicator={false}>
+      showsVerticalScrollIndicator={false}
+      style={styles.scroll}>
       {total === 0 ? (
         <View style={styles.empty}>
           <AppIcon name="sunny-outline" color={colors.accent} size={34} />
@@ -670,24 +701,32 @@ function TaskDragList({
   const rest = tasks.filter((task) => !task.isPinned);
 
   const renderItem = ({ item, drag, isActive }: RenderItemParams<TodoOccurrence>) => (
-    <TaskRow
-      isDragActive={isActive}
-      onDelete={onDelete}
-      onDragLongPress={drag}
-      onPin={onPin}
-      onPress={onPress}
-      onToggle={onToggle}
-      task={item}
-    />
+    <ScaleDecorator activeScale={1.018}>
+      <ShadowDecorator elevation={12} opacity={0.16} radius={8}>
+        <TaskRow
+          isDragActive={isActive}
+          onDelete={onDelete}
+          onDragLongPress={drag}
+          onPin={onPin}
+          onPress={onPress}
+          onToggle={onToggle}
+          task={item}
+        />
+      </ShadowDecorator>
+    </ScaleDecorator>
   );
 
   return (
     <>
       {pinned.length ? (
         <NestableDraggableFlatList
+          animationConfig={TASK_REORDER_SPRING}
+          dragAnchor="center"
+          dragItemOverflow
           ItemSeparatorComponent={() => <View style={styles.rowGap} />}
           data={pinned}
           keyExtractor={(task) => task.id}
+          onDragBegin={handleTaskDragBegin}
           onDragEnd={({ data }: DragEndParams<TodoOccurrence>) =>
             onReorder(data.map((task) => task.id))
           }
@@ -696,9 +735,13 @@ function TaskDragList({
       ) : null}
       {rest.length ? (
         <NestableDraggableFlatList
+          animationConfig={TASK_REORDER_SPRING}
+          dragAnchor="center"
+          dragItemOverflow
           ItemSeparatorComponent={() => <View style={styles.rowGap} />}
           data={rest}
           keyExtractor={(task) => task.id}
+          onDragBegin={handleTaskDragBegin}
           onDragEnd={({ data }: DragEndParams<TodoOccurrence>) =>
             onReorder(data.map((task) => task.id))
           }
@@ -820,6 +863,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.64,
+  },
+  scroll: {
+    flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
