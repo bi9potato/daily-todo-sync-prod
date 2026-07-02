@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import Slider from "@react-native-community/slider";
+import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
 import * as Sharing from "expo-sharing";
@@ -884,32 +885,27 @@ export function MobilityScreen({
           <Text style={styles.sectionTitle}>足迹时间轴</Text>
         </View>
         <View style={styles.dwellSettingRow}>
-          <Text style={styles.dwellSettingLabel}>停留多久算到访</Text>
-          <View style={styles.dwellOptions}>
-            {VISIT_DWELL_MINUTE_OPTIONS.map((minutes) => {
-              const active = minutes === visitDwellMinutes;
-              return (
-                <Pressable
-                  accessibilityLabel={`停留满 ${minutes} 分钟后自动到访`}
-                  accessibilityRole="button"
-                  key={minutes}
-                  onPress={() => chooseVisitDwellMinutes(minutes)}
-                  style={({ pressed }) => [
-                    styles.dwellChip,
-                    active && styles.dwellChipActive,
-                    pressed && styles.pressed,
-                  ]}>
-                  <Text
-                    style={[
-                      styles.dwellChipText,
-                      active && styles.dwellChipTextActive,
-                    ]}>
-                    {minutes} 分钟
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <Text style={styles.dwellSettingLabel}>停留多久算到访（分钟）</Text>
+          <SegmentedControl
+            accessibilityLabel="停留多久算到访"
+            activeFontStyle={styles.dwellSegmentActiveFont}
+            backgroundColor={colors.surfaceMuted}
+            fontStyle={styles.dwellSegmentFont}
+            onChange={(event) => {
+              const minutes =
+                VISIT_DWELL_MINUTE_OPTIONS[
+                  event.nativeEvent.selectedSegmentIndex
+                ];
+              if (minutes != null) {
+                chooseVisitDwellMinutes(minutes);
+              }
+            }}
+            selectedIndex={(VISIT_DWELL_MINUTE_OPTIONS as readonly number[]).indexOf(
+              visitDwellMinutes,
+            )}
+            tintColor={colors.accent}
+            values={VISIT_DWELL_MINUTE_OPTIONS.map(String)}
+          />
         </View>
         {timelineSegments.length ? (
           timelineSegments.map((segment, index) => {
@@ -1604,25 +1600,12 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
   },
-  dwellOptions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.xs,
-  },
-  dwellChip: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  dwellChipActive: {
-    backgroundColor: colors.accent,
-  },
-  dwellChipText: {
+  dwellSegmentFont: {
     ...typography.label,
-    color: colors.textMuted,
+    color: colors.text,
   },
-  dwellChipTextActive: {
+  dwellSegmentActiveFont: {
+    ...typography.label,
     color: colors.white,
   },
   placeRow: {
