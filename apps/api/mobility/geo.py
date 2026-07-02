@@ -8,7 +8,15 @@ from .models import LocationPoint
 # movement, mirroring how Google Maps suppresses jitter when you are
 # stationary instead of letting it silently inflate the distance walked.
 GPS_NOISE_FLOOR_METERS = 8.0
-MAX_PLAUSIBLE_SPEED_MPS = 55.0
+# Implausibly fast legs are drift teleports, not travel - but "implausible"
+# depends on how long the leg took. Within a live tracking cadence nothing
+# ground-based outruns high-speed rail's ~350 km/h cruise (the old flat 55
+# m/s cap silently zeroed every HSR leg and with it the whole trip's
+# distance); across a long coverage gap (subway tunnel, airplane mode) the
+# jump can legitimately average an airliner's ground speed.
+MAX_PLAUSIBLE_SPEED_MPS = 120.0
+MAX_PLAUSIBLE_GAP_SPEED_MPS = 280.0
+PLAUSIBILITY_GAP_SECONDS = 150.0
 
 
 def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -31,4 +39,9 @@ def haversine_meters(first: LocationPoint, second: LocationPoint) -> float:
         return 0
 
     elapsed = max((second.recorded_at - first.recorded_at).total_seconds(), 1)
-    return distance if distance / elapsed <= MAX_PLAUSIBLE_SPEED_MPS else 0
+    speed_cap = (
+        MAX_PLAUSIBLE_GAP_SPEED_MPS
+        if elapsed >= PLAUSIBILITY_GAP_SECONDS
+        else MAX_PLAUSIBLE_SPEED_MPS
+    )
+    return distance if distance / elapsed <= speed_cap else 0

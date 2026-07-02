@@ -24,6 +24,7 @@ export type AppSection =
   | "analytics"
   | "calendar"
   | "mobility"
+  | "sleep"
   | "passwords"
   | "ai"
   | "profile";
@@ -75,6 +76,12 @@ const navItems = [
     label: "足迹地图",
     meta: "轨迹、步数与地点",
     icon: "map-outline",
+  },
+  {
+    key: "sleep",
+    label: "睡眠",
+    meta: "手环数据 · Health Connect",
+    icon: "moon-outline",
   },
   {
     key: "passwords",

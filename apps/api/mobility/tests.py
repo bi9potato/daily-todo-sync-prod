@@ -440,11 +440,11 @@ class MobilitySegmentationTests(TestCase):
         self.assertEqual([segment["type"] for segment in segments], ["trip"])
         self.assertEqual(segments[0]["mode"], "CYCLING")
 
-    def test_subway_ride_with_gps_outage_is_vehicle(self):
+    def test_subway_ride_with_gps_outage_is_subway(self):
         # A metro ride records nothing underground: walking-pace Doppler
-        # fixes around both stations, and one 20-minute leg that jumps ~6km.
-        # The walking-pace samples used to drag the median down and label
-        # the whole trip WALKING.
+        # fixes around both stations, and one 20-minute leg that jumps ~6km
+        # (implied ~5 m/s - metro pace). The walking-pace samples used to
+        # drag the median down and label the whole trip WALKING.
         points = [
             self.make_point(39.9000, 116.3000, 0, speed=1.2),
             self.make_point(39.9010, 116.3000, 1.5, speed=1.3),
@@ -457,7 +457,71 @@ class MobilitySegmentationTests(TestCase):
         segments = build_day_segments(points, dwell_minutes=5)
 
         self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "SUBWAY")
+
+    def test_high_speed_rail_doppler_speeds(self):
+        # Cruise fixes in the 250-300 km/h band (69-83 m/s) - only the
+        # high-speed rail network moves like this on the ground.
+        speeds = [55, 62, 70, 74, 78, 80, 82, 83]
+        points = [
+            self.make_point(
+                39.9000 + 0.02 * step, 116.3000, 0.5 * step, speed=speeds[step]
+            )
+            for step in range(8)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "HIGH_SPEED_RAIL")
+
+    def test_conventional_train_doppler_speeds(self):
+        # Sustained ~150-165 km/h (42-46 m/s): past any legal road speed,
+        # below the high-speed band.
+        speeds = [38, 40, 42, 43, 44, 45, 46, 46]
+        points = [
+            self.make_point(
+                39.9000 + 0.012 * step, 116.3000, 0.5 * step, speed=speeds[step]
+            )
+            for step in range(8)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "TRAIN")
+
+    def test_highway_driving_stays_road_vehicle(self):
+        # Holding ~100-120 km/h (28-33 m/s) on the highway must not be
+        # promoted to a train.
+        speeds = [28, 29, 30, 31, 32, 33, 33, 32]
+        points = [
+            self.make_point(
+                39.9000 + 0.008 * step, 116.3000, 0.5 * step, speed=speeds[step]
+            )
+            for step in range(8)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
         self.assertEqual(segments[0]["mode"], "IN_VEHICLE")
+
+    def test_flight_gps_outage_between_airports(self):
+        # Airplane mode in the air: a couple of taxi/terminal fixes at each
+        # airport and one ~1200km jump over 2.5 hours (~133 m/s implied) -
+        # far beyond anything ground-based.
+        points = [
+            self.make_point(39.9000, 116.3000, 0, speed=1.2),
+            self.make_point(39.9010, 116.3000, 2, speed=1.3),
+            self.make_point(50.6800, 116.3000, 152, speed=1.2),
+            self.make_point(50.6810, 116.3000, 154, speed=1.3),
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "FLIGHT")
 
     def test_sparse_walking_fixes_across_long_gaps_stay_walking(self):
         # Battery-saving recorders can leave many minutes between fixes on a

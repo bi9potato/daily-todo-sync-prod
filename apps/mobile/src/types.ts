@@ -138,7 +138,15 @@ export type MobilitySegment = {
   endLatitude: number | null;
   endLongitude: number | null;
   distanceMeters: number | null;
-  mode: "WALKING" | "CYCLING" | "IN_VEHICLE" | null;
+  mode:
+    | "WALKING"
+    | "CYCLING"
+    | "IN_VEHICLE"
+    | "SUBWAY"
+    | "TRAIN"
+    | "HIGH_SPEED_RAIL"
+    | "FLIGHT"
+    | null;
 };
 
 export type MobilityDay = {

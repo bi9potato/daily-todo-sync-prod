@@ -1163,12 +1163,22 @@ const TRIP_MODE_ICON: Record<string, React.ComponentProps<typeof AppIcon>["name"
   WALKING: "walk-outline",
   CYCLING: "bicycle-outline",
   IN_VEHICLE: "car-outline",
+  SUBWAY: "subway-outline",
+  TRAIN: "train-outline",
+  HIGH_SPEED_RAIL: "train-outline",
+  FLIGHT: "airplane-outline",
 };
 
 const TRIP_MODE_LABEL: Record<string, string> = {
   WALKING: "步行",
   CYCLING: "骑行",
+  // Driver vs passenger can't be told apart from GPS, so road vehicles stay
+  // one bucket; rail and air split out by their distinctive speed profiles.
   IN_VEHICLE: "乘车",
+  SUBWAY: "地铁",
+  TRAIN: "火车",
+  HIGH_SPEED_RAIL: "高铁",
+  FLIGHT: "飞行",
 };
 
 function useSegmentPlaceNames(segments: MobilitySegment[]) {

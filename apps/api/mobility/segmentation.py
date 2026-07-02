@@ -40,6 +40,16 @@ MIN_NON_WALKING_DISTANCE_METERS = 200.0
 VEHICLE_PEAK_MPS = 10.0
 MIN_SPEED_SAMPLES = 5
 
+# Rail and air separate from road vehicles by sustained speed alone: China's
+# highway limit is 120 km/h, so a p90 fix speed past ~137 km/h means rails,
+# past ~200 km/h it can only be the high-speed network's 250-350 cruise band,
+# and nothing ground-based sustains 360+ km/h at all. Driver vs passenger in
+# a road vehicle is indistinguishable from GPS, so "IN_VEHICLE" stays one
+# bucket.
+TRAIN_PEAK_MPS = 38.0
+HIGH_SPEED_RAIL_PEAK_MPS = 55.0
+FLIGHT_MPS = 100.0
+
 # A vehicle ride through a GPS-less stretch (subway, tunnel) records no fixes
 # while covering real distance, so the trace shows long time gaps that "jump"
 # far. Doppler speeds then only sample the walk to/from the outage (station
@@ -50,6 +60,10 @@ MIN_SPEED_SAMPLES = 5
 GPS_OUTAGE_MIN_GAP_SECONDS = 150.0
 GPS_OUTAGE_MIN_JUMP_METERS = 400.0
 GPS_OUTAGE_DISTANCE_SHARE = 0.5
+# Metro trains average under ~80 km/h between stations including dwell, so an
+# outage-dominated ride at that implied pace is the subway; faster implied
+# paces through dead zones belong to rail lines (tunnels) or aircraft.
+SUBWAY_OUTAGE_MAX_MPS = 22.0
 
 
 @dataclass
@@ -90,10 +104,12 @@ def _duration_minutes(points: list[LocationPoint], start_index: int, end_index: 
 def _outage_ride_mode(
     distance_meters: float, legs: list[tuple[float, float]]
 ) -> str | None:
-    """Return "IN_VEHICLE" when most of the trip's distance was covered
-    inside GPS coverage outages at beyond-walking pace, None otherwise (the
-    trip is then classified from speeds as usual). A long underground walkway
-    also loses GPS, but its implied pace stays at walking speed."""
+    """Classify a trip whose distance was mostly covered inside GPS coverage
+    outages, by the pace implied across those outages: metro pace means the
+    subway, faster means rail through tunnels, and beyond anything
+    ground-based means a flight. Returns None when outages don't dominate or
+    the implied pace stays at walking speed (a long underground walkway also
+    loses GPS) - the trip is then classified from speeds as usual."""
     outage_seconds = 0.0
     outage_meters = 0.0
     for gap_seconds, gap_meters in legs:
@@ -107,9 +123,16 @@ def _outage_ride_mode(
         return None
     if outage_meters / distance_meters < GPS_OUTAGE_DISTANCE_SHARE:
         return None
-    if outage_meters / max(outage_seconds, 1.0) <= WALKING_MAX_MPS:
+    implied_mps = outage_meters / max(outage_seconds, 1.0)
+    if implied_mps <= WALKING_MAX_MPS:
         return None
-    return "IN_VEHICLE"
+    if implied_mps <= SUBWAY_OUTAGE_MAX_MPS:
+        return "SUBWAY"
+    if implied_mps <= HIGH_SPEED_RAIL_PEAK_MPS:
+        return "TRAIN"
+    if implied_mps <= FLIGHT_MPS:
+        return "HIGH_SPEED_RAIL"
+    return "FLIGHT"
 
 
 def _infer_mode(
@@ -128,6 +151,12 @@ def _infer_mode(
         return outage_mode
     if len(recorded_speeds) >= MIN_SPEED_SAMPLES:
         peak_mps = quantiles(recorded_speeds, n=10, method="inclusive")[-1]
+        if peak_mps > FLIGHT_MPS:
+            return "FLIGHT"
+        if peak_mps >= HIGH_SPEED_RAIL_PEAK_MPS:
+            return "HIGH_SPEED_RAIL"
+        if peak_mps >= TRAIN_PEAK_MPS:
+            return "TRAIN"
         if peak_mps >= VEHICLE_PEAK_MPS:
             return "IN_VEHICLE"
         median_mps = median(recorded_speeds)
@@ -147,7 +176,13 @@ def _infer_mode(
         return "WALKING"
     if speed_mps <= CYCLING_MAX_MPS:
         return "CYCLING"
-    return "IN_VEHICLE"
+    if speed_mps <= TRAIN_PEAK_MPS:
+        return "IN_VEHICLE"
+    if speed_mps <= HIGH_SPEED_RAIL_PEAK_MPS:
+        return "TRAIN"
+    if speed_mps <= FLIGHT_MPS:
+        return "HIGH_SPEED_RAIL"
+    return "FLIGHT"
 
 
 def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int) -> Segment | None:

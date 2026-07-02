@@ -11,6 +11,7 @@ const SECTION_ROUTES: Record<AppSection, Href> = {
   analytics: "/analytics",
   calendar: "/calendar",
   mobility: "/mobility",
+  sleep: "/sleep",
   passwords: "/passwords",
   ai: "/ai",
   profile: "/profile",
