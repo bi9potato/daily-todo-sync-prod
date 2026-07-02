@@ -2,12 +2,14 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type PropsWithChildren,
 } from "react";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
+import { AppState } from "react-native";
 
 import type { AppSection } from "@/components/AppDrawer";
 import { getMe } from "@/lib/api";
@@ -39,14 +41,65 @@ const AppShellContext = createContext<AppShellContextValue | null>(null);
 // re-created every time the user switches sections).
 export function AppShellProvider({ children }: PropsWithChildren) {
   const router = useRouter();
-  const [today] = useState(() => toDateKey(new Date()));
-  const [selectedDate, setSelectedDate] = useState(today);
+  const [today, setToday] = useState(() => toDateKey(new Date()));
+  const [selectedDateOverride, setSelectedDateOverride] = useState<string | null>(
+    null,
+  );
+  const selectedDate = selectedDateOverride ?? today;
   const [calendarView, setCalendarView] = useState<CalendarViewMode>("week");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const mobilityRuntime = useMobilityRuntime(today);
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe });
   const displayName =
     meQuery.data?.displayName || meQuery.data?.username || "Daily Todo";
+
+  useEffect(() => {
+    let midnightTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refreshToday = () => {
+      const nextToday = toDateKey(new Date());
+      setToday((current) => (current === nextToday ? current : nextToday));
+    };
+
+    const scheduleMidnightRefresh = () => {
+      if (midnightTimer) {
+        clearTimeout(midnightTimer);
+      }
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 0, 0);
+      midnightTimer = setTimeout(() => {
+        refreshToday();
+        scheduleMidnightRefresh();
+      }, Math.max(1_000, nextMidnight.getTime() - now.getTime() + 1_000));
+    };
+
+    refreshToday();
+    scheduleMidnightRefresh();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        refreshToday();
+        scheduleMidnightRefresh();
+      } else if (midnightTimer) {
+        clearTimeout(midnightTimer);
+        midnightTimer = null;
+      }
+    });
+
+    return () => {
+      if (midnightTimer) {
+        clearTimeout(midnightTimer);
+      }
+      subscription.remove();
+    };
+  }, []);
+
+  const setSelectedDate = useCallback(
+    (date: string) => {
+      setSelectedDateOverride(date === today ? null : date);
+    },
+    [today],
+  );
 
   const navigateToSection = useCallback(
     (section: AppSection) => {
@@ -64,7 +117,7 @@ export function AppShellProvider({ children }: PropsWithChildren) {
       setSelectedDate(date);
       navigateToSection("today");
     },
-    [navigateToSection],
+    [navigateToSection, setSelectedDate],
   );
 
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
@@ -96,6 +149,7 @@ export function AppShellProvider({ children }: PropsWithChildren) {
       closeDrawer,
       navigateToSection,
       openDate,
+      setSelectedDate,
     ],
   );
 

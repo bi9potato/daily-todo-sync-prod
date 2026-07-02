@@ -221,6 +221,139 @@ class MobilityApiTests(TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0]["type"], "visit")
 
+    def test_day_totals_are_clipped_to_local_day_across_recording_rotation(self):
+        previous = MobilityRecording.objects.create(
+            user=self.user,
+            started_at=datetime.fromisoformat("2026-06-30T23:50:00+08:00"),
+            ended_at=datetime.fromisoformat("2026-07-01T00:02:00+08:00"),
+            is_active=False,
+            step_count=1_200,
+            distance_meters=99_999,
+        )
+        current = MobilityRecording.objects.create(
+            user=self.user,
+            started_at=datetime.fromisoformat("2026-07-01T00:02:00+08:00"),
+            step_count=25,
+            distance_meters=88_888,
+        )
+        LocationPoint.objects.bulk_create(
+            [
+                LocationPoint(
+                    recording=previous,
+                    client_id="previous-day",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-06-30T23:59:00+08:00"
+                    ),
+                    latitude=39.990000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+                LocationPoint(
+                    recording=previous,
+                    client_id="first-today",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-07-01T00:01:00+08:00"
+                    ),
+                    latitude=39.991000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+                LocationPoint(
+                    recording=current,
+                    client_id="current-start",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-07-01T00:03:00+08:00"
+                    ),
+                    latitude=39.992000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+                LocationPoint(
+                    recording=current,
+                    client_id="current-end",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-07-01T00:05:00+08:00"
+                    ),
+                    latitude=39.993000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+            ]
+        )
+
+        now = datetime.fromisoformat("2026-07-01T00:12:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=now):
+            response = self.client.get(
+                "/api/mobility/days/2026-07-01",
+                HTTP_AUTHORIZATION=self.authorization,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["stepCount"], 25)
+        self.assertEqual(payload["durationMinutes"], 12)
+        self.assertEqual(len(payload["points"]), 3)
+        self.assertGreater(payload["distanceMeters"], 100)
+        self.assertLess(payload["distanceMeters"], 200)
+
+    def test_today_does_not_reuse_whole_totals_from_unrotated_recording(self):
+        recording = MobilityRecording.objects.create(
+            user=self.user,
+            started_at=datetime.fromisoformat("2026-06-30T20:00:00+08:00"),
+            step_count=1_200,
+            distance_meters=99_999,
+        )
+        LocationPoint.objects.bulk_create(
+            [
+                LocationPoint(
+                    recording=recording,
+                    client_id="yesterday",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-06-30T23:59:00+08:00"
+                    ),
+                    latitude=39.990000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+                LocationPoint(
+                    recording=recording,
+                    client_id="today-start",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-07-01T00:03:00+08:00"
+                    ),
+                    latitude=39.991000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+                LocationPoint(
+                    recording=recording,
+                    client_id="today-end",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-07-01T00:05:00+08:00"
+                    ),
+                    latitude=39.992000,
+                    longitude=116.300000,
+                    accuracy=8,
+                ),
+            ]
+        )
+
+        now = datetime.fromisoformat("2026-07-01T00:10:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=now):
+            response = self.client.get(
+                "/api/mobility/days/2026-07-01",
+                HTTP_AUTHORIZATION=self.authorization,
+            )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["stepCount"], 0)
+        self.assertEqual(payload["durationMinutes"], 10)
+        self.assertEqual(len(payload["points"]), 2)
+        self.assertGreater(payload["distanceMeters"], 100)
+        self.assertLess(payload["distanceMeters"], 200)
+        self.assertEqual(payload["activeRecording"]["id"], str(recording.id))
+
     def test_clear_history_deletes_all_recordings_and_points(self):
         recording = self.post("/api/mobility/recordings/start").json()
         self.post(

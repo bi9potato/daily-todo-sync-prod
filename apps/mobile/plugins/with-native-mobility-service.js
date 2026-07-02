@@ -489,11 +489,16 @@ class NativeMobilityService : Service(), SensorEventListener {
       when (intent?.action) {
         ACTION_START -> {
           val nextRecordingId = intent.getStringExtra(EXTRA_RECORDING_ID).orEmpty()
+          val persistedRecordingDate = restoreRecordingDate(nextRecordingId)
           restoreStepState(nextRecordingId)
           recordingId = nextRecordingId
           apiBaseUrl = intent.getStringExtra(EXTRA_API_BASE_URL).orEmpty().trimEnd('/')
           accessToken = intent.getStringExtra(EXTRA_ACCESS_TOKEN).orEmpty()
-          recordingDate = currentLocalDateString()
+          // A sticky-service recovery or device reboot can restart yesterday's
+          // recording after midnight. Preserve the date stored with that ID so
+          // scheduleUpload() rotates it instead of incorrectly relabelling the
+          // stale recording as today's.
+          recordingDate = persistedRecordingDate.ifBlank { currentLocalDateString() }
           persistConfig()
           startTracking()
         }
@@ -890,8 +895,12 @@ class NativeMobilityService : Service(), SensorEventListener {
     if (recordingId.isBlank() || apiBaseUrl.isBlank() || accessToken.isBlank()) return
     if (recordingDate.isNotBlank() && recordingDate == today) return
     val staleRecordingId = recordingId
-    stopRecordingOnServer(staleRecordingId)
+    // Commit any final counter value before closing yesterday. Previously the
+    // reset below could discard steps collected since the last upload.
+    uploadSteps()
+    if (!stopRecordingOnServer(staleRecordingId)) return
     val newRecordingId = startRecordingOnServer() ?: return
+    if (newRecordingId == staleRecordingId) return
     restoreStepState(newRecordingId)
     recordingId = newRecordingId
     recordingDate = today
@@ -1064,6 +1073,15 @@ class NativeMobilityService : Service(), SensorEventListener {
       stepCount = 0
       syncedStepCount = 0
       lastStepSensorValue = null
+    }
+  }
+
+  private fun restoreRecordingDate(nextRecordingId: String): String {
+    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    return if (prefs.getString("recordingId", "").orEmpty() == nextRecordingId) {
+      prefs.getString("recordingDate", "").orEmpty()
+    } else {
+      ""
     }
   }
 
