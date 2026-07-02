@@ -16,6 +16,11 @@ import {
   stopNativeMobilityService,
 } from "./mobility-native-service";
 import {
+  isIosLocationTrackingActive,
+  startIosLocationTracking,
+  stopIosLocationTracking,
+} from "./mobility-ios-location";
+import {
   flushMobilityPointQueue,
   importNativeMobilityPointQueue,
 } from "./mobility-queue";
@@ -35,7 +40,19 @@ export function supportsNativeBackgroundLocationTracking() {
   return Platform.OS === "android";
 }
 
+// Both native platforms can keep recording in the background - Android via its
+// foreground service, iOS via the background-location TaskManager task. The UI
+// uses this to decide whether to request "always" permission and pass
+// background: true, while the Android-only helper above still gates behaviour
+// specific to the native service (e.g. battery-optimization prompts).
+export function supportsBackgroundLocationTracking() {
+  return Platform.OS === "android" || Platform.OS === "ios";
+}
+
 export async function isMobilityLocationTrackingActive() {
+  if (Platform.OS === "ios") {
+    return isIosLocationTrackingActive();
+  }
   if (Platform.OS !== "android") {
     return false;
   }
@@ -50,6 +67,23 @@ export async function startMobilityLocationTracking({
   recordingId?: string;
 } = {}) {
   if (Platform.OS === "web") {
+    return;
+  }
+  if (Platform.OS === "ios") {
+    const iosRecordingId =
+      recordingId ?? (await getActiveMobilityRecordingId());
+    if (!iosRecordingId) {
+      throw new Error("没有活动足迹记录，无法开始定位。");
+    }
+    await setActiveMobilityRecordingId(iosRecordingId);
+    const started = await startIosLocationTracking();
+    if (!started) {
+      throw new Error("iOS 足迹后台定位启动失败。");
+    }
+    await updateMobilityDiagnostics({
+      lastError: "",
+      recoveredAt: new Date().toISOString(),
+    });
     return;
   }
   if (Platform.OS !== "android") {
@@ -91,6 +125,13 @@ export async function startMobilityLocationTracking({
 
 export async function stopMobilityLocationTracking() {
   if (Platform.OS === "web") {
+    return;
+  }
+  if (Platform.OS === "ios") {
+    await stopIosLocationTracking();
+    await flushMobilityPointQueue().catch((error) => {
+      console.warn("Mobility final upload failed", error);
+    });
     return;
   }
   await stopNativeMobilityService();
@@ -153,6 +194,24 @@ export async function getMobilityTrackingDiagnostics() {
       ...(await readMobilityDiagnostics()),
     };
   }
+  if (Platform.OS === "ios") {
+    const [foreground, background, nativeTaskActive, saved] = await Promise.all([
+      Location.getForegroundPermissionsAsync(),
+      Location.getBackgroundPermissionsAsync(),
+      isIosLocationTrackingActive(),
+      readMobilityDiagnostics(),
+    ]);
+    return {
+      backgroundPermission: background.granted,
+      foregroundPermission: foreground.granted,
+      nativeTaskActive,
+      // Background recording is available on iOS through the TaskManager task,
+      // so the UI treats it the same as Android's native service here.
+      nativeBackgroundAvailable: true,
+      nativeQueuedPointCount: 0,
+      ...saved,
+    };
+  }
   const [
     foreground,
     background,
@@ -192,12 +251,34 @@ export async function recoverMobilityLocationTracking(recordingId: string) {
     Location.getBackgroundPermissionsAsync(),
   ]);
   if (!foreground.granted || !background.granted) {
-    await stopNativeMobilityService().catch(() => false);
+    if (Platform.OS === "ios") {
+      await stopIosLocationTracking().catch(() => undefined);
+    } else {
+      await stopNativeMobilityService().catch(() => false);
+    }
     await updateMobilityDiagnostics({
       lastError: !foreground.granted
         ? "位置权限已关闭，请重新打开足迹记录授权"
         : "后台位置权限已关闭，需要选择“始终允许”",
     });
+    return getMobilityTrackingDiagnostics();
+  }
+  if (Platform.OS === "ios") {
+    await setActiveMobilityRecordingId(recordingId);
+    // The background-location task keeps running across app suspensions; only
+    // restart it if iOS actually tore it down (e.g. it stopped after the app
+    // was killed), mirroring the Android recovery path below.
+    if (await isIosLocationTrackingActive()) {
+      return getMobilityTrackingDiagnostics();
+    }
+    try {
+      await startMobilityLocationTracking({ recordingId });
+    } catch (error) {
+      await updateMobilityDiagnostics({
+        lastError:
+          error instanceof Error ? error.message : "iOS 足迹后台服务恢复失败",
+      });
+    }
     return getMobilityTrackingDiagnostics();
   }
   if (!isNativeMobilityServiceAvailable()) {

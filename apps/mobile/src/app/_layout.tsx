@@ -20,6 +20,10 @@ import {
   installClientLogCapture,
   recordClientLog,
 } from "@/lib/client-logs";
+// Side-effect import: registers the iOS background-location TaskManager task at
+// global scope before the app finishes loading (required by TaskManager, and a
+// no-op on Android/web where the task is never started).
+import "@/lib/mobility-ios-location";
 import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import { initNetworkMonitoring, onNetworkReconnect } from "@/lib/network";
 import { cleanupLegacyMobilityRuntime } from "@/lib/mobility-tracking";
