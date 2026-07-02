@@ -1,9 +1,14 @@
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { BlurView } from "expo-blur";
+import Animated, { SlideInLeft, SlideOutLeft } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
 import type { CalendarViewMode } from "@/screens/CalendarScreen";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
+
+const PANEL_ENTERING = SlideInLeft.springify().damping(20).mass(0.9);
+const PANEL_EXITING = SlideOutLeft.duration(180);
 
 export type AppSection =
   | "today"
@@ -96,13 +101,18 @@ export function AppDrawer({
       transparent
       visible={visible}>
       <View style={styles.overlay}>
-        <Pressable
-          accessibilityLabel="关闭侧边栏"
-          onPress={onClose}
-          style={styles.scrim}
-        />
+        <BlurView intensity={28} style={styles.scrim} tint="dark">
+          <Pressable
+            accessibilityLabel="关闭侧边栏"
+            onPress={onClose}
+            style={StyleSheet.absoluteFill}
+          />
+        </BlurView>
         <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
-          <View style={styles.panel}>
+          <Animated.View
+            entering={PANEL_ENTERING}
+            exiting={PANEL_EXITING}
+            style={styles.panel}>
             <View style={styles.accountRow}>
               <Pressable
                 accessibilityLabel="打开我的账户"
@@ -207,7 +217,7 @@ export function AppDrawer({
               <Text style={styles.currentDateValue}>{currentDate}</Text>
               <Text style={styles.currentDateHint}>日期仅在日历中切换</Text>
             </View>
-          </View>
+          </Animated.View>
         </SafeAreaView>
       </View>
     </Modal>
@@ -221,7 +231,7 @@ const styles = StyleSheet.create({
   },
   scrim: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(22, 27, 24, 0.34)",
+    backgroundColor: "rgba(22, 27, 24, 0.18)",
   },
   safeArea: {
     width: "86%",

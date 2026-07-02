@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { QueryClient } from "@tanstack/react-query";
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import * as SplashScreen from "expo-splash-screen";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -23,7 +24,10 @@ import { flushTodoMutationQueue } from "@/lib/todo-mutation-queue";
 
 installClientLogCapture();
 initNetworkMonitoring();
-void cleanupLegacyMobilityRuntime({ includeCurrent: true });
+// Held until src/app/index.tsx knows whether to show the auth screen or the
+// main app, so there is exactly one native-splash -> real-content transition
+// instead of native splash -> blank/spinner frame -> content.
+void SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -101,9 +105,7 @@ export default function RootLayout() {
           client={queryClient}
           persistOptions={{ buster: QUERY_CACHE_BUSTER, persister }}>
           <SessionProvider>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-            </Stack>
+            <Stack screenOptions={{ headerShown: false }} />
             <OfflineBanner />
             <StatusBar style="dark" />
           </SessionProvider>

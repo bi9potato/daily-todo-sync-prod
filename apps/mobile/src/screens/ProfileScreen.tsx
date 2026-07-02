@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { useState, type ReactNode } from "react";
 import Constants from "expo-constants";
+import { LinearGradient } from "expo-linear-gradient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
@@ -152,14 +153,16 @@ export function ProfileScreen() {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}>
-        <View style={styles.titlePanel}>
-          <Text style={styles.title}>我的</Text>
-        </View>
+        <Text style={styles.title}>我的</Text>
 
         <View style={styles.profile}>
-          <View style={styles.avatar}>
+          <LinearGradient
+            colors={[colors.accent, colors.accentPressed]}
+            end={{ x: 1, y: 1 }}
+            start={{ x: 0, y: 0 }}
+            style={styles.avatar}>
             <Text style={styles.avatarText}>{initial}</Text>
-          </View>
+          </LinearGradient>
           <View style={styles.profileCopy}>
             <Text style={styles.name}>{displayName}</Text>
             <Text numberOfLines={2} style={styles.email}>
@@ -607,24 +610,19 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     paddingBottom: spacing.xxl,
   },
-  titlePanel: {
-    ...shadows.panel,
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    padding: spacing.lg,
-  },
   title: {
     ...typography.title,
     color: colors.text,
+    marginBottom: spacing.xs,
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.xs,
   },
   profile: {
-    ...shadows.panel,
+    ...shadows.floating,
     alignItems: "center",
     backgroundColor: colors.surfaceStrong,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: "row",
     gap: spacing.lg,
@@ -632,10 +630,10 @@ const styles = StyleSheet.create({
   },
   avatar: {
     alignItems: "center",
-    backgroundColor: colors.accent,
     borderRadius: radius.full,
     height: 60,
     justifyContent: "center",
+    overflow: "hidden",
     width: 60,
   },
   avatarText: {
@@ -657,10 +655,10 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   nameEditor: {
-    ...shadows.panel,
+    ...shadows.card,
     backgroundColor: colors.panel,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     gap: spacing.sm,
     padding: spacing.md,
@@ -698,10 +696,10 @@ const styles = StyleSheet.create({
     opacity: 0.42,
   },
   section: {
-    ...shadows.panel,
+    ...shadows.card,
     backgroundColor: colors.panel,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     gap: spacing.sm,
     padding: spacing.sm,
@@ -960,16 +958,18 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   logout: {
+    ...shadows.card,
     alignItems: "center",
     alignSelf: "stretch",
     backgroundColor: colors.surfaceStrong,
     borderColor: colors.border,
-    borderRadius: radius.sm,
+    borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: "row",
     gap: spacing.sm,
     justifyContent: "center",
-    minHeight: 50,
+    minHeight: 52,
+    marginTop: spacing.xs,
   },
   logoutText: {
     ...typography.label,

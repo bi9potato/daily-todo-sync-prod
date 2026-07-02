@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { DateStrip } from "@/components/DateStrip";
+import { ScreenEnter } from "@/components/ScreenEnter";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { getRange } from "@/lib/api";
 import {
@@ -74,22 +75,24 @@ export function CalendarScreen({
             selectedDate={selectedDate}
             today={today}
           />
-          {mode === "month" ? (
-            <MonthGrid
-              days={rangeQuery.data.days}
-              monthEnd={monthRange.monthEnd}
-              monthStart={monthRange.monthStart}
-              onOpenDate={onOpenDate}
-              onSelectDate={onSelectDate}
-              selectedDate={selectedDate}
-            />
-          ) : (
-            <DayList
-              days={rangeQuery.data.days}
-              onOpenDate={onOpenDate}
-              selectedDate={selectedDate}
-            />
-          )}
+          <ScreenEnter key={mode}>
+            {mode === "month" ? (
+              <MonthGrid
+                days={rangeQuery.data.days}
+                monthEnd={monthRange.monthEnd}
+                monthStart={monthRange.monthStart}
+                onOpenDate={onOpenDate}
+                onSelectDate={onSelectDate}
+                selectedDate={selectedDate}
+              />
+            ) : (
+              <DayList
+                days={rangeQuery.data.days}
+                onOpenDate={onOpenDate}
+                selectedDate={selectedDate}
+              />
+            )}
+          </ScreenEnter>
         </ScrollView>
       )}
     </View>

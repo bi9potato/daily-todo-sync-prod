@@ -7,7 +7,9 @@ import type { TodoOccurrence } from "@/types";
 
 type TaskRowProps = {
   task: TodoOccurrence;
+  isDragActive?: boolean;
   onDelete: (task: TodoOccurrence) => void;
+  onDragHandleLongPress?: () => void;
   onPin: (task: TodoOccurrence) => void;
   onPress: (task: TodoOccurrence) => void;
   onToggle: (task: TodoOccurrence) => void;
@@ -15,7 +17,9 @@ type TaskRowProps = {
 
 export function TaskRow({
   task,
+  isDragActive,
   onDelete,
+  onDragHandleLongPress,
   onPin,
   onPress,
   onToggle,
@@ -39,9 +43,17 @@ export function TaskRow({
         task.isPinned && !task.isLongTerm && styles.pinnedContainer,
         task.isPinned && task.isLongTerm && styles.longTermPinnedContainer,
         done && styles.doneContainer,
+        isDragActive && styles.dragActiveContainer,
         pressed && styles.pressed,
       ]}>
-      <AppIcon name="reorder-two-outline" color={colors.textMuted} size={18} />
+      <Pressable
+        accessibilityLabel="拖动排序"
+        accessibilityRole="button"
+        hitSlop={8}
+        onLongPress={onDragHandleLongPress}
+        style={styles.dragHandle}>
+        <AppIcon name="reorder-two-outline" color={colors.textMuted} size={18} />
+      </Pressable>
       <Pressable
         accessibilityLabel={done ? "标记为未完成" : "标记为已完成"}
         accessibilityRole="checkbox"
@@ -179,8 +191,18 @@ const styles = StyleSheet.create({
     elevation: 0,
     opacity: 0.76,
   },
+  dragActiveContainer: {
+    elevation: 12,
+    opacity: 0.96,
+  },
   pressed: {
     opacity: 0.64,
+  },
+  dragHandle: {
+    alignItems: "center",
+    height: 32,
+    justifyContent: "center",
+    width: 24,
   },
   checkbox: {
     alignItems: "center",

@@ -1,12 +1,20 @@
+import { useEffect } from "react";
 import { ActivityIndicator, Image, StyleSheet, Text, View } from "react-native";
+import { Redirect } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 
-import { MainApp } from "@/MainApp";
 import { useSession } from "@/session";
 import { AuthScreen } from "@/screens/AuthScreen";
 import { colors, spacing, typography } from "@/theme";
 
 export default function IndexScreen() {
   const { status } = useSession();
+
+  useEffect(() => {
+    if (status !== "loading") {
+      void SplashScreen.hideAsync();
+    }
+  }, [status]);
 
   if (status === "loading") {
     return (
@@ -21,7 +29,11 @@ export default function IndexScreen() {
     );
   }
 
-  return status === "authenticated" ? <MainApp /> : <AuthScreen />;
+  return status === "authenticated" ? (
+    <Redirect href="/today" />
+  ) : (
+    <AuthScreen />
+  );
 }
 
 const styles = StyleSheet.create({
