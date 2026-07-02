@@ -1,44 +1,51 @@
-const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-const SHORT_WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+import dayjs from "dayjs";
+import "dayjs/locale/zh-cn";
+
+// Date keys are local-calendar "YYYY-MM-DD" strings. dayjs parses them in
+// local time (unlike `new Date("YYYY-MM-DD")`, which parses UTC), and the
+// zh-cn locale provides Monday-first weeks plus the 周X / X weekday names
+// used across the app.
+const DATE_KEY = "YYYY-MM-DD";
+
+function day(key: string) {
+  return dayjs(key).locale("zh-cn");
+}
 
 export function toDateKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return dayjs(date).format(DATE_KEY);
 }
 
 export function fromDateKey(key: string) {
-  const [year, month, day] = key.split("-").map(Number);
-  return new Date(year, month - 1, day);
+  return day(key).toDate();
 }
 
 export function addDays(key: string, amount: number) {
-  const date = fromDateKey(key);
-  date.setDate(date.getDate() + amount);
-  return toDateKey(date);
+  return day(key).add(amount, "day").format(DATE_KEY);
 }
 
 export function datesBetween(start: string, end: string) {
+  const last = day(end);
   const dates: string[] = [];
-  for (let current = start; current <= end; current = addDays(current, 1)) {
-    dates.push(current);
+  for (
+    let current = day(start);
+    !current.isAfter(last);
+    current = current.add(1, "day")
+  ) {
+    dates.push(current.format(DATE_KEY));
   }
   return dates;
 }
 
 export function formatLongDate(key: string) {
-  const date = fromDateKey(key);
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${WEEKDAYS[date.getDay()]}`;
+  return day(key).format("M月D日 ddd");
 }
 
 export function formatMonthDay(key: string) {
-  const date = fromDateKey(key);
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
+  return day(key).format("M月D日");
 }
 
 export function shortWeekday(key: string) {
-  return SHORT_WEEKDAYS[fromDateKey(key).getDay()];
+  return day(key).format("dd");
 }
 
 export function getCenteredDates(center: string, radius = 2) {
@@ -48,36 +55,24 @@ export function getCenteredDates(center: string, radius = 2) {
 }
 
 export function getWeekRange(center: string) {
-  const date = fromDateKey(center);
-  const mondayOffset = date.getDay() === 0 ? -6 : 1 - date.getDay();
-  const start = addDays(center, mondayOffset);
-  return { start, end: addDays(start, 6) };
+  const start = day(center).startOf("week");
+  return {
+    start: start.format(DATE_KEY),
+    end: start.add(6, "day").format(DATE_KEY),
+  };
 }
 
 export function addMonths(key: string, amount: number) {
-  const date = fromDateKey(key);
-  const originalDay = date.getDate();
-  date.setDate(1);
-  date.setMonth(date.getMonth() + amount);
-  const lastDay = new Date(
-    date.getFullYear(),
-    date.getMonth() + 1,
-    0,
-  ).getDate();
-  date.setDate(Math.min(originalDay, lastDay));
-  return toDateKey(date);
+  return day(key).add(amount, "month").format(DATE_KEY);
 }
 
 export function getMonthRange(center: string) {
-  const date = fromDateKey(center);
-  const monthStart = toDateKey(
-    new Date(date.getFullYear(), date.getMonth(), 1),
-  );
-  const monthEnd = toDateKey(
-    new Date(date.getFullYear(), date.getMonth() + 1, 0),
-  );
-  const firstDate = fromDateKey(monthStart);
-  const mondayOffset = firstDate.getDay() === 0 ? -6 : 1 - firstDate.getDay();
-  const start = addDays(monthStart, mondayOffset);
-  return { start, end: addDays(start, 41), monthStart, monthEnd };
+  const monthStart = day(center).startOf("month");
+  const start = monthStart.startOf("week");
+  return {
+    start: start.format(DATE_KEY),
+    end: start.add(41, "day").format(DATE_KEY),
+    monthStart: monthStart.format(DATE_KEY),
+    monthEnd: monthStart.endOf("month").format(DATE_KEY),
+  };
 }

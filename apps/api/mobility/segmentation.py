@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from statistics import median, quantiles
 
 from .geo import haversine_distance_meters, haversine_meters
 from .models import LocationPoint
@@ -68,10 +69,6 @@ def _duration_minutes(points: list[LocationPoint], start_index: int, end_index: 
     return max(0, int(delta.total_seconds() // 60))
 
 
-def _percentile(sorted_values: list[float], ratio: float) -> float:
-    return sorted_values[round(ratio * (len(sorted_values) - 1))]
-
-
 def _infer_mode(
     distance_meters: float,
     duration_seconds: float,
@@ -80,9 +77,10 @@ def _infer_mode(
     if distance_meters < MIN_NON_WALKING_DISTANCE_METERS:
         return "WALKING"
     if len(recorded_speeds) >= MIN_SPEED_SAMPLES:
-        if _percentile(recorded_speeds, 0.9) >= VEHICLE_PEAK_MPS:
+        peak_mps = quantiles(recorded_speeds, n=10, method="inclusive")[-1]
+        if peak_mps >= VEHICLE_PEAK_MPS:
             return "IN_VEHICLE"
-        median_mps = _percentile(recorded_speeds, 0.5)
+        median_mps = median(recorded_speeds)
         if median_mps <= WALKING_MAX_MPS:
             return "WALKING"
         if median_mps <= CYCLING_MAX_MPS:
@@ -117,11 +115,11 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
     duration_seconds = (
         end_point.recorded_at - start_point.recorded_at
     ).total_seconds()
-    recorded_speeds = sorted(
+    recorded_speeds = [
         float(point.speed)
         for point in points[start_index : end_index + 1]
         if point.speed is not None and point.speed >= 0
-    )
+    ]
     return Segment(
         type="trip",
         start_index=start_index,

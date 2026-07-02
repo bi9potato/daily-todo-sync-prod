@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  PanResponder,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -13,6 +12,7 @@ import {
   Text,
   View,
 } from "react-native";
+import Slider from "@react-native-community/slider";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
 import * as Sharing from "expo-sharing";
@@ -740,7 +740,17 @@ export function MobilityScreen({
               size={17}
             />
           </Pressable>
-          <PlaybackScrubber onSeek={seekPlayback} ratio={playbackRatio} />
+          <Slider
+            accessibilityLabel="回放进度"
+            maximumTrackTintColor={colors.surfaceMuted}
+            maximumValue={1}
+            minimumTrackTintColor={colors.accent}
+            minimumValue={0}
+            onValueChange={seekPlayback}
+            style={styles.scrubber}
+            thumbTintColor={colors.accent}
+            value={playbackRatio}
+          />
           <View style={styles.speedOptions}>
             {PLAYBACK_SPEED_OPTIONS.map((speed) => {
               const active = speed === playbackSpeed;
@@ -1216,80 +1226,6 @@ function useSegmentPlaceNames(segments: MobilitySegment[]) {
   return resolvedNames;
 }
 
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function PlaybackScrubber({
-  onSeek,
-  ratio,
-}: {
-  onSeek: (ratio: number) => void;
-  ratio: number;
-}) {
-  const [width, setWidth] = useState(0);
-  // Latest render values for the pan handlers below, refreshed after every
-  // commit. `startRatioRef` is snapshotted at drag start so gestureState.dx
-  // can be applied relative to it.
-  const onSeekRef = useRef(onSeek);
-  const ratioRef = useRef(ratio);
-  const widthRef = useRef(0);
-  const startRatioRef = useRef(ratio);
-  useEffect(() => {
-    onSeekRef.current = onSeek;
-    ratioRef.current = ratio;
-    widthRef.current = width;
-  });
-  // Tracks the drag with gestureState.dx (the accumulated horizontal delta
-  // since the gesture began) rather than nativeEvent.locationX during
-  // onPanResponderMove - the latter is well documented to report jumpy,
-  // unreliable coordinates on Android mid-gesture, which made dragging the
-  // scrubber feel broken.
-  //
-  // The PanResponder must be created exactly once. Every onSeek re-renders
-  // this component, and recreating the responder mid-gesture resets its
-  // internal gestureState, so dx collapsed back to ~0 after each move and
-  // the thumb crawled or snapped back instead of following the finger.
-  // Responder callbacks run on touch events, never during React render, so
-  // reading the refs inside them is safe despite the react-hooks/refs
-  // warning (same pattern as the gesture callbacks in DraggableTaskItem).
-  // eslint-disable-next-line react-hooks/refs
-  const [panResponder] = useState(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      // The scrubber sits inside a vertical ScrollView; refusing termination
-      // keeps the scroll view from stealing the gesture mid-drag.
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: () => {
-        startRatioRef.current = ratioRef.current;
-      },
-      onPanResponderMove: (_event, gestureState) => {
-        if (widthRef.current > 0) {
-          onSeekRef.current(
-            clamp01(startRatioRef.current + gestureState.dx / widthRef.current),
-          );
-        }
-      },
-    }),
-  );
-
-  return (
-    <View
-      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-      style={styles.scrubberTrack}
-      {...panResponder.panHandlers}>
-      <View style={[styles.scrubberFill, { width: `${ratio * 100}%` }]} />
-      <View
-        style={[
-          styles.scrubberThumb,
-          { left: `${clamp01(ratio) * 100}%` },
-        ]}
-      />
-    </View>
-  );
-}
-
 function Metric({
   icon,
   label,
@@ -1440,29 +1376,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 36,
   },
-  scrubberTrack: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.full,
+  scrubber: {
     flex: 1,
-    height: 20,
-    justifyContent: "center",
-  },
-  scrubberFill: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.full,
-    height: 4,
-    position: "absolute",
-    left: 0,
-  },
-  scrubberThumb: {
-    backgroundColor: colors.accent,
-    borderColor: colors.white,
-    borderRadius: radius.full,
-    borderWidth: 2,
-    height: 16,
-    marginLeft: -8,
-    position: "absolute",
-    width: 16,
   },
   speedOptions: {
     flexDirection: "row",

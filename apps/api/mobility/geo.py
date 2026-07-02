@@ -1,4 +1,4 @@
-import math
+from haversine import Unit, haversine
 
 from .models import LocationPoint
 
@@ -12,16 +12,7 @@ MAX_PLAUSIBLE_SPEED_MPS = 55.0
 
 
 def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    earth_radius = 6_371_000
-    rlat1 = math.radians(lat1)
-    rlat2 = math.radians(lat2)
-    delta_lat = rlat2 - rlat1
-    delta_lon = math.radians(lon2 - lon1)
-    value = (
-        math.sin(delta_lat / 2) ** 2
-        + math.cos(rlat1) * math.cos(rlat2) * math.sin(delta_lon / 2) ** 2
-    )
-    return 2 * earth_radius * math.asin(math.sqrt(value))
+    return haversine((lat1, lon1), (lat2, lon2), unit=Unit.METERS)
 
 
 def haversine_meters(first: LocationPoint, second: LocationPoint) -> float:
