@@ -1,5 +1,10 @@
+import { ScreenEnter } from "@/components/ScreenEnter";
 import { ProfileScreen } from "@/screens/ProfileScreen";
 
 export default function ProfileRoute() {
-  return <ProfileScreen />;
+  return (
+    <ScreenEnter style={{ flex: 1 }}>
+      <ProfileScreen />
+    </ScreenEnter>
+  );
 }

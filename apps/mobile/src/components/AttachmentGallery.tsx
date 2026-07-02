@@ -12,6 +12,7 @@ import * as ImagePicker from "expo-image-picker";
 
 import { AppIcon } from "./AppIcon";
 import { AuthenticatedImage } from "./AuthenticatedImage";
+import { ScreenEnter } from "./ScreenEnter";
 import { colors, radius, spacing, typography } from "@/theme";
 import type {
   LocalAttachmentFile,
@@ -277,11 +278,13 @@ export function AttachmentGallery({
             <AppIcon name="close" color={colors.white} size={26} />
           </Pressable>
           {preview ? (
-            <AuthenticatedImage
-              contentUrl={preview.contentUrl}
-              resizeMode="contain"
-              style={styles.previewImage}
-            />
+            <ScreenEnter key={preview.contentUrl} style={styles.previewImage}>
+              <AuthenticatedImage
+                contentUrl={preview.contentUrl}
+                resizeMode="contain"
+                style={styles.previewImageFill}
+              />
+            </ScreenEnter>
           ) : null}
         </View>
       </Modal>
@@ -383,6 +386,10 @@ const styles = StyleSheet.create({
   previewImage: {
     borderRadius: radius.md,
     height: "72%",
+    width: "100%",
+  },
+  previewImageFill: {
+    height: "100%",
     width: "100%",
   },
   pressed: {

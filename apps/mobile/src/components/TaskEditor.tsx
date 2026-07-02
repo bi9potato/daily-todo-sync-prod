@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
 import { AttachmentGallery } from "./AttachmentGallery";
+import { ScreenEnter } from "./ScreenEnter";
 import { colors, radius, spacing, typography } from "@/theme";
 import type {
   LocalAttachmentFile,
@@ -95,7 +96,7 @@ function RepeatMenu({
           onPress={onClose}
           style={StyleSheet.absoluteFill}
         />
-        <View style={styles.repeatMenu}>
+        <ScreenEnter style={styles.repeatMenu}>
           <View style={styles.sheetHandle} />
           <View style={styles.menuHeader}>
             <AppIcon name="repeat-outline" color={colors.accent} size={22} />
@@ -173,7 +174,7 @@ function RepeatMenu({
             style={styles.menuDoneButton}>
             <Text style={styles.menuDoneText}>完成</Text>
           </Pressable>
-        </View>
+        </ScreenEnter>
       </View>
     </Modal>
   );

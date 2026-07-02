@@ -21,6 +21,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
+import { ScreenEnter } from "@/components/ScreenEnter";
 import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
 import {
   clearMobilityHistory,
@@ -627,20 +628,23 @@ export function MobilityScreen({
 
   if (showDetails) {
     return (
-      <MobilityDetails
-        day={dayQuery.data}
-        onBack={() => setShowDetails(false)}
-        runtime={runtime}
-        selectedDate={selectedDate}
-        totalSteps={totalSteps}
-      />
+      <ScreenEnter style={{ flex: 1 }}>
+        <MobilityDetails
+          day={dayQuery.data}
+          onBack={() => setShowDetails(false)}
+          runtime={runtime}
+          selectedDate={selectedDate}
+          totalSteps={totalSteps}
+        />
+      </ScreenEnter>
     );
   }
 
   return (
-    <ScrollView
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}>
+    <ScreenEnter style={{ flex: 1 }}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}>
       <View style={styles.heading}>
         <View>
           <Text style={styles.title}>足迹地图</Text>
@@ -982,7 +986,8 @@ export function MobilityScreen({
         )}
         <Text style={styles.dangerRowText}>清除足迹历史记录</Text>
       </Pressable>
-    </ScrollView>
+      </ScrollView>
+    </ScreenEnter>
   );
 }
 
