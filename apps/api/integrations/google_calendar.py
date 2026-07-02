@@ -1,10 +1,8 @@
-import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
+import requests
 from django.conf import settings
 from django.utils import timezone
 
@@ -183,12 +181,11 @@ def delete_event(
 
 
 def fetch_google_userinfo(access_token: str) -> dict[str, Any]:
-    request = Request(
+    return _send_request(
+        "GET",
         GOOGLE_USERINFO_URL,
         headers={"Authorization": f"Bearer {access_token}"},
-        method="GET",
     )
-    return _send_json_request(request)
 
 
 def build_google_calendar_event(occurrence: TodoOccurrence) -> dict[str, Any]:
@@ -304,14 +301,7 @@ def weekday_to_rrule(day: int) -> str:
 
 
 def _post_form(url: str, data: dict[str, str]) -> dict[str, Any]:
-    encoded = urlencode(data).encode()
-    request = Request(
-        url,
-        data=encoded,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    return _send_json_request(request)
+    return _send_request("POST", url, form=data)
 
 
 def _calendar_request(
@@ -321,35 +311,45 @@ def _calendar_request(
     token: str,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    data = json.dumps(payload).encode() if payload is not None else None
-    request = Request(
+    return _send_request(
+        method,
         GOOGLE_CALENDAR_API_BASE + path,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        method=method,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload=payload,
     )
-    return _send_json_request(request)
 
 
-def _send_json_request(request: Request) -> dict[str, Any]:
+def _send_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    form: dict[str, str] | None = None,
+    json_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
-        with urlopen(request, timeout=10) as response:
-            raw = response.read().decode()
-            return json.loads(raw) if raw else {}
-    except HTTPError as exc:
-        body = exc.read().decode()
-        message = body
-        try:
-            payload = json.loads(body)
-            message = (
-                payload.get("error_description")
-                or payload.get("error", {}).get("message")
-                or payload.get("error")
-                or body
-            )
-        except json.JSONDecodeError:
-            pass
-        raise GoogleCalendarError(str(message), status=exc.code) from exc
+        response = requests.request(
+            method,
+            url,
+            headers=headers,
+            data=form,
+            json=json_payload,
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise GoogleCalendarError(f"Google request failed: {exc}") from exc
+    if response.ok:
+        return response.json() if response.content else {}
+
+    message: Any = response.text
+    try:
+        payload = response.json()
+        message = (
+            payload.get("error_description")
+            or payload.get("error", {}).get("message")
+            or payload.get("error")
+            or response.text
+        )
+    except (requests.JSONDecodeError, AttributeError):
+        pass
+    raise GoogleCalendarError(str(message), status=response.status_code)

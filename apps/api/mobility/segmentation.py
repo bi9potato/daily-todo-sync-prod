@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from statistics import median, quantiles
 
 from .geo import haversine_distance_meters, haversine_meters
 from .models import LocationPoint
@@ -14,13 +15,23 @@ DEFAULT_DWELL_MINUTES = 5
 
 # Rough, speed-only heuristic for a trip's mode of transport. This is not
 # real activity recognition (no accelerometer/ActivityRecognition signal) -
-# it only looks at the average speed across the trip's points.
+# it only looks at how fast the trip moved.
 WALKING_MAX_MPS = 2.2
 CYCLING_MAX_MPS = 7.0
 # Below this distance the average speed is dominated by GPS noise (a couple
 # of drift fixes between two visits easily span 100+ meters in seconds), so
 # there is not enough signal to claim anything faster than walking.
 MIN_NON_WALKING_DISTANCE_METERS = 200.0
+# The Android service stores each fix's Doppler speed (LocationPoint.speed),
+# which stays near zero while standing still even when the reported position
+# drifts hundreds of meters. When enough fixes carry it, classifying from
+# those measurements beats dividing (possibly drift-inflated) displacement
+# by time. The median gives the sustained pace; vehicles are recognised by
+# their bursts instead, because stop-and-go traffic keeps the median of a
+# bus or car ride down at bicycle pace while the stretches between stops
+# still hit speeds no city cyclist sustains.
+VEHICLE_PEAK_MPS = 10.0
+MIN_SPEED_SAMPLES = 5
 
 
 @dataclass
@@ -58,13 +69,29 @@ def _duration_minutes(points: list[LocationPoint], start_index: int, end_index: 
     return max(0, int(delta.total_seconds() // 60))
 
 
-def _infer_mode(distance_meters: float, duration_seconds: float) -> str:
+def _infer_mode(
+    distance_meters: float,
+    duration_seconds: float,
+    recorded_speeds: list[float],
+) -> str:
     if distance_meters < MIN_NON_WALKING_DISTANCE_METERS:
         return "WALKING"
-    # Use the exact duration, not minutes floored to an int: a 4.5 minute
-    # walk read as 4 minutes inflates the speed enough to cross the walking
-    # threshold, and a sub-minute trip floored to 0 minutes used to divide
-    # by one second, labelling short strolls as cycling or driving.
+    if len(recorded_speeds) >= MIN_SPEED_SAMPLES:
+        peak_mps = quantiles(recorded_speeds, n=10, method="inclusive")[-1]
+        if peak_mps >= VEHICLE_PEAK_MPS:
+            return "IN_VEHICLE"
+        median_mps = median(recorded_speeds)
+        if median_mps <= WALKING_MAX_MPS:
+            return "WALKING"
+        if median_mps <= CYCLING_MAX_MPS:
+            return "CYCLING"
+        return "IN_VEHICLE"
+    # No usable Doppler speeds (older points, or the device withheld them):
+    # fall back to displacement over the exact duration. Not minutes floored
+    # to an int - a 4.5 minute walk read as 4 minutes inflates the speed
+    # enough to cross the walking threshold, and a sub-minute trip floored
+    # to 0 minutes used to divide by one second, labelling short strolls as
+    # cycling or driving.
     speed_mps = distance_meters / max(duration_seconds, 1.0)
     if speed_mps <= WALKING_MAX_MPS:
         return "WALKING"
@@ -88,6 +115,11 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
     duration_seconds = (
         end_point.recorded_at - start_point.recorded_at
     ).total_seconds()
+    recorded_speeds = [
+        float(point.speed)
+        for point in points[start_index : end_index + 1]
+        if point.speed is not None and point.speed >= 0
+    ]
     return Segment(
         type="trip",
         start_index=start_index,
@@ -100,7 +132,7 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
         end_latitude=float(end_point.latitude),
         end_longitude=float(end_point.longitude),
         distance_meters=round(distance, 1),
-        mode=_infer_mode(distance, duration_seconds),
+        mode=_infer_mode(distance, duration_seconds, recorded_speeds),
     )
 
 
