@@ -31,7 +31,7 @@ import {
   startMobilityRecording,
   stopMobilityRecording,
 } from "@/lib/api";
-import { addDays, formatLongDate } from "@/lib/date";
+import { addDays, formatLongDate, toDateKey } from "@/lib/date";
 import { beginMobilityActivation } from "@/lib/mobility-activation";
 import {
   clearActiveMobilityRecordingId,
@@ -66,6 +66,7 @@ import type {
 } from "@/types";
 
 const PLAYBACK_SPEED_OPTIONS = [1, 2, 5, 10] as const;
+const EMPTY_MOBILITY_POINTS: MobilityPoint[] = [];
 
 function explainBackgroundPermission() {
   if (Platform.OS !== "android") {
@@ -271,10 +272,21 @@ export function MobilityScreen({
   today: string;
 }) {
   const queryClient = useQueryClient();
-  const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedDateOverride, setSelectedDateOverride] = useState<string | null>(
+    null,
+  );
+  const selectedDate = selectedDateOverride ?? today;
   const [actionError, setActionError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
-  const [livePoints, setLivePoints] = useState<MobilityPoint[]>([]);
+  const [liveTrack, setLiveTrack] = useState<{
+    date: string;
+    points: MobilityPoint[];
+    recordingId: string | null;
+  }>({
+    date: today,
+    points: [],
+    recordingId: null,
+  });
   const [visitDwellMinutes, setVisitDwellMinutesState] = useState(
     DEFAULT_VISIT_DWELL_MINUTES,
   );
@@ -337,7 +349,7 @@ export function MobilityScreen({
     mutationFn: async () => {
       const finishActivation = beginMobilityActivation();
       setActionError("");
-      setLivePoints([]);
+      setLiveTrack({ date: today, points: [], recordingId: null });
       latestLivePointRef.current = "";
       try {
         const nativeBackgroundAvailable =
@@ -444,7 +456,7 @@ export function MobilityScreen({
       await clearNativeMobilityQueue().catch((error) => {
         console.warn("Mobility native queue clear failed", error);
       });
-      setLivePoints([]);
+      setLiveTrack({ date: today, points: [], recordingId: null });
       latestLivePointRef.current = "";
       const shouldResume = recordingEnabled && (await getAutoTrackingEnabled());
       if (shouldResume) {
@@ -518,16 +530,19 @@ export function MobilityScreen({
   }, [activeRecording?.id]);
 
   useEffect(() => {
-    if (!recordingEnabled) {
+    const recordingId = activeRecording?.id;
+    if (!recordingEnabled || !recordingId) {
       latestLivePointRef.current = "";
       return;
     }
+    latestLivePointRef.current = "";
     let cancelled = false;
     const pollLatestPoint = async () => {
       const point = await getLatestNativeMobilityPoint().catch(() => null);
       if (
         cancelled ||
         !point ||
+        toDateKey(new Date(point.recordedAt)) !== today ||
         point.recordedAt === latestLivePointRef.current
       ) {
         return;
@@ -539,11 +554,20 @@ export function MobilityScreen({
       // tick — doing that with `findIndex` inside `filter` was O(n^2) and,
       // once a recording ran long enough to approach the 5,000 point cap,
       // was slow enough to visibly freeze the app on every poll.
-      setLivePoints((current) =>
-        current.length >= 5_000
-          ? [...current.slice(1), point]
-          : [...current, point],
-      );
+      setLiveTrack((current) => {
+        const currentPoints =
+          current.date === today && current.recordingId === recordingId
+            ? current.points
+            : [];
+        return {
+          date: today,
+          recordingId,
+          points:
+            currentPoints.length >= 5_000
+              ? [...currentPoints.slice(1), point]
+              : [...currentPoints, point],
+        };
+      });
     };
     void pollLatestPoint();
     const timer = setInterval(() => {
@@ -553,8 +577,13 @@ export function MobilityScreen({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [recordingEnabled]);
+  }, [activeRecording?.id, recordingEnabled, today]);
 
+  const livePoints =
+    liveTrack.date === today &&
+    liveTrack.recordingId === activeRecording?.id
+      ? liveTrack.points
+      : EMPTY_MOBILITY_POINTS;
   const routePoints = useMemo(
     () =>
       mergeMobilityPoints(
@@ -575,11 +604,14 @@ export function MobilityScreen({
 
   const changeSelectedDate = useCallback(
     (updater: (date: string) => string) => {
-      setSelectedDate(updater);
+      setSelectedDateOverride((current) => {
+        const next = updater(current ?? today);
+        return next === today ? null : next;
+      });
       setIsPlaying(false);
       setPlaybackRatio(0);
     },
-    [],
+    [today],
   );
 
   const handleMapFallback = useCallback((fallback: boolean) => {

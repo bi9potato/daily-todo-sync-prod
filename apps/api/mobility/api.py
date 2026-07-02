@@ -114,9 +114,39 @@ def recalculate_distance(recording: MobilityRecording) -> None:
     recording.save(update_fields=["distance_meters", "updated_at"])
 
 
+def day_distance(points: list[LocationPoint]) -> float:
+    points_by_recording: dict[UUID, list[LocationPoint]] = {}
+    for point in points:
+        points_by_recording.setdefault(point.recording_id, []).append(point)
+    return round(
+        sum(
+            haversine_meters(first, second)
+            for recording_points in points_by_recording.values()
+            for first, second in zip(
+                recording_points, recording_points[1:], strict=False
+            )
+        ),
+        1,
+    )
+
+
+def day_duration_minutes(
+    recordings: list[MobilityRecording], start: datetime, end: datetime, now: datetime
+) -> int:
+    duration_seconds = 0.0
+    for recording in recordings:
+        recording_start = max(recording.started_at, start)
+        recording_end = min(recording.ended_at or now, end)
+        duration_seconds += max(
+            0.0, (recording_end - recording_start).total_seconds()
+        )
+    return int(duration_seconds // 60)
+
+
 @router.get("/days/{day}", response=MobilityDayOut, auth=bearer_auth)
 def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MINUTES):
     start, end = day_bounds(day)
+    now = timezone.now()
     recordings = list(
         MobilityRecording.objects.filter(
             user=request.auth,
@@ -143,11 +173,18 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
     )
     serialized_recordings = [serialize_recording(item) for item in recordings]
     active = next((item for item in recordings if item.is_active), None)
+    # Recordings normally rotate at local midnight, but Android may deliver
+    # the first fix of a new day before that network rotation completes. Day
+    # totals therefore have to be computed from the requested local-time
+    # window, never from whole-recording counters.
+    day_recordings = [
+        item for item in recordings if start <= item.started_at < end
+    ]
     return {
         "date": day.isoformat(),
-        "stepCount": sum(item.step_count for item in recordings),
-        "distanceMeters": round(sum(item.distance_meters for item in recordings), 1),
-        "durationMinutes": sum(item["durationMinutes"] for item in serialized_recordings),
+        "stepCount": sum(item.step_count for item in day_recordings),
+        "distanceMeters": day_distance(points),
+        "durationMinutes": day_duration_minutes(recordings, start, end, now),
         "activeRecording": serialize_recording(active) if active else None,
         "recordings": serialized_recordings,
         "points": [
