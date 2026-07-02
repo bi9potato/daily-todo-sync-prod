@@ -15,6 +15,7 @@ import {
 import Slider from "@react-native-community/slider";
 import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as FileSystem from "expo-file-system/legacy";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import * as Sharing from "expo-sharing";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -651,10 +652,14 @@ export function MobilityScreen({
           <Text style={styles.subtitle}>开启后持续自动记录，无需每天手动开关</Text>
         </View>
         {recordingEnabled ? (
-          <View style={styles.liveBadge}>
+          <LinearGradient
+            colors={[colors.accentSoft, colors.surface]}
+            end={{ x: 1, y: 0.5 }}
+            start={{ x: 0, y: 0.5 }}
+            style={styles.liveBadge}>
             <View style={styles.liveDot} />
             <Text style={styles.liveText}>持续记录</Text>
-          </View>
+          </LinearGradient>
         ) : null}
       </View>
 
@@ -1267,7 +1272,6 @@ const styles = StyleSheet.create({
   },
   liveBadge: {
     alignItems: "center",
-    backgroundColor: colors.accentSoft,
     borderRadius: radius.full,
     flexDirection: "row",
     gap: 6,
@@ -1285,11 +1289,11 @@ const styles = StyleSheet.create({
     color: colors.accent,
   },
   authorizationCard: {
-    ...shadows.card,
+    ...shadows.floating,
     alignItems: "center",
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: "row",
     gap: spacing.md,
@@ -1339,10 +1343,10 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   mapFrame: {
-    ...shadows.card,
+    ...shadows.floating,
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     height: 310,
     overflow: "hidden",
@@ -1363,7 +1367,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: "row",
     gap: spacing.sm,
@@ -1405,7 +1409,7 @@ const styles = StyleSheet.create({
     ...shadows.card,
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: "row",
     paddingVertical: spacing.md,
@@ -1431,7 +1435,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1559,7 +1563,7 @@ const styles = StyleSheet.create({
     ...shadows.card,
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     paddingHorizontal: spacing.md,
   },
@@ -1586,7 +1590,7 @@ const styles = StyleSheet.create({
   placesSection: {
     backgroundColor: colors.panel,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     padding: spacing.lg,
   },
