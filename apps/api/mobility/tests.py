@@ -309,7 +309,7 @@ class MobilityApiTests(TestCase):
 
 class MobilitySegmentationTests(TestCase):
     @staticmethod
-    def make_point(lat: float, lng: float, minutes_offset: int, accuracy: float = 8):
+    def make_point(lat: float, lng: float, minutes_offset: float, accuracy: float = 8):
         base = timezone.make_aware(datetime.fromisoformat("2026-06-30T08:00:00"))
         return LocationPoint(
             latitude=lat,
@@ -349,6 +349,45 @@ class MobilitySegmentationTests(TestCase):
         segments = build_day_segments(points, dwell_minutes=5)
 
         self.assertEqual([segment["type"] for segment in segments], ["visit"])
+
+    def test_walking_pace_with_fractional_minutes_is_not_cycling(self):
+        # ~189m between fixes every 90 seconds is a brisk walk (~2.1 m/s).
+        # Flooring the 4.5 minute span to 4 minutes used to inflate the
+        # average speed past the walking threshold and label it CYCLING.
+        points = [
+            self.make_point(39.9000 + 0.0017 * step, 116.3000, 1.5 * step)
+            for step in range(4)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_short_noisy_trip_defaults_to_walking(self):
+        # Two fixes 150m apart within 30 seconds is indistinguishable from a
+        # GPS drift jump; it must not show up as a cycling trip.
+        points = [
+            self.make_point(39.9000, 116.3000, 0),
+            self.make_point(39.90135, 116.3000, 0.5),
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_cycling_pace_is_detected(self):
+        # ~451m between fixes every 90 seconds (~5 m/s) over 1.8km.
+        points = [
+            self.make_point(39.9000 + 0.00405 * step, 116.3000, 1.5 * step)
+            for step in range(5)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "CYCLING")
 
     def test_short_dwell_does_not_qualify_as_visit(self):
         points = [

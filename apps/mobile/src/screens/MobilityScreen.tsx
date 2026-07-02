@@ -1228,35 +1228,51 @@ function PlaybackScrubber({
   ratio: number;
 }) {
   const [width, setWidth] = useState(0);
-  // Snapshot of `ratio` as of the start of the current drag (see
-  // onPanResponderGrant below), held for the rest of that gesture. Plain
-  // state rather than a ref: this project's react-hooks/refs lint rule
-  // disallows ref reads/writes anywhere inside closures handed to
-  // PanResponder.create, ref or not.
-  const [startRatio, setStartRatio] = useState(ratio);
+  // Latest render values for the pan handlers below, refreshed after every
+  // commit. `startRatioRef` is snapshotted at drag start so gestureState.dx
+  // can be applied relative to it.
+  const onSeekRef = useRef(onSeek);
+  const ratioRef = useRef(ratio);
+  const widthRef = useRef(0);
+  const startRatioRef = useRef(ratio);
+  useEffect(() => {
+    onSeekRef.current = onSeek;
+    ratioRef.current = ratio;
+    widthRef.current = width;
+  });
   // Tracks the drag with gestureState.dx (the accumulated horizontal delta
   // since the gesture began) rather than nativeEvent.locationX during
   // onPanResponderMove - the latter is well documented to report jumpy,
   // unreliable coordinates on Android mid-gesture, which made dragging the
-  // scrubber feel broken. dx is computed by PanResponder itself from raw
-  // touch deltas and doesn't have that problem, and staying relative to
-  // wherever the drag started means it isn't thrown off by scrolling
-  // either.
+  // scrubber feel broken.
   //
-  // Recreated every render (cheap: a plain config object) so the handlers
-  // always close over the latest `width`/`startRatio`/`onSeek`.
-  const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => {
-      setStartRatio(ratio);
-    },
-    onPanResponderMove: (_event, gestureState) => {
-      if (width > 0) {
-        onSeek(clamp01(startRatio + gestureState.dx / width));
-      }
-    },
-  });
+  // The PanResponder must be created exactly once. Every onSeek re-renders
+  // this component, and recreating the responder mid-gesture resets its
+  // internal gestureState, so dx collapsed back to ~0 after each move and
+  // the thumb crawled or snapped back instead of following the finger.
+  // Responder callbacks run on touch events, never during React render, so
+  // reading the refs inside them is safe despite the react-hooks/refs
+  // warning (same pattern as the gesture callbacks in DraggableTaskItem).
+  // eslint-disable-next-line react-hooks/refs
+  const [panResponder] = useState(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      // The scrubber sits inside a vertical ScrollView; refusing termination
+      // keeps the scroll view from stealing the gesture mid-drag.
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        startRatioRef.current = ratioRef.current;
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        if (widthRef.current > 0) {
+          onSeekRef.current(
+            clamp01(startRatioRef.current + gestureState.dx / widthRef.current),
+          );
+        }
+      },
+    }),
+  );
 
   return (
     <View

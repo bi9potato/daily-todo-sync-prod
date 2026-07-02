@@ -17,6 +17,10 @@ DEFAULT_DWELL_MINUTES = 5
 # it only looks at the average speed across the trip's points.
 WALKING_MAX_MPS = 2.2
 CYCLING_MAX_MPS = 7.0
+# Below this distance the average speed is dominated by GPS noise (a couple
+# of drift fixes between two visits easily span 100+ meters in seconds), so
+# there is not enough signal to claim anything faster than walking.
+MIN_NON_WALKING_DISTANCE_METERS = 200.0
 
 
 @dataclass
@@ -54,9 +58,14 @@ def _duration_minutes(points: list[LocationPoint], start_index: int, end_index: 
     return max(0, int(delta.total_seconds() // 60))
 
 
-def _infer_mode(distance_meters: float, duration_minutes: int) -> str:
-    duration_seconds = max(duration_minutes * 60, 1)
-    speed_mps = distance_meters / duration_seconds
+def _infer_mode(distance_meters: float, duration_seconds: float) -> str:
+    if distance_meters < MIN_NON_WALKING_DISTANCE_METERS:
+        return "WALKING"
+    # Use the exact duration, not minutes floored to an int: a 4.5 minute
+    # walk read as 4 minutes inflates the speed enough to cross the walking
+    # threshold, and a sub-minute trip floored to 0 minutes used to divide
+    # by one second, labelling short strolls as cycling or driving.
+    speed_mps = distance_meters / max(duration_seconds, 1.0)
     if speed_mps <= WALKING_MAX_MPS:
         return "WALKING"
     if speed_mps <= CYCLING_MAX_MPS:
@@ -76,6 +85,9 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
     duration_minutes = _duration_minutes(points, start_index, end_index)
     start_point = points[start_index]
     end_point = points[end_index]
+    duration_seconds = (
+        end_point.recorded_at - start_point.recorded_at
+    ).total_seconds()
     return Segment(
         type="trip",
         start_index=start_index,
@@ -88,7 +100,7 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
         end_latitude=float(end_point.latitude),
         end_longitude=float(end_point.longitude),
         distance_meters=round(distance, 1),
-        mode=_infer_mode(distance, duration_minutes),
+        mode=_infer_mode(distance, duration_seconds),
     )
 
 
