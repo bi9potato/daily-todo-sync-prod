@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppIcon } from "./AppIcon";
@@ -15,7 +16,14 @@ type TaskRowProps = {
   onToggle: (task: TodoOccurrence) => void;
 };
 
-export function TaskRow({
+// The list this renders in re-renders every visible row whenever any task
+// in the day changes (a new pending/done array from the query cache), even
+// though replaceTask() only actually replaces the one task object that
+// changed. Memoizing means every row but that one bails out instead of
+// re-running its full render - the callback props stay stable (see
+// TodayScreen's useCallback-wrapped handlers and TaskDragList's renderItem)
+// so this comparison is meaningful rather than always missing.
+export const TaskRow = memo(function TaskRow({
   task,
   isDragActive,
   onDelete,
@@ -153,7 +161,7 @@ export function TaskRow({
       </Pressable>
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

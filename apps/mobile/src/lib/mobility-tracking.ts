@@ -70,7 +70,10 @@ export async function startMobilityLocationTracking({
     source: "mobility",
     context: { androidApiLevel: Platform.Version },
   });
-  await flushClientLogs();
+  // Delivering these diagnostic logs is not on the critical path of
+  // "tracking is running again" - it can happen whenever the network is
+  // next available instead of holding up this function on a request.
+  void flushClientLogs();
   const started = await startNativeMobilityService(activeRecordingId);
   if (!started) {
     throw new Error("原生足迹服务启动失败。");
@@ -83,7 +86,7 @@ export async function startMobilityLocationTracking({
     source: "mobility",
     context: { androidApiLevel: Platform.Version },
   });
-  await flushClientLogs();
+  void flushClientLogs();
 }
 
 export async function stopMobilityLocationTracking() {
@@ -100,10 +103,17 @@ export async function stopMobilityLocationTracking() {
   await cleanupLegacyMobilityRuntime({ includeCurrent: true });
 }
 
+// Every call site passes includeCurrent: true, so one flag is enough: once
+// this process has confirmed the pre-native-service TaskManager tasks are
+// gone, they stay gone (nothing in the app re-registers them) until the
+// next cold start. Without this, every resume-triggered restart re-ran all
+// 8 sequential native calls below for no reason.
+let legacyRuntimeVerifiedClean = false;
+
 export async function cleanupLegacyMobilityRuntime({
   includeCurrent = true,
 }: { includeCurrent?: boolean } = {}) {
-  if (Platform.OS === "web") {
+  if (Platform.OS === "web" || legacyRuntimeVerifiedClean) {
     return;
   }
   const taskNames = includeCurrent
@@ -124,6 +134,9 @@ export async function cleanupLegacyMobilityRuntime({
     } catch (error) {
       console.warn("Legacy mobility task cleanup failed", error);
     }
+  }
+  if (includeCurrent) {
+    legacyRuntimeVerifiedClean = true;
   }
 }
 
@@ -194,6 +207,16 @@ export async function recoverMobilityLocationTracking(recordingId: string) {
     return getMobilityTrackingDiagnostics();
   }
   await setActiveMobilityRecordingId(recordingId);
+  // The foreground service keeps recording straight through the app being
+  // backgrounded - it does not need "resuming". Restarting it anyway (the
+  // previous behavior, unconditional on every resume) re-sent the start
+  // command and re-ran the legacy-runtime sweep every single time, which is
+  // what made returning to the app from another app or the lock screen
+  // visibly stall while footprint tracking was on. Only genuine recovery
+  // (e.g. Android killed the service under memory pressure) needs a start.
+  if (await isNativeMobilityServiceRunning()) {
+    return getMobilityTrackingDiagnostics();
+  }
   try {
     await startMobilityLocationTracking({ recordingId });
   } catch (error) {

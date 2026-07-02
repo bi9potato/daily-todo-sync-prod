@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Platform } from "react-native";
+import { AppState, InteractionManager, Platform } from "react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getMobilityDay } from "./api";
@@ -233,9 +233,16 @@ export function useMobilityRuntime(today: string, enabled = true) {
         ) {
           return;
         }
-        void refetchDay().then(({ data }) =>
-          reconcile(data?.activeRecording ?? null, Boolean(data)),
-        );
+        // The fixed delay above covers Android's own native window-resume
+        // transition (invisible to JS); this additionally waits out any
+        // in-flight JS-thread interaction (e.g. a screen transition still
+        // animating) using the standard React Native primitive for it,
+        // rather than a second guessed delay.
+        InteractionManager.runAfterInteractions(() => {
+          void refetchDay().then(({ data }) =>
+            reconcile(data?.activeRecording ?? null, Boolean(data)),
+          );
+        });
       }, RESUME_RECONCILE_DELAY_MS);
     });
     return () => {

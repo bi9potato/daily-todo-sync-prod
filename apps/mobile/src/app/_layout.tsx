@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Platform } from "react-native";
+import { InteractionManager, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   defaultShouldDehydrateQuery,
@@ -77,16 +77,24 @@ const persister = createAsyncStoragePersister({
 const QUERY_CACHE_BUSTER = "v1";
 
 // Coming back online is when queued offline work actually has a chance to
-// land, so flush both offline queues right away instead of waiting for
-// their own debounce timers, then refetch so any change made elsewhere
-// (another device, a background sync) shows up too.
+// land, so flush both offline queues and refetch so any change made
+// elsewhere (another device, a background sync) shows up too. Reconnect
+// often fires at the exact moment the app resumes (Android re-checks
+// connectivity on foreground), so the sync itself is deferred past
+// whatever screen transition is in flight via InteractionManager - the
+// standard React Native primitive for "after animations/interactions
+// settle" - rather than competing with it for the JS thread. The device
+// already reads from cache while offline; this only decides when the
+// background refresh happens, never whether the UI can be used meanwhile.
 onNetworkReconnect(() => {
-  void flushTodoMutationQueue().then(() => {
-    void queryClient.invalidateQueries({ queryKey: ["day"] });
-    void queryClient.invalidateQueries({ queryKey: ["range"] });
-  });
-  void flushMobilityPointQueue().then(() => {
-    void queryClient.invalidateQueries({ queryKey: ["mobility-day"] });
+  InteractionManager.runAfterInteractions(() => {
+    void flushTodoMutationQueue().then(() => {
+      void queryClient.invalidateQueries({ queryKey: ["day"] });
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    });
+    void flushMobilityPointQueue().then(() => {
+      void queryClient.invalidateQueries({ queryKey: ["mobility-day"] });
+    });
   });
 });
 

@@ -1,9 +1,8 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   View,
@@ -170,8 +169,6 @@ export function TodayScreen({
 }: TodayScreenProps) {
   const queryClient = useQueryClient();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [longTermOpen, setLongTermOpen] = useState(false);
-  const [lowPriorityOpen, setLowPriorityOpen] = useState(false);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
   const dayQuery = useQuery({
@@ -439,9 +436,9 @@ export function TodayScreen({
   });
 
   // Draggable lists already reorder themselves live while dragging (see
-  // TaskGroup/CollapsibleTaskGroup below), so unlike the old
-  // DraggableTaskItem-based implementation there is no separate "preview"
-  // state to merge in here - this is just the server-sorted order.
+  // TaskGroup below), so unlike the old DraggableTaskItem-based
+  // implementation there is no separate "preview" state to merge in here -
+  // this is just the server-sorted order.
   const groups = useMemo(() => {
     const all = [
       ...(dayQuery.data?.pending ?? []),
@@ -456,31 +453,33 @@ export function TodayScreen({
     };
   }, [dayQuery.data]);
 
+  // Long-term and low-priority tasks live only behind their own sidebar
+  // routes now (see (app)/long-term.tsx, (app)/low-priority.tsx), so the
+  // main day view's "anything to show" check only counts its own tasks.
   const total =
     viewMode === "long-term"
       ? groups.longTerm.length
       : viewMode === "low-priority"
         ? groups.lowPriority.length
-        : groups.longTerm.length +
-          groups.regular.length +
-          groups.lowPriority.length;
-  function toggle(task: TodoOccurrence) {
+        : groups.regular.length;
+
+  const toggle = useCallback((task: TodoOccurrence) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateMutation.mutate({
       id: task.id,
       payload: { done: task.status !== "done" },
     });
-  }
+  }, [updateMutation]);
 
-  function togglePin(task: TodoOccurrence) {
+  const togglePin = useCallback((task: TodoOccurrence) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateMutation.mutate({
       id: task.id,
       payload: { pinned: !task.isPinned },
     });
-  }
+  }, [updateMutation]);
 
-  function confirmDelete(task: TodoOccurrence) {
+  const confirmDelete = useCallback((task: TodoOccurrence) => {
     Alert.alert("删除任务？", `“${task.text}”会移入回收站。`, [
       { text: "取消", style: "cancel" },
       {
@@ -489,7 +488,11 @@ export function TodayScreen({
         onPress: () => deleteMutation.mutate(task.id),
       },
     ]);
-  }
+  }, [deleteMutation]);
+
+  const openTaskEditor = useCallback((task: TodoOccurrence) => {
+    setSelectedTaskId(task.id);
+  }, []);
 
   async function refreshDay() {
     if (isPullRefreshing) {
@@ -503,29 +506,32 @@ export function TodayScreen({
     }
   }
 
-  // Each TaskGroup/CollapsibleTaskGroup renders pinned and unpinned tasks
-  // as two separate NestableDraggableFlatLists (see below), so a drag can
-  // never cross the pinned/unpinned boundary in the first place - this
-  // just persists whichever one of those lists was just dropped.
-  function finishTaskDrag(orderedIds: string[]) {
-    const current = dayQuery.data;
-    if (!current) {
-      return;
-    }
-    const orderById = new Map(
-      orderedIds.map((id, index) => [id, (index + 1) * 1000]),
-    );
-    const updateSortOrder = (task: TodoOccurrence) =>
-      orderById.has(task.id)
-        ? { ...task, sortOrder: orderById.get(task.id) ?? task.sortOrder }
-        : task;
-    queryClient.setQueryData<DayTodos>(["day", selectedDate], {
-      ...current,
-      pending: current.pending.map(updateSortOrder).sort(compareOccurrences),
-      done: current.done.map(updateSortOrder).sort(compareOccurrences),
-    });
-    reorderMutation.mutate(orderedIds);
-  }
+  // Each TaskGroup renders pinned and unpinned tasks as two separate
+  // NestableDraggableFlatLists (see below), so a drag can never cross the
+  // pinned/unpinned boundary in the first place - this just persists
+  // whichever one of those lists was just dropped.
+  const finishTaskDrag = useCallback(
+    (orderedIds: string[]) => {
+      const current = queryClient.getQueryData<DayTodos>(["day", selectedDate]);
+      if (!current) {
+        return;
+      }
+      const orderById = new Map(
+        orderedIds.map((id, index) => [id, (index + 1) * 1000]),
+      );
+      const updateSortOrder = (task: TodoOccurrence) =>
+        orderById.has(task.id)
+          ? { ...task, sortOrder: orderById.get(task.id) ?? task.sortOrder }
+          : task;
+      queryClient.setQueryData<DayTodos>(["day", selectedDate], {
+        ...current,
+        pending: current.pending.map(updateSortOrder).sort(compareOccurrences),
+        done: current.done.map(updateSortOrder).sort(compareOccurrences),
+      });
+      reorderMutation.mutate(orderedIds);
+    },
+    [queryClient, reorderMutation, selectedDate],
+  );
 
   const content = dayQuery.isPending ? (
     <LoadingState isPaused={dayQuery.fetchStatus === "paused"} />
@@ -560,46 +566,20 @@ export function TodayScreen({
       ) : null}
 
       {viewMode === "my-day" ? (
-        <>
-          <CollapsibleTaskGroup
-            count={groups.longTerm.length}
-            isOpen={longTermOpen}
-            onDelete={confirmDelete}
-            onPin={togglePin}
-            onPress={(task) => setSelectedTaskId(task.id)}
-            onReorder={finishTaskDrag}
-            onToggle={toggle}
-            onToggleOpen={() => setLongTermOpen((current) => !current)}
-            tasks={groups.longTerm}
-            title="长期任务"
-          />
-          <TaskGroup
-            onDelete={confirmDelete}
-            onPin={togglePin}
-            onPress={(task) => setSelectedTaskId(task.id)}
-            onReorder={finishTaskDrag}
-            onToggle={toggle}
-            tasks={groups.regular}
-            title=""
-          />
-          <CollapsibleTaskGroup
-            count={groups.lowPriority.length}
-            isOpen={lowPriorityOpen}
-            onDelete={confirmDelete}
-            onPin={togglePin}
-            onPress={(task) => setSelectedTaskId(task.id)}
-            onReorder={finishTaskDrag}
-            onToggle={toggle}
-            onToggleOpen={() => setLowPriorityOpen((current) => !current)}
-            tasks={groups.lowPriority}
-            title="低优先级"
-          />
-        </>
+        <TaskGroup
+          onDelete={confirmDelete}
+          onPin={togglePin}
+          onPress={openTaskEditor}
+          onReorder={finishTaskDrag}
+          onToggle={toggle}
+          tasks={groups.regular}
+          title=""
+        />
       ) : (
         <TaskGroup
           onDelete={confirmDelete}
           onPin={togglePin}
-          onPress={(task) => setSelectedTaskId(task.id)}
+          onPress={openTaskEditor}
           onReorder={finishTaskDrag}
           onToggle={toggle}
           tasks={
@@ -677,6 +657,17 @@ export function TodayScreen({
   );
 }
 
+// A fresh component reference on every render defeats the list's own
+// memoization of separators, and the same instance is safe to share across
+// every list on the screen since it takes no props.
+function TaskRowSeparator() {
+  return <View style={styles.rowGap} />;
+}
+
+function taskId(task: TodoOccurrence) {
+  return task.id;
+}
+
 // Pinned and unpinned tasks render as two separate draggable lists rather
 // than one, so a drag can never cross the pinned/unpinned boundary - a
 // constraint the old single-list implementation had to enforce by hand
@@ -697,23 +688,38 @@ function TaskDragList({
   onToggle: (task: TodoOccurrence) => void;
   tasks: TodoOccurrence[];
 }) {
-  const pinned = tasks.filter((task) => task.isPinned);
-  const rest = tasks.filter((task) => !task.isPinned);
+  const pinned = useMemo(() => tasks.filter((task) => task.isPinned), [tasks]);
+  const rest = useMemo(() => tasks.filter((task) => !task.isPinned), [tasks]);
 
-  const renderItem = ({ item, drag, isActive }: RenderItemParams<TodoOccurrence>) => (
-    <ScaleDecorator activeScale={1.018}>
-      <ShadowDecorator elevation={12} opacity={0.16} radius={8}>
-        <TaskRow
-          isDragActive={isActive}
-          onDelete={onDelete}
-          onDragLongPress={drag}
-          onPin={onPin}
-          onPress={onPress}
-          onToggle={onToggle}
-          task={item}
-        />
-      </ShadowDecorator>
-    </ScaleDecorator>
+  // Stable across re-renders so TaskRow's React.memo can actually skip
+  // re-rendering the rows that a given update didn't touch - see
+  // replaceTask() above, which keeps the same object reference for every
+  // task untouched by an update.
+  const renderItem = useCallback(
+    ({ item, drag, isActive }: RenderItemParams<TodoOccurrence>) => (
+      <ScaleDecorator activeScale={1.018}>
+        <ShadowDecorator elevation={12} opacity={0.16} radius={8}>
+          <TaskRow
+            isDragActive={isActive}
+            onDelete={onDelete}
+            onDragLongPress={drag}
+            onPin={onPin}
+            onPress={onPress}
+            onToggle={onToggle}
+            task={item}
+          />
+        </ShadowDecorator>
+      </ScaleDecorator>
+    ),
+    [onDelete, onPin, onPress, onToggle],
+  );
+
+  // Shared by both lists below - each only ever receives its own dropped
+  // list's data, so there is nothing pinned/unpinned-specific about it.
+  const handleDragEnd = useCallback(
+    ({ data }: DragEndParams<TodoOccurrence>) =>
+      onReorder(data.map((task) => task.id)),
+    [onReorder],
   );
 
   return (
@@ -723,13 +729,11 @@ function TaskDragList({
           animationConfig={TASK_REORDER_SPRING}
           dragAnchor="center"
           dragItemOverflow
-          ItemSeparatorComponent={() => <View style={styles.rowGap} />}
+          ItemSeparatorComponent={TaskRowSeparator}
           data={pinned}
-          keyExtractor={(task) => task.id}
+          keyExtractor={taskId}
           onDragBegin={handleTaskDragBegin}
-          onDragEnd={({ data }: DragEndParams<TodoOccurrence>) =>
-            onReorder(data.map((task) => task.id))
-          }
+          onDragEnd={handleDragEnd}
           renderItem={renderItem}
         />
       ) : null}
@@ -738,13 +742,11 @@ function TaskDragList({
           animationConfig={TASK_REORDER_SPRING}
           dragAnchor="center"
           dragItemOverflow
-          ItemSeparatorComponent={() => <View style={styles.rowGap} />}
+          ItemSeparatorComponent={TaskRowSeparator}
           data={rest}
-          keyExtractor={(task) => task.id}
+          keyExtractor={taskId}
           onDragBegin={handleTaskDragBegin}
-          onDragEnd={({ data }: DragEndParams<TodoOccurrence>) =>
-            onReorder(data.map((task) => task.id))
-          }
+          onDragEnd={handleDragEnd}
           renderItem={renderItem}
         />
       ) : null}
@@ -783,56 +785,6 @@ function TaskGroup({
         onToggle={onToggle}
         tasks={tasks}
       />
-    </View>
-  );
-}
-
-function CollapsibleTaskGroup({
-  count,
-  isOpen,
-  onDelete,
-  onPin,
-  onPress,
-  onReorder,
-  onToggle,
-  onToggleOpen,
-  tasks,
-  title,
-}: {
-  count: number;
-  isOpen: boolean;
-  onDelete: (task: TodoOccurrence) => void;
-  onPin: (task: TodoOccurrence) => void;
-  onPress: (task: TodoOccurrence) => void;
-  onReorder: (orderedIds: string[]) => void;
-  onToggle: (task: TodoOccurrence) => void;
-  onToggleOpen: () => void;
-  tasks: TodoOccurrence[];
-  title: string;
-}) {
-  return (
-    <View style={styles.collapsible}>
-      <Pressable onPress={onToggleOpen} style={styles.collapsibleHeader}>
-        <View style={styles.collapsibleCopy}>
-          <Text style={styles.collapsibleTitle}>{title}</Text>
-          <Text style={styles.collapsibleCount}>{count} 个任务</Text>
-        </View>
-        <AppIcon
-          name={isOpen ? "chevron-down" : "chevron-forward"}
-          color={colors.accent}
-          size={20}
-        />
-      </Pressable>
-      {isOpen ? (
-        <TaskDragList
-          onDelete={onDelete}
-          onPin={onPin}
-          onPress={onPress}
-          onReorder={onReorder}
-          onToggle={onToggle}
-          tasks={tasks}
-        />
-      ) : null}
     </View>
   );
 }
@@ -900,34 +852,5 @@ const styles = StyleSheet.create({
     ...typography.section,
     color: colors.text,
     marginBottom: spacing.xs,
-  },
-  collapsible: {
-    ...shadows.card,
-    backgroundColor: colors.surfaceStrong,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    overflow: "hidden",
-    padding: spacing.sm,
-  },
-  collapsibleHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    minHeight: 58,
-    paddingHorizontal: spacing.sm,
-  },
-  collapsibleCopy: {
-    gap: 2,
-  },
-  collapsibleTitle: {
-    ...typography.section,
-    color: colors.accent,
-  },
-  collapsibleCount: {
-    ...typography.caption,
-    color: colors.textMuted,
   },
 });
