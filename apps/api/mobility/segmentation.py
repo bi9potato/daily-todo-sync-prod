@@ -8,7 +8,11 @@ import movingpandas as mpd
 import pandas as pd
 from shapely.geometry import Point
 
-from .geo import haversine_distance_meters, haversine_meters
+from .geo import (
+    haversine_distance_meters,
+    haversine_meters,
+    thin_stationary_points,
+)
 from .models import LocationPoint
 
 # Points within this distance of where a stop began are treated as "the
@@ -160,6 +164,15 @@ def _infer_mode(
             return "TRAIN"
         if peak_mps >= VEHICLE_PEAK_MPS:
             return "IN_VEHICLE"
+        # A congested ride spends most fixes crawling, so its Doppler
+        # median sits at walking pace while the trip still crosses half
+        # the city. Sustained ground coverage beyond cycling pace is
+        # vehicular whatever the median said. Below that bar the median
+        # wins: position drift fakes cycling-pace displacement while
+        # Doppler correctly reads near-zero.
+        floor_mps = distance_meters / max(duration_seconds, 1.0)
+        if floor_mps > CYCLING_MAX_MPS:
+            return "IN_VEHICLE"
         median_mps = median(recorded_speeds)
         if median_mps <= WALKING_MAX_MPS:
             return "WALKING"
@@ -300,7 +313,12 @@ def build_day_segments(
 ) -> list[dict]:
     """Partition a day's ordered LocationPoints into Visit and Trip segments
     (stop detection by movingpandas, dedup within 120m) while also covering
-    the travel gaps between visits so the whole day is accounted for."""
+    the travel gaps between visits so the whole day is accounted for.
+
+    The track is noise-thinned first: coarse wifi/cell fixes and stationary
+    wobble would otherwise fragment stop detection and inflate every trip's
+    distance (and with it the inferred mode)."""
+    points = thin_stationary_points(points)
     if not points:
         return []
 

@@ -292,6 +292,83 @@ class MobilityApiTests(TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0]["type"], "visit")
 
+    def test_stationary_night_adds_no_distance_and_glitches_are_dropped(self):
+        # A whole night at home wobbling inside the accuracy radius, one
+        # corrupted teleport fix, then a real ~1km walk. The day must report
+        # only the walk's distance, a visit covering the night, and a track
+        # thinned down from the raw jitter cloud.
+        recording = MobilityRecording.objects.create(
+            user=self.user,
+            started_at=datetime.fromisoformat("2026-06-30T00:00:00+08:00"),
+            ended_at=datetime.fromisoformat("2026-06-30T02:00:00+08:00"),
+            is_active=False,
+        )
+        points = []
+        for minute in range(61):
+            wobble = 0.0002 if minute % 2 else 0.0
+            points.append(
+                LocationPoint(
+                    recording=recording,
+                    client_id=f"home-{minute}",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-06-30T00:00:00+08:00"
+                    )
+                    + timedelta(minutes=minute),
+                    latitude=39.990000 + wobble,
+                    longitude=116.300000,
+                    accuracy=30,
+                )
+            )
+        points.append(
+            LocationPoint(
+                recording=recording,
+                client_id="teleport",
+                recorded_at=datetime.fromisoformat("2026-06-30T00:30:30+08:00"),
+                latitude=40.500000,
+                longitude=116.300000,
+                accuracy=8,
+            )
+        )
+        for step in range(1, 11):
+            points.append(
+                LocationPoint(
+                    recording=recording,
+                    client_id=f"walk-{step}",
+                    recorded_at=datetime.fromisoformat(
+                        "2026-06-30T01:00:00+08:00"
+                    )
+                    + timedelta(minutes=step),
+                    latitude=39.990000 + 0.0009 * step,
+                    longitude=116.300000,
+                    accuracy=8,
+                )
+            )
+        LocationPoint.objects.bulk_create(points)
+
+        day = self.client.get(
+            "/api/mobility/days/2026-06-30",
+            HTTP_AUTHORIZATION=self.authorization,
+        )
+
+        self.assertEqual(day.status_code, 200)
+        payload = day.json()
+        # Only the walk may contribute distance - the raw consecutive-point
+        # sum over the night's wobble alone would exceed a kilometer.
+        self.assertGreater(payload["distanceMeters"], 600)
+        self.assertLess(payload["distanceMeters"], 1300)
+        self.assertLess(len(payload["points"]), 30)
+        self.assertTrue(
+            all(point["latitude"] < 40.4 for point in payload["points"]),
+            "teleport glitch must be dropped",
+        )
+        visits = [
+            segment
+            for segment in payload["segments"]
+            if segment["type"] == "visit"
+        ]
+        self.assertEqual(len(visits), 1)
+        self.assertGreaterEqual(visits[0]["durationMinutes"], 50)
+
     def test_day_totals_are_clipped_to_local_day_across_recording_rotation(self):
         previous = MobilityRecording.objects.create(
             user=self.user,
@@ -364,8 +441,10 @@ class MobilityApiTests(TestCase):
         self.assertEqual(payload["stepCount"], 25)
         self.assertEqual(payload["durationMinutes"], 12)
         self.assertEqual(len(payload["points"]), 3)
+        # Both legs count, including the one crossing the midnight recording
+        # rotation - the day is a time window, not a recording bucket.
         self.assertGreater(payload["distanceMeters"], 100)
-        self.assertLess(payload["distanceMeters"], 200)
+        self.assertLess(payload["distanceMeters"], 300)
 
     def test_today_does_not_reuse_whole_totals_from_unrotated_recording(self):
         recording = MobilityRecording.objects.create(
@@ -741,6 +820,27 @@ class MobilitySegmentationTests(TestCase):
 
         self.assertEqual([segment["type"] for segment in segments], ["trip"])
         self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_congested_ride_with_slow_doppler_median_is_not_a_walk(self):
+        # Stop-and-go traffic: most fixes crawl (median at walking pace,
+        # peaks below the vehicle threshold) while the trip still covers
+        # ~12km in 25 minutes. The displacement floor must override the
+        # Doppler median - nobody walks 12km at an 8 m/s average.
+        speeds = [0.5, 1.5] * 12 + [8.0, 8.0]
+        points = [
+            self.make_point(
+                39.9000 + 0.0043 * step,
+                116.3000,
+                float(step),
+                speed=speeds[step],
+            )
+            for step in range(26)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "IN_VEHICLE")
 
     def test_low_accuracy_doppler_noise_does_not_reclassify_a_walk(self):
         # A walk through an urban canyon: solid GPS fixes at walking pace,

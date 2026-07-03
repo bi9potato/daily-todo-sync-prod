@@ -23,6 +23,59 @@ def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float
     return haversine((lat1, lon1), (lat2, lon2), unit=Unit.METERS)
 
 
+# While the phone sits still, fixes wobble inside their accuracy radius for
+# hours; summed leg-by-leg that random walk fabricates tens of kilometers a
+# day. Before segmenting or displaying a track we therefore drop every fix
+# that did not move beyond the combined uncertainty of itself and the last
+# kept fix - the same accept-only-past-reported-accuracy rule OwnTracks and
+# Traccar apply server-side. One sample per keepalive window is kept anyway
+# (raw coordinates, no fabrication) so stop detection still sees how long
+# the dwell lasted.
+STATIONARY_KEEPALIVE_SECONDS = 300.0
+# Nothing the app can record travels faster than an airliner; a shorter leg
+# implying more than this is a corrupted fix.
+GLITCH_SPEED_MPS = 350.0
+# Fixes coarser than this are wifi/cell positions that scatter hundreds of
+# meters (Traccar's filter.accuracy, and the same cutoff the Android service
+# applies at capture). Old recordings made before the on-device gate existed
+# still hold such fixes, so the server must drop them on read as well.
+MAX_TRUSTED_ACCURACY_METERS = 50.0
+
+
+def thin_stationary_points(points: list[LocationPoint]) -> list[LocationPoint]:
+    points = [
+        point
+        for point in points
+        if (point.accuracy or 0) <= MAX_TRUSTED_ACCURACY_METERS
+    ]
+    if not points:
+        return []
+    kept = [points[0]]
+    anchor = points[0]
+    last_kept_at = points[0].recorded_at
+    for point in points[1:]:
+        gap_seconds = (point.recorded_at - last_kept_at).total_seconds()
+        distance = haversine_distance_meters(
+            float(anchor.latitude),
+            float(anchor.longitude),
+            float(point.latitude),
+            float(point.longitude),
+        )
+        moved = distance >= max(
+            GPS_NOISE_FLOOR_METERS,
+            (anchor.accuracy or 0) + (point.accuracy or 0),
+        )
+        if moved and distance / max(gap_seconds, 1.0) > GLITCH_SPEED_MPS:
+            continue
+        if moved:
+            anchor = point
+        elif gap_seconds < STATIONARY_KEEPALIVE_SECONDS:
+            continue
+        kept.append(point)
+        last_kept_at = point.recorded_at
+    return kept
+
+
 def haversine_meters(first: LocationPoint, second: LocationPoint) -> float:
     distance = haversine_distance_meters(
         float(first.latitude),

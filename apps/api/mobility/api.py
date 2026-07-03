@@ -13,7 +13,7 @@ from accounts.authentication import bearer_auth, mobility_upload_auth
 from accounts.tokens import issue_mobility_token
 
 from .export import build_export_payload
-from .geo import haversine_meters
+from .geo import haversine_meters, thin_stationary_points
 from .models import LocationPoint, MobilityRecording, StepSample
 from .segmentation import DEFAULT_DWELL_MINUTES, build_day_segments
 
@@ -106,29 +106,19 @@ def day_bounds(day: date):
 
 
 def recalculate_distance(recording: MobilityRecording) -> None:
-    points = list(recording.points.only("latitude", "longitude", "recorded_at"))
+    points = thin_stationary_points(
+        list(
+            recording.points.only(
+                "latitude", "longitude", "accuracy", "recorded_at"
+            )
+        )
+    )
     distance = sum(
         haversine_meters(first, second)
         for first, second in zip(points, points[1:], strict=False)
     )
     recording.distance_meters = round(distance, 1)
     recording.save(update_fields=["distance_meters", "updated_at"])
-
-
-def day_distance(points: list[LocationPoint]) -> float:
-    points_by_recording: dict[UUID, list[LocationPoint]] = {}
-    for point in points:
-        points_by_recording.setdefault(point.recording_id, []).append(point)
-    return round(
-        sum(
-            haversine_meters(first, second)
-            for recording_points in points_by_recording.values()
-            for first, second in zip(
-                recording_points, recording_points[1:], strict=False
-            )
-        ),
-        1,
-    )
 
 
 def day_duration_minutes(
@@ -169,12 +159,18 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
     # rotation can leave points landing on a recording that closed
     # yesterday, and those points would otherwise be in the database but
     # invisible on the day they actually happened.
-    points = list(
-        LocationPoint.objects.filter(
-            recording__user=request.auth,
-            recorded_at__gte=start,
-            recorded_at__lt=end,
-        ).order_by("recorded_at")
+    # Thinning collapses hours of stationary GPS wobble before anything is
+    # derived from the track: the map polyline stops showing jitter clouds,
+    # movingpandas sees crisp stops instead of 100m scatter, and distance
+    # can no longer accumulate while the phone sat still.
+    points = thin_stationary_points(
+        list(
+            LocationPoint.objects.filter(
+                recording__user=request.auth,
+                recorded_at__gte=start,
+                recorded_at__lt=end,
+            ).order_by("recorded_at")
+        )
     )
     serialized_recordings = [serialize_recording(item) for item in recordings]
     active = next((item for item in recordings if item.is_active), None)
@@ -185,10 +181,19 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
     day_recordings = [
         item for item in recordings if start <= item.started_at < end
     ]
+    segments = build_day_segments(points, dwellMinutes)
+    # The day's distance is what the trips moved - visits contribute zero by
+    # definition (Google Timeline semantics). Summing raw consecutive-point
+    # legs instead used to fabricate 30+ km out of a night at home.
+    trip_distance = sum(
+        segment["distanceMeters"] or 0.0
+        for segment in segments
+        if segment["type"] == "trip"
+    )
     return {
         "date": day.isoformat(),
         "stepCount": sum(item.step_count for item in day_recordings),
-        "distanceMeters": day_distance(points),
+        "distanceMeters": round(trip_distance, 1),
         "durationMinutes": day_duration_minutes(recordings, start, end, now),
         "activeRecording": serialize_recording(active) if active else None,
         "recordings": serialized_recordings,
@@ -203,7 +208,7 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
             }
             for point in points
         ],
-        "segments": build_day_segments(points, dwellMinutes),
+        "segments": segments,
     }
 
 
