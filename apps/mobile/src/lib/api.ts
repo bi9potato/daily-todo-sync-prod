@@ -301,6 +301,16 @@ export function startMobilityRecording() {
   });
 }
 
+// Long-lived, mobility-upload-only token for the Android foreground
+// service: its 15-minute access token used to go stale as soon as the JS
+// runtime stopped babysitting it, silently 401-ing every background upload
+// and the midnight recording rotation.
+export function getMobilityDeviceToken() {
+  return request<{ token: string }>("/mobility/device-token", {
+    method: "POST",
+  });
+}
+
 export function stopMobilityRecording(id: string) {
   return request<MobilityRecording>(`/mobility/recordings/${id}/stop`, {
     method: "POST",

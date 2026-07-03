@@ -39,6 +39,7 @@ MIN_NON_WALKING_DISTANCE_METERS = 200.0
 # still hit speeds no city cyclist sustains.
 VEHICLE_PEAK_MPS = 10.0
 MIN_SPEED_SAMPLES = 5
+SPEED_SAMPLE_MAX_ACCURACY_METERS = 30.0
 
 # Rail and air separate from road vehicles by sustained speed alone: China's
 # highway limit is 120 km/h, so a p90 fix speed past ~137 km/h means rails,
@@ -204,10 +205,16 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
     duration_seconds = (
         end_point.recorded_at - start_point.recorded_at
     ).total_seconds()
+    # Doppler speed is only trustworthy on a solid GPS fix; wifi/cell
+    # positions report junk speeds that skew the p90/median mode ladder.
+    # If filtering leaves too few samples, _infer_mode's displacement
+    # fallback takes over rather than classifying from noise.
     recorded_speeds = [
         float(point.speed)
         for point in points[start_index : end_index + 1]
-        if point.speed is not None and point.speed >= 0
+        if point.speed is not None
+        and point.speed >= 0
+        and (point.accuracy is None or point.accuracy <= SPEED_SAMPLE_MAX_ACCURACY_METERS)
     ]
     return Segment(
         type="trip",

@@ -185,6 +185,77 @@ class MobilityApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_mobility_device_token_uploads_but_cannot_read_todos(self):
+        token_response = self.post("/api/mobility/device-token")
+        self.assertEqual(token_response.status_code, 200)
+        device_token = token_response.json()["token"]
+        device_auth = f"Bearer {device_token}"
+
+        started = self.client.post(
+            "/api/mobility/recordings/start",
+            HTTP_AUTHORIZATION=device_auth,
+        )
+        self.assertEqual(started.status_code, 201)
+        uploaded = self.client.post(
+            f"/api/mobility/recordings/{started.json()['id']}/points",
+            data=json.dumps(
+                {
+                    "points": [
+                        {
+                            "clientId": "device-point-1",
+                            "recordedAt": "2026-06-30T08:00:00+08:00",
+                            "latitude": 39.99,
+                            "longitude": 116.3,
+                            "accuracy": 8,
+                        }
+                    ]
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=device_auth,
+        )
+        self.assertEqual(uploaded.status_code, 200)
+
+        # Scoped: the same token must not unlock the rest of the API.
+        todos = self.client.get(
+            "/api/days/2026-06-30",
+            HTTP_AUTHORIZATION=device_auth,
+        )
+        self.assertEqual(todos.status_code, 401)
+
+    def test_points_on_closed_recording_stay_visible_on_their_day(self):
+        # A half-failed midnight rotation uploads today's points onto a
+        # recording that was already closed yesterday; the day view matches
+        # points by user + time window, so they must still show up.
+        started_at = datetime.fromisoformat("2026-06-29T23:00:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=started_at):
+            recording = self.post("/api/mobility/recordings/start").json()
+        stopped_at = datetime.fromisoformat("2026-06-29T23:59:00+08:00")
+        with patch("mobility.api.timezone.now", return_value=stopped_at):
+            self.post(f"/api/mobility/recordings/{recording['id']}/stop")
+
+        self.post(
+            f"/api/mobility/recordings/{recording['id']}/points",
+            {
+                "points": [
+                    {
+                        "clientId": "late-point-1",
+                        "recordedAt": "2026-06-30T08:00:00+08:00",
+                        "latitude": 39.99,
+                        "longitude": 116.3,
+                        "accuracy": 8,
+                    }
+                ]
+            },
+        )
+
+        day = self.client.get(
+            "/api/mobility/days/2026-06-30",
+            HTTP_AUTHORIZATION=self.authorization,
+        )
+        self.assertEqual(day.status_code, 200)
+        self.assertEqual(len(day.json()["points"]), 1)
+
     def test_day_response_includes_segments(self):
         started_at = datetime.fromisoformat("2026-06-30T07:59:00+08:00")
         with patch("mobility.api.timezone.now", return_value=started_at):
@@ -665,6 +736,27 @@ class MobilitySegmentationTests(TestCase):
             self.make_point(39.9000 + 0.0050 * step, 116.3000, 10 * step)
             for step in range(4)
         ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_low_accuracy_doppler_noise_does_not_reclassify_a_walk(self):
+        # A walk through an urban canyon: solid GPS fixes at walking pace,
+        # plus a couple of wifi/cell positions whose bogus Doppler bursts
+        # used to push the p90 into vehicle territory.
+        walk = [
+            self.make_point(
+                39.9000 + 0.0009 * step, 116.3000, step, speed=1.3
+            )
+            for step in range(6)
+        ]
+        noisy = [
+            self.make_point(39.9006, 116.3001, 2.5, accuracy=120, speed=14.0),
+            self.make_point(39.9012, 116.3001, 4.5, accuracy=200, speed=16.0),
+        ]
+        points = sorted(walk + noisy, key=lambda point: point.recorded_at)
 
         segments = build_day_segments(points, dwell_minutes=5)
 

@@ -9,7 +9,8 @@ from django.utils import timezone
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
-from accounts.authentication import bearer_auth
+from accounts.authentication import bearer_auth, mobility_upload_auth
+from accounts.tokens import issue_mobility_token
 
 from .export import build_export_payload
 from .geo import haversine_meters
@@ -163,10 +164,14 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
         ).exclude(id__in=[item.id for item in recordings])
     )
     recordings.sort(key=lambda item: item.started_at)
-    recording_ids = [item.id for item in recordings]
+    # Points are matched purely by the user and the local-time window, NOT
+    # by membership in the recordings list above: a half-failed midnight
+    # rotation can leave points landing on a recording that closed
+    # yesterday, and those points would otherwise be in the database but
+    # invisible on the day they actually happened.
     points = list(
         LocationPoint.objects.filter(
-            recording_id__in=recording_ids,
+            recording__user=request.auth,
             recorded_at__gte=start,
             recorded_at__lt=end,
         ).order_by("recorded_at")
@@ -202,10 +207,21 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
     }
 
 
+class MobilityTokenOut(Schema):
+    token: str
+
+
+@router.post("/device-token", response=MobilityTokenOut, auth=bearer_auth)
+def create_device_token(request):
+    """Exchanged by the app (with a fresh access token) for the long-lived
+    scoped token the Android foreground service uploads with."""
+    return {"token": issue_mobility_token(request.auth)}
+
+
 @router.post(
     "/recordings/start",
     response={201: MobilityRecordingOut},
-    auth=bearer_auth,
+    auth=mobility_upload_auth,
 )
 @transaction.atomic
 def start_recording(request):
@@ -226,7 +242,7 @@ def start_recording(request):
 @router.post(
     "/recordings/{recording_id}/stop",
     response=MobilityRecordingOut,
-    auth=bearer_auth,
+    auth=mobility_upload_auth,
 )
 @transaction.atomic
 def stop_recording(request, recording_id: UUID):
@@ -245,7 +261,7 @@ def stop_recording(request, recording_id: UUID):
 @router.post(
     "/recordings/{recording_id}/points",
     response=MobilityRecordingOut,
-    auth=bearer_auth,
+    auth=mobility_upload_auth,
 )
 @transaction.atomic
 def add_points(request, recording_id: UUID, payload: LocationBatchIn):
@@ -285,7 +301,7 @@ def add_points(request, recording_id: UUID, payload: LocationBatchIn):
 @router.put(
     "/recordings/{recording_id}/steps",
     response=MobilityRecordingOut,
-    auth=bearer_auth,
+    auth=mobility_upload_auth,
 )
 @transaction.atomic
 def set_step_sample(request, recording_id: UUID, payload: StepSampleIn):

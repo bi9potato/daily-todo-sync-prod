@@ -271,6 +271,27 @@ class NativeMobilityModule(
   }
 
   @ReactMethod
+  fun updateAuth(accessToken: String, promise: Promise) {
+    try {
+      if (NativeMobilityService.isRunning() && accessToken.isNotBlank()) {
+        // Plain startService: the target is already a started foreground
+        // service, so this only delivers the command; it must not use
+        // startForegroundService, whose start-within-5s contract would
+        // apply if the service happened to have just died.
+        reactContext.startService(
+          Intent(reactContext, NativeMobilityService::class.java).apply {
+            action = NativeMobilityService.ACTION_UPDATE_AUTH
+            putExtra(NativeMobilityService.EXTRA_ACCESS_TOKEN, accessToken)
+          },
+        )
+      }
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("native_mobility_update_auth_failed", error)
+    }
+  }
+
+  @ReactMethod
   fun isRunning(promise: Promise) {
     promise.resolve(NativeMobilityService.isRunning())
   }
@@ -503,6 +524,19 @@ class NativeMobilityService : Service(), SensorEventListener {
           startTracking()
         }
         ACTION_STOP -> stopTracking()
+        ACTION_UPDATE_AUTH -> {
+          // Refreshes the upload credential of an already-running service
+          // (the app pushes a fresh scoped token on launch); without this,
+          // a service that never restarts would outlive any token.
+          val nextToken = intent.getStringExtra(EXTRA_ACCESS_TOKEN).orEmpty()
+          if (running && nextToken.isNotBlank()) {
+            accessToken = nextToken
+            persistConfig()
+            scheduleUpload()
+          } else if (!running) {
+            stopSelf()
+          }
+        }
         else -> {
           restoreConfig()
           if (recordingId.isNotBlank()) startTracking() else stopSelf()
@@ -791,6 +825,12 @@ class NativeMobilityService : Service(), SensorEventListener {
           if (status in 200..299 || status == 404) {
             offset = end
             continue
+          }
+          if (status == 401) {
+            // Surfaced through getLastError() so the app's diagnostics can
+            // show it; points stay queued and flush once a fresh token
+            // arrives with the next service start.
+            setLastError("足迹上传凭证已过期，请打开应用一次以刷新授权。")
           }
           val pending = JSONArray()
           for (i in offset until points.length()) {
@@ -1102,6 +1142,7 @@ class NativeMobilityService : Service(), SensorEventListener {
   companion object {
     const val ACTION_START = "${PACKAGE_NAME}.mobility.START"
     const val ACTION_STOP = "${PACKAGE_NAME}.mobility.STOP"
+    const val ACTION_UPDATE_AUTH = "${PACKAGE_NAME}.mobility.UPDATE_AUTH"
     const val EXTRA_RECORDING_ID = "recordingId"
     const val EXTRA_API_BASE_URL = "apiBaseUrl"
     const val EXTRA_ACCESS_TOKEN = "accessToken"
@@ -1115,7 +1156,12 @@ class NativeMobilityService : Service(), SensorEventListener {
     private const val LOCATION_FASTEST_INTERVAL_MS = 3_000L
     private const val LOCATION_UPLOAD_INTERVAL_MS = 5_000L
     private const val MIN_DISTANCE_METERS = 8f
-    private const val MAX_ACCURACY_METERS = 75f
+    // Fixes past ~50m of reported error are wifi/cell positions, not GPS -
+    // in urban canyons they scatter hundreds of meters and are what drew
+    // the jagged false detours on recorded routes. Dropping them loses
+    // nothing: the stationary heartbeat keeps dwell detection fed, and a
+    // real GPS fix follows within seconds outdoors.
+    private const val MAX_ACCURACY_METERS = 50f
     private const val STATIONARY_HEARTBEAT_MS = 60_000L
     private const val MAX_UPLOAD_POINTS = 250
     private const val MAX_QUEUED_POINTS = 250_000

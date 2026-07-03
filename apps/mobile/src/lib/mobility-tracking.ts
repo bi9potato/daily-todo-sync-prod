@@ -12,6 +12,7 @@ import {
   getNativeMobilityQueuedPointCount,
   isNativeMobilityServiceAvailable,
   isNativeMobilityServiceRunning,
+  refreshNativeMobilityAuth,
   startNativeMobilityService,
   stopNativeMobilityService,
 } from "./mobility-native-service";
@@ -57,6 +58,26 @@ export async function isMobilityLocationTrackingActive() {
     return false;
   }
   return isNativeMobilityServiceRunning().catch(() => false);
+}
+
+// The running service holds a 30-day scoped upload token. Pushing a fresh
+// one the first time each app launch touches the service keeps that window
+// permanently topped up without re-minting a token on every 30s reconcile.
+let nativeAuthRefreshedThisLaunch = false;
+
+async function refreshNativeAuthOncePerLaunch() {
+  if (nativeAuthRefreshedThisLaunch) {
+    return;
+  }
+  nativeAuthRefreshedThisLaunch = true;
+  try {
+    await refreshNativeMobilityAuth();
+  } catch (error) {
+    // Offline or the API rejected us; the service keeps its current token
+    // and the next launch tries again.
+    nativeAuthRefreshedThisLaunch = false;
+    console.warn("Mobility upload token refresh failed", error);
+  }
 }
 
 export async function startMobilityLocationTracking({
@@ -296,6 +317,7 @@ export async function recoverMobilityLocationTracking(recordingId: string) {
   // visibly stall while footprint tracking was on. Only genuine recovery
   // (e.g. Android killed the service under memory pressure) needs a start.
   if (await isNativeMobilityServiceRunning()) {
+    await refreshNativeAuthOncePerLaunch();
     return getMobilityTrackingDiagnostics();
   }
   try {

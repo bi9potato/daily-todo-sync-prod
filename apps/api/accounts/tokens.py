@@ -22,6 +22,23 @@ def issue_access_token(user) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
 
 
+def issue_mobility_token(user) -> str:
+    """Long-lived token scoped to mobility uploads only. The Android
+    foreground service runs for days without the JS runtime (and its
+    refresh-token flow) awake, so a 15-minute access token goes stale almost
+    immediately; this is the standard scoped-device-token answer. Accepted
+    exclusively by mobility endpoints - it cannot read todos or account
+    data."""
+    now = timezone.now()
+    payload = {
+        "type": "mobility",
+        "sub": str(user.id),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(days=settings.MOBILITY_TOKEN_TTL_DAYS)).timestamp()),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
 def issue_refresh_token(request, user) -> str:
     raw_token = token_urlsafe(48)
     RefreshToken.objects.create(
@@ -42,13 +59,13 @@ def issue_token_pair(request, user) -> dict[str, str]:
     }
 
 
-def authenticate_access_token(token: str):
+def _authenticate_token_of_type(token: str, expected_type: str):
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return None
 
-    if payload.get("type") != "access":
+    if payload.get("type") != expected_type:
         return None
 
     user_id = payload.get("sub")
@@ -57,4 +74,12 @@ def authenticate_access_token(token: str):
 
     User = get_user_model()
     return User.objects.filter(id=user_id, is_active=True).first()
+
+
+def authenticate_access_token(token: str):
+    return _authenticate_token_of_type(token, "access")
+
+
+def authenticate_mobility_token(token: str):
+    return _authenticate_token_of_type(token, "mobility")
 

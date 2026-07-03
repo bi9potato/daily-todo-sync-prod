@@ -1,6 +1,6 @@
 import { NativeModules, Platform } from "react-native";
 
-import { API_BASE_URL } from "./api";
+import { API_BASE_URL, getMobilityDeviceToken } from "./api";
 import { loadTokens } from "./auth-storage";
 import type { MobilityPoint } from "@/types";
 
@@ -10,6 +10,7 @@ type NativeMobilityModule = {
     apiBaseUrl: string,
     accessToken: string,
   ) => Promise<boolean>;
+  updateAuth: (accessToken: string) => Promise<boolean>;
   stop: () => Promise<boolean>;
   isRunning: () => Promise<boolean>;
   isStepTrackingActive: () => Promise<boolean>;
@@ -37,7 +38,16 @@ export async function startNativeMobilityService(recordingId: string) {
   if (!tokens?.accessToken) {
     throw new Error("请先登录后再开启足迹记录。");
   }
-  await NativeMobility.start(recordingId, API_BASE_URL, tokens.accessToken);
+  // The service keeps uploading for days without the JS runtime awake, so
+  // it gets the long-lived mobility-scoped token instead of the 15-minute
+  // access token (which silently 401-ed all background uploads and the
+  // midnight recording rotation once it expired). Offline fallback: the
+  // access token still works for the first minutes, and the next start
+  // while online replaces it.
+  const uploadToken = await getMobilityDeviceToken()
+    .then((result) => result.token)
+    .catch(() => tokens.accessToken);
+  await NativeMobility.start(recordingId, API_BASE_URL, uploadToken);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (await NativeMobility.isRunning()) {
       return true;
@@ -56,6 +66,20 @@ export async function stopNativeMobilityService() {
     return false;
   }
   return NativeMobility.stop();
+}
+
+// Hands a fresh mobility-scoped token to an already-running service, so a
+// service that never restarts can still outlive the 30-day token window as
+// long as the app is opened occasionally.
+export async function refreshNativeMobilityAuth() {
+  if (!isNativeMobilityServiceAvailable() || !NativeMobility) {
+    return false;
+  }
+  if (!(await NativeMobility.isRunning())) {
+    return false;
+  }
+  const { token } = await getMobilityDeviceToken();
+  return NativeMobility.updateAuth(token);
 }
 
 export async function isNativeMobilityServiceRunning() {

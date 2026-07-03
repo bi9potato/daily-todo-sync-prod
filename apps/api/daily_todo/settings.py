@@ -86,7 +86,11 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "zh-hans"
-TIME_ZONE = os.getenv("TZ", "Asia/Shanghai")
+# Every mobility "day" boundary follows this timezone. APP_TIME_ZONE wins
+# over the generic TZ variable because base images and hosts sometimes
+# inject TZ=UTC, which would silently shift each day boundary by 8 hours
+# (showing yesterday evening's trips under today).
+TIME_ZONE = os.getenv("APP_TIME_ZONE") or os.getenv("TZ") or "Asia/Shanghai"
 USE_I18N = True
 USE_TZ = True
 
@@ -116,6 +120,9 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
 REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "30"))
+# Scoped token the Android tracking service uploads with; see
+# accounts/tokens.py:issue_mobility_token.
+MOBILITY_TOKEN_TTL_DAYS = int(os.getenv("MOBILITY_TOKEN_TTL_DAYS", "30"))
 
 GOOGLE_CALENDAR_CLIENT_ID = os.getenv("GOOGLE_CALENDAR_CLIENT_ID", "")
 GOOGLE_CALENDAR_CLIENT_SECRET = os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET", "")

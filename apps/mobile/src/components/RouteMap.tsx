@@ -53,7 +53,6 @@ function createMapHtml() {
 <html>
   <head>
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <style>
       html,body,#map{height:100%;width:100%;margin:0;background:#e9ece7}
       .leaflet-control-attribution{font:10px system-ui;color:#687168;background:rgba(255,255,255,.82)!important}
@@ -62,9 +61,37 @@ function createMapHtml() {
   </head>
   <body>
     <div id="map"></div>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
+      // unpkg is frequently unreachable from mainland-China networks, which
+      // used to leave the map (and with it the whole playback UI) blank
+      // until the 10s timeout kicked in. npmmirror serves the same files
+      // domestically; unpkg stays as the fallback for everyone else. A
+      // terminal failure posts map-load-failed so RN can swap to the SVG
+      // preview immediately instead of waiting out the timeout.
+      const LEAFLET_SOURCES=[
+        'https://registry.npmmirror.com/leaflet/1.9.4/files/dist',
+        'https://unpkg.com/leaflet@1.9.4/dist'
+      ];
+      function loadCss(base){
+        const link=document.createElement('link');
+        link.rel='stylesheet';
+        link.href=base+'/leaflet.css';
+        document.head.appendChild(link);
+      }
+      function loadLeaflet(index){
+        if(index>=LEAFLET_SOURCES.length){
+          window.ReactNativeWebView.postMessage('map-load-failed');
+          return;
+        }
+        const base=LEAFLET_SOURCES[index];
+        const script=document.createElement('script');
+        script.src=base+'/leaflet.js';
+        script.onload=()=>{loadCss(base);initMap()};
+        script.onerror=()=>loadLeaflet(index+1);
+        document.body.appendChild(script);
+      }
       const fallback=[39.9042,116.4074];
+      function initMap(){
       const map=L.map('map',{
         attributionControl:true,
         boxZoom:true,
@@ -96,7 +123,7 @@ function createMapHtml() {
           markers[0].setLatLng(points[0]);
           markers[1].setLatLng(points[points.length-1]);
         }else{
-          route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round'}).addTo(map);
+          route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round',smoothFactor:1.5}).addTo(map);
           markers=[
             L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map),
             L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map)
@@ -193,7 +220,9 @@ function createMapHtml() {
         if(playbackMarker){map.removeLayer(playbackMarker);playbackMarker=null}
       };
 
-      window.ReactNativeWebView.postMessage('map-ready');
+        window.ReactNativeWebView.postMessage('map-ready');
+      }
+      loadLeaflet(0);
     </script>
   </body>
 </html>`;
@@ -279,6 +308,9 @@ function RouteMapComponent(
     mapReadyRef.current = false;
     setMapFailed(false);
     setMapReady(false);
+    // Generous because a cold load may be fetching Leaflet over a slow
+    // domestic connection; explicit failures (map-load-failed, renderer
+    // death) bail out long before this fires.
     const timer = setTimeout(() => {
       if (!mapReadyRef.current) {
         setMapFailed(true);
@@ -286,7 +318,7 @@ function RouteMapComponent(
           source: "mobility-map",
         });
       }
-    }, 4000);
+    }, 10000);
     return () => clearTimeout(timer);
   }, [points.length]);
 
@@ -338,6 +370,15 @@ function RouteMapComponent(
           updateRoute(true);
           return;
         }
+        if (nativeEvent.data === "map-load-failed") {
+          // Every Leaflet source failed - swap to the SVG preview now
+          // instead of letting the readiness timeout run out.
+          setMapFailed(true);
+          recordClientLog("warn", "Mobility route map assets failed to load", {
+            source: "mobility-map",
+          });
+          return;
+        }
         try {
           const payload = JSON.parse(nativeEvent.data) as {
             type?: string;
@@ -362,6 +403,19 @@ function RouteMapComponent(
           source: "mobility-map",
           context: { description: event.nativeEvent.description },
         });
+      }}
+      onRenderProcessGone={() => {
+        // Android reclaims WebView renderer processes under memory
+        // pressure (commonly while the app sits in the background). The
+        // page's JS context is gone with it: the map shows blank and every
+        // playback function stops existing. Reload rebuilds the page; the
+        // map-ready handshake then re-pushes the route.
+        mapReadyRef.current = false;
+        setMapReady(false);
+        recordClientLog("warn", "Mobility route map renderer was reclaimed; reloading", {
+          source: "mobility-map",
+        });
+        webViewRef.current?.reload();
       }}
       onHttpError={(event) => {
         setMapFailed(true);
