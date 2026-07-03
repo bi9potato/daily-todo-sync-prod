@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
-import { useAndroidKeyboardInset } from "@/lib/useAndroidKeyboardInset";
+import { useKeyboardControllerShim } from "@/lib/useKeyboardControllerShim";
 import { colors, radius, spacing } from "@/theme";
 
 type ComposerMode = "task" | "ai";
@@ -39,7 +39,7 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
-  const { keyboardInset, keyboardVisible } = useAndroidKeyboardInset(
+  const { keyboardInset, keyboardVisible } = useKeyboardControllerShim(
     insets.bottom,
   );
 

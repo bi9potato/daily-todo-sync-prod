@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppIcon } from "./AppIcon";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { ScreenEnter } from "./ScreenEnter";
-import { closeUnlessTypingGuard } from "@/lib/keyboard";
+import { useBackPressKeyboardGuard } from "@/lib/keyboard";
 import { colors, radius, spacing, typography } from "@/theme";
 import type {
   LocalAttachmentFile,
@@ -89,10 +89,11 @@ function RepeatMenu({
   repeatKind: RepeatKind;
   visible: boolean;
 }) {
+  const handleKeyboardGuard = useBackPressKeyboardGuard(onClose);
   return (
     <Modal
       animationType="fade"
-      onRequestClose={closeUnlessTypingGuard(onClose)}
+      onRequestClose={handleKeyboardGuard}
       transparent
       visible={visible}>
       <View style={styles.menuBackdrop}>
@@ -212,6 +213,7 @@ export function TaskEditor({
   onUploadAttachment,
 }: TaskEditorProps) {
   const insets = useSafeAreaInsets();
+  const handleKeyboardGuard = useBackPressKeyboardGuard(onClose);
   const [text, setText] = useState(task?.text ?? "");
   const [note, setNote] = useState(task?.note ?? "");
   const [reminderTime, setReminderTime] = useState(task?.reminderTime ?? "");
@@ -313,7 +315,7 @@ export function TaskEditor({
   return (
     <Modal
       animationType="slide"
-      onRequestClose={closeUnlessTypingGuard(onClose)}
+      onRequestClose={handleKeyboardGuard}
       presentationStyle="pageSheet"
       visible={Boolean(task)}>
       <KeyboardAvoidingView

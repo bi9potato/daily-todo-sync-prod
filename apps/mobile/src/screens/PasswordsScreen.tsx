@@ -19,7 +19,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
-import { closeUnlessTypingGuard } from "@/lib/keyboard";
+import { useBackPressKeyboardGuard } from "@/lib/keyboard";
 import {
   deletePasswordEntry,
   isPasswordVaultAvailable,
@@ -301,6 +301,7 @@ function PasswordEditor({
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const handleKeyboardGuard = useBackPressKeyboardGuard(onClose);
   const [name, setName] = useState(entry?.name ?? "");
   const [note, setNote] = useState(entry?.note ?? "");
   const [fields, setFields] = useState<EditorField[]>(() =>
@@ -371,7 +372,7 @@ function PasswordEditor({
   return (
     <Modal
       animationType="slide"
-      onRequestClose={closeUnlessTypingGuard(onClose)}
+      onRequestClose={handleKeyboardGuard}
       presentationStyle="pageSheet"
       visible>
       <KeyboardAvoidingView
