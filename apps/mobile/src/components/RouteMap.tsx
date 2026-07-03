@@ -25,9 +25,12 @@ import {
   Layer,
   Map,
   type CameraRef,
+  type LngLatBounds,
+  type StyleSpecification,
 } from "@maplibre/maplibre-react-native";
 
 import { AppIcon } from "./AppIcon";
+import { recordClientLog } from "@/lib/client-logs";
 import { colors, radius, typography } from "@/theme";
 import type { MobilityPoint } from "@/types";
 
@@ -47,11 +50,39 @@ type RouteMapProps = {
 
 const EMPTY_POINTS: MobilityPoint[] = [];
 
-// OpenFreeMap: open-source, no API key, no registration. Positron is a clean
-// light basemap that lets the green route stand out. WGS84 (OSM-derived) so it
-// aligns with the raw GPS points - no GCJ-02 offset. Swap the last path segment
-// (e.g. "liberty") for a more detailed style.
-const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+// The style is defined inline instead of fetched from a style server: the
+// OpenFreeMap vector style this map first shipped with is served through
+// Cloudflare and never loaded on some mainland-China networks, which left the
+// whole map blank (no basemap, no route layers, and onDidFinishLoadingMap
+// never fired). A local style keeps every layer available unconditionally;
+// only individual tile fetches can fail, and they fail per-tile. The tiles
+// are the same openstreetmap.org rasters the previous Leaflet WebView used -
+// reachable from China and WGS84, so they align with raw GPS points with no
+// GCJ-02 offset.
+const MAP_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: [
+        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [
+    {
+      id: "background",
+      type: "background",
+      paint: { "background-color": "#E4E9E1" },
+    },
+    { id: "osm", type: "raster", source: "osm" },
+  ],
+};
 
 const ROUTE_COLOR = "#2C5745";
 const PLAYBACK_COLOR = "#E8853A";
@@ -131,12 +162,47 @@ function pointGeometry(coordinates: [number, number]): GeoJSON.Point {
   return { type: "Point", coordinates };
 }
 
+const FIT_PADDING = { top: 36, right: 36, bottom: 36, left: 36 };
+// Expand degenerate bounding boxes to roughly a 400m span: a day spent at one
+// place collapses to a single anchor point, and fitting a zero-area box would
+// otherwise zoom to building level (or, for fitBounds, to infinity).
+const MIN_BOUNDS_SPAN_DEGREES = 0.004;
+
+function routeBounds(points: MobilityPoint[]): LngLatBounds {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const point of points) {
+    west = Math.min(west, point.longitude);
+    east = Math.max(east, point.longitude);
+    south = Math.min(south, point.latitude);
+    north = Math.max(north, point.latitude);
+  }
+  const lonPad = Math.max(0, (MIN_BOUNDS_SPAN_DEGREES - (east - west)) / 2);
+  const latPad = Math.max(0, (MIN_BOUNDS_SPAN_DEGREES - (north - south)) / 2);
+  return [west - lonPad, south - latPad, east + lonPad, north + latPad];
+}
+
 function RouteMapComponent(
   { points = EMPTY_POINTS, onFallback, onPlaybackEnded, onPlaybackProgress }: RouteMapProps,
   ref: ForwardedRef<RouteMapHandle>,
 ) {
   const cameraRef = useRef<CameraRef>(null);
   const hasFitRef = useRef(false);
+  // The camera must frame the route from its very first frame, without
+  // waiting for the style to finish loading: fitBounds used to run only from
+  // onDidFinishLoadingMap, so a slow or failed style load left the camera on
+  // a zoomed-out null island forever. The native camera applies
+  // initialViewState once, when it attaches to the map, and ignores later
+  // updates - so recomputing on live appends cannot re-center mid-gesture.
+  const initialViewState = useMemo(
+    () =>
+      points.length
+        ? { bounds: routeBounds(points), padding: FIT_PADDING }
+        : undefined,
+    [points],
+  );
   const [mapReady, setMapReady] = useState(false);
   const [playbackVisible, setPlaybackVisible] = useState(false);
   // The playback marker is kept in state (not just a ref) because it is passed
@@ -430,21 +496,8 @@ function RouteMapComponent(
     if (!camera || !points.length) {
       return;
     }
-    const lons = points.map((point) => point.longitude);
-    const lats = points.map((point) => point.latitude);
-    let west = Math.min(...lons);
-    let east = Math.max(...lons);
-    let south = Math.min(...lats);
-    let north = Math.max(...lats);
-    // Pad a zero-area (single point) box so fitBounds doesn't zoom to infinity.
-    if (points.length === 1) {
-      west -= 0.003;
-      east += 0.003;
-      south -= 0.003;
-      north += 0.003;
-    }
-    camera.fitBounds([west, south, east, north], {
-      padding: { top: 36, right: 36, bottom: 36, left: 36 },
+    camera.fitBounds(routeBounds(points), {
+      padding: FIT_PADDING,
       duration: 300,
     });
   }, [points]);
@@ -483,10 +536,31 @@ function RouteMapComponent(
 
   return (
     <Map
-      mapStyle={MAP_STYLE_URL}
+      // TextureView instead of the default SurfaceView: the map sits inside a
+      // scrolling, rounded, overflow-hidden card, where SurfaceView's
+      // hole-punched rendering can show up blank or bleed past the clip.
+      androidView="texture"
+      // Gesture props are passed explicitly - on Android the native view only
+      // calls requestDisallowInterceptTouchEvent when the pan prop was
+      // actually delivered, and an omitted prop never reaches the view
+      // manager. Without it the surrounding ScrollView intercepts every
+      // touch-move, killing both panning and pinch zoom.
+      dragPan
+      touchZoom
+      doubleTapZoom
+      // Keep the route map north-up and flat, like the Leaflet map before it;
+      // accidental two-finger twists otherwise rotate it mid-pinch.
+      touchRotate={false}
+      touchPitch={false}
+      mapStyle={MAP_STYLE}
+      onDidFailLoadingMap={() => {
+        recordClientLog("warn", "Route map failed to load", {
+          source: "mobility",
+        });
+      }}
       onDidFinishLoadingMap={() => setMapReady(true)}
       style={styles.map}>
-      <Camera ref={cameraRef} />
+      <Camera ref={cameraRef} initialViewState={initialViewState} />
 
       <GeoJSONSource id="route-source" data={routeLine}>
         <Layer

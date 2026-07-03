@@ -482,7 +482,11 @@ class NativeMobilityService : Service(), SensorEventListener {
       return location
     }
     val distance = previous.distanceTo(location)
-    val noiseFloor = maxOf(MIN_DISTANCE_METERS, previous.accuracy + location.accuracy)
+    val noiseFloor = maxOf(
+      MIN_DISTANCE_METERS,
+      minOf(previous.accuracy, ACCURACY_NOISE_CAP_METERS) +
+        minOf(location.accuracy, ACCURACY_NOISE_CAP_METERS),
+    )
     if (distance >= noiseFloor) {
       lastAcceptedLocation = location
       lastAcceptedAt = location.time
@@ -1162,6 +1166,11 @@ class NativeMobilityService : Service(), SensorEventListener {
     // nothing: the stationary heartbeat keeps dwell detection fed, and a
     // real GPS fix follows within seconds outdoors.
     private const val MAX_ACCURACY_METERS = 50f
+    // Movement floor cap per fix, mirroring the server's thinning: with raw
+    // radii, two honest-but-coarse ~40m fixes demanded 80m of travel before
+    // a point counted as movement, which dropped most fixes of a real walk
+    // and left the recorded route sparse and corner-cutting.
+    private const val ACCURACY_NOISE_CAP_METERS = 20f
     private const val STATIONARY_HEARTBEAT_MS = 60_000L
     private const val MAX_UPLOAD_POINTS = 250
     private const val MAX_QUEUED_POINTS = 250_000

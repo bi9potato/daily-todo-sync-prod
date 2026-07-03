@@ -15,7 +15,7 @@ from accounts.tokens import issue_mobility_token
 from .export import build_export_payload
 from .geo import haversine_meters, thin_stationary_points
 from .models import LocationPoint, MobilityRecording, StepSample
-from .segmentation import DEFAULT_DWELL_MINUTES, build_day_segments
+from .segmentation import DEFAULT_DWELL_MINUTES, build_route_points, segment_day
 
 router = Router(tags=["mobility"])
 
@@ -159,19 +159,19 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
     # rotation can leave points landing on a recording that closed
     # yesterday, and those points would otherwise be in the database but
     # invisible on the day they actually happened.
-    # Thinning collapses hours of stationary GPS wobble before anything is
-    # derived from the track: the map polyline stops showing jitter clouds,
-    # movingpandas sees crisp stops instead of 100m scatter, and distance
-    # can no longer accumulate while the phone sat still.
-    points = thin_stationary_points(
-        list(
-            LocationPoint.objects.filter(
-                recording__user=request.auth,
-                recorded_at__gte=start,
-                recorded_at__lt=end,
-            ).order_by("recorded_at")
-        )
+    # segment_day noise-thins the track (drift spikes, stationary wobble,
+    # coarse fixes) before deriving anything from it: movingpandas sees
+    # crisp stops instead of 100m scatter, and distance can no longer
+    # accumulate while the phone sat still.
+    raw_points = list(
+        LocationPoint.objects.filter(
+            recording__user=request.auth,
+            recorded_at__gte=start,
+            recorded_at__lt=end,
+        ).order_by("recorded_at")
     )
+    thinned_points, segment_objects = segment_day(raw_points, dwellMinutes)
+    segments = [segment.as_dict() for segment in segment_objects]
     serialized_recordings = [serialize_recording(item) for item in recordings]
     active = next((item for item in recordings if item.is_active), None)
     # Recordings normally rotate at local midnight, but Android may deliver
@@ -181,7 +181,6 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
     day_recordings = [
         item for item in recordings if start <= item.started_at < end
     ]
-    segments = build_day_segments(points, dwellMinutes)
     # The day's distance is what the trips moved - visits contribute zero by
     # definition (Google Timeline semantics). Summing raw consecutive-point
     # legs instead used to fabricate 30+ km out of a night at home.
@@ -197,17 +196,9 @@ def get_mobility_day(request, day: date, dwellMinutes: float = DEFAULT_DWELL_MIN
         "durationMinutes": day_duration_minutes(recordings, start, end, now),
         "activeRecording": serialize_recording(active) if active else None,
         "recordings": serialized_recordings,
-        "points": [
-            {
-                "recordedAt": point.recorded_at.isoformat(),
-                "latitude": float(point.latitude),
-                "longitude": float(point.longitude),
-                "accuracy": point.accuracy,
-                "speed": point.speed,
-                "placeName": point.place_name,
-            }
-            for point in points
-        ],
+        # The polyline the map draws: visits collapsed to their anchor, trips
+        # kept dense (Google Timeline semantics - see build_route_points).
+        "points": build_route_points(thinned_points, segment_objects),
         "segments": segments,
     }
 

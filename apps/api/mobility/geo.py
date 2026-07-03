@@ -53,6 +53,23 @@ GLITCH_SPEED_MPS = 350.0
 MAX_TRUSTED_ACCURACY_METERS = 50.0
 
 
+def points_distance_meters(first: LocationPoint, second: LocationPoint) -> float:
+    return haversine_distance_meters(
+        float(first.latitude),
+        float(first.longitude),
+        float(second.latitude),
+        float(second.longitude),
+    )
+
+
+def movement_floor_meters(first: LocationPoint, second: LocationPoint) -> float:
+    return max(
+        GPS_NOISE_FLOOR_METERS,
+        min(first.accuracy or 0, ACCURACY_NOISE_CAP_METERS)
+        + min(second.accuracy or 0, ACCURACY_NOISE_CAP_METERS),
+    )
+
+
 def thin_stationary_points(points: list[LocationPoint]) -> list[LocationPoint]:
     points = [
         point
@@ -64,27 +81,40 @@ def thin_stationary_points(points: list[LocationPoint]) -> list[LocationPoint]:
     kept = [points[0]]
     anchor = points[0]
     last_kept_at = points[0].recorded_at
+    # A fix that moved past the noise floor but is not yet trusted. Wifi/cell
+    # positioning routinely teleports a single fix 100+ meters and the very
+    # next fix lands back at the anchor; accepting the jump immediately drew
+    # that spike as a phantom out-and-back walk while the phone never moved.
+    # Movement therefore only commits once the following fix agrees the track
+    # left the anchor (a lone returning spike is dropped). Real walks lose
+    # nothing but a one-fix delay. The stream's final fix has no successor to
+    # judge it by and is kept: zeroing a genuine two-fix move would be worse,
+    # and if it was a spike the next fix retroactively erases it, since every
+    # reader re-thins from scratch.
+    candidate: LocationPoint | None = None
     for point in points[1:]:
+        if candidate is not None:
+            if points_distance_meters(anchor, point) >= movement_floor_meters(
+                anchor, point
+            ):
+                kept.append(candidate)
+                anchor = candidate
+                last_kept_at = candidate.recorded_at
+            candidate = None
         gap_seconds = (point.recorded_at - last_kept_at).total_seconds()
-        distance = haversine_distance_meters(
-            float(anchor.latitude),
-            float(anchor.longitude),
-            float(point.latitude),
-            float(point.longitude),
-        )
-        moved = distance >= max(
-            GPS_NOISE_FLOOR_METERS,
-            min(anchor.accuracy or 0, ACCURACY_NOISE_CAP_METERS)
-            + min(point.accuracy or 0, ACCURACY_NOISE_CAP_METERS),
-        )
+        distance = points_distance_meters(anchor, point)
+        moved = distance >= movement_floor_meters(anchor, point)
         if moved and distance / max(gap_seconds, 1.0) > GLITCH_SPEED_MPS:
             continue
         if moved:
-            anchor = point
-        elif gap_seconds < STATIONARY_KEEPALIVE_SECONDS:
+            candidate = point
+            continue
+        if gap_seconds < STATIONARY_KEEPALIVE_SECONDS:
             continue
         kept.append(point)
         last_kept_at = point.recorded_at
+    if candidate is not None:
+        kept.append(candidate)
     return kept
 
 

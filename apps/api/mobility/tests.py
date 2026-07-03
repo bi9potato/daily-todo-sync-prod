@@ -9,7 +9,11 @@ from django.utils import timezone
 from accounts.tokens import issue_access_token
 from mobility.geo import thin_stationary_points
 from mobility.models import LocationPoint, MobilityRecording
-from mobility.segmentation import build_day_segments
+from mobility.segmentation import (
+    build_day_segments,
+    build_route_points,
+    segment_day,
+)
 
 
 class MobilityApiTests(TestCase):
@@ -920,3 +924,67 @@ class MobilitySegmentationTests(TestCase):
         segments = build_day_segments(points, dwell_minutes=5)
 
         self.assertTrue(all(segment["type"] == "trip" for segment in segments))
+
+    def test_lone_drift_spike_while_stationary_is_dropped(self):
+        # A phone sitting still all morning: wifi positioning teleports one
+        # fix ~130m away and the very next fix lands back home. The spike
+        # must vanish from the thinned track (no phantom out-and-back walk),
+        # and the day must stay a single visit with no trip.
+        home = [
+            self.make_point(39.9000, 116.3000, float(offset), accuracy=15)
+            for offset in range(40)
+        ]
+        spike = self.make_point(39.9012, 116.3000, 20.5, accuracy=40)
+        points = sorted(home + [spike], key=lambda point: point.recorded_at)
+
+        thinned = thin_stationary_points(points)
+        self.assertTrue(
+            all(abs(float(point.latitude) - 39.9000) < 0.0005 for point in thinned),
+            "the returning drift spike must not survive thinning",
+        )
+
+        segments = build_day_segments(points, dwell_minutes=5)
+        self.assertEqual([segment["type"] for segment in segments], ["visit"])
+
+    def test_route_points_collapse_a_stay_to_its_anchor(self):
+        # Half an hour at one place, fixes wobbling ~11m inside the noise
+        # floor. The drawn route must be the visit anchor at the stay's start
+        # and end - not a scribble of raw keepalive wobble - so playback
+        # dwells at a single stable point.
+        wobble = (0.0, 0.0001, -0.0001)
+        points = [
+            self.make_point(
+                39.9000 + wobble[offset % 3], 116.3000, float(offset), accuracy=15
+            )
+            for offset in range(31)
+        ]
+
+        thinned, segments = segment_day(points, dwell_minutes=5)
+        self.assertEqual([segment.type for segment in segments], ["visit"])
+
+        route = build_route_points(thinned, segments)
+        self.assertEqual(len(route), 2)
+        self.assertEqual(route[0]["latitude"], route[1]["latitude"])
+        self.assertEqual(route[0]["longitude"], route[1]["longitude"])
+        self.assertLess(route[0]["recordedAt"], route[1]["recordedAt"])
+
+    def test_confirmed_departure_still_surfaces_as_a_trip(self):
+        # The spike filter must not swallow a genuine departure: two-plus
+        # consecutive fixes away from the anchor confirm real movement.
+        home = [
+            self.make_point(39.9000, 116.3000, float(offset)) for offset in range(6)
+        ]
+        away = [
+            self.make_point(39.9000 + 0.0009 * step, 116.3000, 6.0 + step)
+            for step in range(1, 7)
+        ]
+
+        thinned = thin_stationary_points(home + away)
+        self.assertGreater(
+            max(abs(float(point.latitude) - 39.9000) for point in thinned),
+            0.004,
+            "confirmed movement must survive thinning",
+        )
+
+        segments = build_day_segments(home + away, dwell_minutes=5)
+        self.assertIn("trip", [segment["type"] for segment in segments])

@@ -9,8 +9,10 @@ import pandas as pd
 from shapely.geometry import Point
 
 from .geo import (
+    ACCURACY_NOISE_CAP_METERS,
     haversine_distance_meters,
     haversine_meters,
+    points_distance_meters,
     thin_stationary_points,
 )
 from .models import LocationPoint
@@ -23,6 +25,13 @@ from .models import LocationPoint
 VISIT_RADIUS_METERS = 80
 VISIT_DEDUP_RADIUS_METERS = 120
 DEFAULT_DWELL_MINUTES = 5
+
+# A "trip" whose noise-floored path length stays under this never left the
+# vicinity of a stop: it is the residue of stop detection splitting on a
+# little wobble, not travel. Emitting those used to show phantom walks (with
+# a ~0.0 km distance) on days the phone never moved. Genuine surfaced walks -
+# even a stroll around the block - cover hundreds of meters.
+MIN_TRIP_DISTANCE_METERS = 30.0
 
 # Rough, speed-only heuristic for a trip's mode of transport. This is not
 # real activity recognition (no accelerometer/ActivityRecognition signal) -
@@ -294,7 +303,12 @@ def _merge_nearby_visits(
     (a walk around the block and back), not the stop detector splitting one
     continuous stay on a little wobble. Collapsing those two stops would
     silently swallow the walk between them; keeping them separate lets the
-    trip surface, the same leave-and-return Google Timeline shows."""
+    trip surface, the same leave-and-return Google Timeline shows.
+
+    "Strayed past" is measured with both fixes' (capped) accuracy radii added
+    on top of the dedup radius: a coarse fix already wobbles that far while
+    standing still, and treating it as a departure fabricated an outing - and
+    with it a phantom walk - out of pure measurement noise."""
     merged: list[tuple[int, int]] = []
     for start_index, end_index in windows:
         if merged:
@@ -302,22 +316,14 @@ def _merge_nearby_visits(
             previous_anchor = points[previous_start]
             anchor = points[start_index]
             anchors_close = (
-                haversine_distance_meters(
-                    float(previous_anchor.latitude),
-                    float(previous_anchor.longitude),
-                    float(anchor.latitude),
-                    float(anchor.longitude),
-                )
+                points_distance_meters(previous_anchor, anchor)
                 <= VISIT_DEDUP_RADIUS_METERS
             )
             left_and_returned = any(
-                haversine_distance_meters(
-                    float(previous_anchor.latitude),
-                    float(previous_anchor.longitude),
-                    float(points[between].latitude),
-                    float(points[between].longitude),
-                )
+                points_distance_meters(previous_anchor, points[between])
                 > VISIT_DEDUP_RADIUS_METERS
+                + min(previous_anchor.accuracy or 0, ACCURACY_NOISE_CAP_METERS)
+                + min(points[between].accuracy or 0, ACCURACY_NOISE_CAP_METERS)
                 for between in range(previous_end + 1, start_index)
             )
             if anchors_close and not left_and_returned:
@@ -327,26 +333,33 @@ def _merge_nearby_visits(
     return merged
 
 
-def build_day_segments(
+def segment_day(
     points: list[LocationPoint], dwell_minutes: float = DEFAULT_DWELL_MINUTES
-) -> list[dict]:
+) -> tuple[list[LocationPoint], list[Segment]]:
     """Partition a day's ordered LocationPoints into Visit and Trip segments
     (stop detection by movingpandas, dedup within 120m) while also covering
     the travel gaps between visits so the whole day is accounted for.
+    Returns the noise-thinned track alongside the segments, whose indices
+    refer into that track.
 
     The track is noise-thinned first: coarse wifi/cell fixes and stationary
     wobble would otherwise fragment stop detection and inflate every trip's
     distance (and with it the inferred mode)."""
     points = thin_stationary_points(points)
     if not points:
-        return []
+        return [], []
 
     visits = _merge_nearby_visits(points, _detect_visit_windows(points, dwell_minutes))
+
+    def significant(trip: Segment | None) -> Segment | None:
+        if trip is None or (trip.distance_meters or 0.0) < MIN_TRIP_DISTANCE_METERS:
+            return None
+        return trip
 
     segments: list[Segment] = []
     cursor = 0
     for start_index, end_index in visits:
-        trip = _trip_segment(points, cursor, start_index - 1)
+        trip = significant(_trip_segment(points, cursor, start_index - 1))
         if trip is not None:
             segments.append(trip)
         anchor = points[start_index]
@@ -364,8 +377,62 @@ def build_day_segments(
         )
         cursor = end_index + 1
 
-    trailing_trip = _trip_segment(points, cursor, len(points) - 1)
+    trailing_trip = significant(_trip_segment(points, cursor, len(points) - 1))
     if trailing_trip is not None:
         segments.append(trailing_trip)
 
+    return points, segments
+
+
+def build_day_segments(
+    points: list[LocationPoint], dwell_minutes: float = DEFAULT_DWELL_MINUTES
+) -> list[dict]:
+    _, segments = segment_day(points, dwell_minutes)
     return [segment.as_dict() for segment in segments]
+
+
+def build_route_points(
+    points: list[LocationPoint], segments: list[Segment]
+) -> list[dict]:
+    """Flatten a segmented day back into the polyline the map draws and the
+    playback dot follows. A visit contributes its anchor twice - once at the
+    stay's start and once at its end - so each stay renders as a single
+    stable point and playback dwells there for the visit's real duration,
+    while a trip contributes its GPS fixes unchanged. Drawing every raw fix
+    used to scribble hours of residual stationary wobble over each stay,
+    which made the route look wrong even after thinning. Points that belong
+    to no segment (a suppressed noise trip) are dropped with it.
+
+    A day whose points never formed a segment (too short or too sparse for
+    stop detection) falls back to the thinned track, so the map still shows
+    what exists."""
+
+    def serialize(point: LocationPoint, recorded_at=None) -> dict:
+        return {
+            "recordedAt": (recorded_at or point.recorded_at).isoformat(),
+            "latitude": float(point.latitude),
+            "longitude": float(point.longitude),
+            "accuracy": point.accuracy,
+            "speed": point.speed,
+            "placeName": point.place_name,
+        }
+
+    if not segments:
+        return [serialize(point) for point in points]
+    route: list[dict] = []
+    for segment in segments:
+        if segment.type == "visit":
+            anchor = points[segment.start_index]
+            route.append(serialize(anchor))
+            if segment.end_index > segment.start_index:
+                route.append(
+                    serialize(
+                        anchor, recorded_at=points[segment.end_index].recorded_at
+                    )
+                )
+        else:
+            route.extend(
+                serialize(point)
+                for point in points[segment.start_index : segment.end_index + 1]
+            )
+    return route

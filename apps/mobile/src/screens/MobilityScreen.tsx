@@ -764,7 +764,7 @@ export function MobilityScreen({
           />
         )}
       </View>
-      <Text style={styles.mapHint}>双指缩放或使用地图按钮 · 拖动查看路线</Text>
+      <Text style={styles.mapHint}>双指缩放 · 拖动查看路线</Text>
 
       {mapAvailable && routePoints.length > 1 ? (
         <View style={styles.playbackBar}>
@@ -1150,8 +1150,19 @@ function mergeMobilityPoints(
   persisted: MobilityPoint[],
   live: MobilityPoint[],
 ) {
+  // The server de-spikes, thins, and visit-anchors everything it has already
+  // stored, and today's query refetches every few seconds while recording.
+  // Live points therefore only bridge the gap after the newest persisted
+  // point: keeping older live samples in the union would permanently re-add
+  // the raw jitter and drift spikes the server just filtered out.
+  const lastPersistedAt = persisted.length
+    ? new Date(persisted[persisted.length - 1].recordedAt).getTime()
+    : Number.NEGATIVE_INFINITY;
+  const liveTail = live.filter(
+    (point) => new Date(point.recordedAt).getTime() > lastPersistedAt,
+  );
   const unique = new Map<string, MobilityPoint>();
-  [...persisted, ...live].forEach((point) => {
+  [...persisted, ...liveTail].forEach((point) => {
     unique.set(
       `${point.recordedAt}:${point.latitude.toFixed(6)}:${point.longitude.toFixed(6)}`,
       point,
