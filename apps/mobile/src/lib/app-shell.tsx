@@ -11,9 +11,8 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppState } from "react-native";
 
-import type { AppSection } from "@/components/AppDrawer";
 import { getMe } from "@/lib/api";
-import { routeForSection } from "@/lib/app-routes";
+import { routeForSection, type AppSection } from "@/lib/app-routes";
 import { toDateKey } from "@/lib/date";
 import { useMobilityRuntime } from "@/lib/useMobilityRuntime";
 import type { CalendarViewMode } from "@/screens/CalendarScreen";
@@ -26,9 +25,6 @@ type AppShellContextValue = {
   setCalendarView: (view: CalendarViewMode) => void;
   displayName: string;
   mobilityRuntime: ReturnType<typeof useMobilityRuntime>;
-  drawerOpen: boolean;
-  openDrawer: () => void;
-  closeDrawer: () => void;
   navigateToSection: (section: AppSection) => void;
   openDate: (date: string) => void;
 };
@@ -47,7 +43,6 @@ export function AppShellProvider({ children }: PropsWithChildren) {
   );
   const selectedDate = selectedDateOverride ?? today;
   const [calendarView, setCalendarView] = useState<CalendarViewMode>("week");
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const mobilityRuntime = useMobilityRuntime(today);
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe });
   const displayName =
@@ -120,9 +115,6 @@ export function AppShellProvider({ children }: PropsWithChildren) {
     [navigateToSection, setSelectedDate],
   );
 
-  const openDrawer = useCallback(() => setDrawerOpen(true), []);
-  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
-
   const value = useMemo<AppShellContextValue>(
     () => ({
       today,
@@ -132,9 +124,6 @@ export function AppShellProvider({ children }: PropsWithChildren) {
       setCalendarView,
       displayName,
       mobilityRuntime,
-      drawerOpen,
-      openDrawer,
-      closeDrawer,
       navigateToSection,
       openDate,
     }),
@@ -144,9 +133,6 @@ export function AppShellProvider({ children }: PropsWithChildren) {
       calendarView,
       displayName,
       mobilityRuntime,
-      drawerOpen,
-      openDrawer,
-      closeDrawer,
       navigateToSection,
       openDate,
       setSelectedDate,

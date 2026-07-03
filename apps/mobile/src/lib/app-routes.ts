@@ -1,6 +1,19 @@
 import type { Href } from "expo-router";
 
-import type { AppSection } from "@/components/AppDrawer";
+// The lateral sections reachable from the app drawer. Declared here (rather
+// than in the drawer component) so route helpers and the app shell can depend
+// on the union without importing a UI module.
+export type AppSection =
+  | "today"
+  | "long-term"
+  | "low-priority"
+  | "analytics"
+  | "calendar"
+  | "mobility"
+  | "sleep"
+  | "passwords"
+  | "ai"
+  | "profile";
 
 // Route paths for the "(app)" group - group folders are stripped from the
 // URL by expo-router, so these are the bare paths (not "/(app)/today").

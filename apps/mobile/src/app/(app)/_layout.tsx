@@ -1,45 +1,61 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, usePathname } from "expo-router";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Drawer } from "expo-router/drawer";
+import type { DrawerHeaderProps } from "expo-router/drawer";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppDrawer } from "@/components/AppDrawer";
+import { AppDrawerContent } from "@/components/AppDrawerContent";
 import { AppIcon } from "@/components/AppIcon";
 import { AppShellProvider, useAppShell } from "@/lib/app-shell";
-import { sectionForPath } from "@/lib/app-routes";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
 export default function AppGroupLayout() {
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  // A numeric width (not a "84%" string) so the underlying drawer-layout can
+  // compute the open/close translation; capped so it never gets absurdly wide
+  // on tablets.
+  const drawerWidth = Math.min(320, Math.round(width * 0.84));
+
   return (
     <AppShellProvider>
-      <AppShell />
+      <Drawer
+        drawerContent={(props) => <AppDrawerContent {...props} />}
+        screenOptions={{
+          drawerStyle: {
+            backgroundColor: colors.surface,
+            borderRightColor: colors.border,
+            borderRightWidth: StyleSheet.hairlineWidth,
+            width: drawerWidth,
+          },
+          // `front` on every platform matches the old Modal drawer that
+          // overlaid the whole screen (iOS would otherwise default to `slide`).
+          drawerType: "front",
+          header: (props) => <AppBar {...props} />,
+          headerShown: true,
+          overlayColor: "rgba(22, 27, 24, 0.4)",
+          // Reproduce the bottom safe-area padding the old shared SafeAreaView
+          // gave every screen, so nothing sits under the gesture/nav bar.
+          sceneStyle: {
+            backgroundColor: colors.background,
+            paddingBottom: insets.bottom,
+          },
+        }}
+      />
     </AppShellProvider>
   );
 }
 
-function AppShell() {
-  const {
-    calendarView,
-    closeDrawer,
-    displayName,
-    drawerOpen,
-    navigateToSection,
-    openDrawer,
-    selectedDate,
-    setCalendarView,
-  } = useAppShell();
-  const pathname = usePathname();
-  const activeSection = sectionForPath(pathname);
+function AppBar({ navigation }: DrawerHeaderProps) {
+  const insets = useSafeAreaInsets();
+  const { displayName } = useAppShell();
 
   return (
-    <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
+    <View style={[styles.headerSafeArea, { paddingTop: insets.top }]}>
       <View style={styles.appBar}>
         <Pressable
           accessibilityLabel="打开侧边栏"
-          onPress={openDrawer}
-          style={({ pressed }) => [
-            styles.menuButton,
-            pressed && styles.pressed,
-          ]}>
+          onPress={() => navigation.openDrawer()}
+          style={({ pressed }) => [styles.menuButton, pressed && styles.pressed]}>
           <AppIcon color={colors.textMuted} name="menu" size={23} />
         </Pressable>
         <View style={styles.appBarCopy}>
@@ -49,27 +65,13 @@ function AppShell() {
           <Text style={styles.appBarProduct}>Daily Todo Sync</Text>
         </View>
       </View>
-      <View style={styles.content}>
-        <Stack screenOptions={{ animation: "fade", headerShown: false }} />
-      </View>
-      <AppDrawer
-        activeSection={activeSection}
-        calendarView={calendarView}
-        currentDate={selectedDate}
-        displayName={displayName}
-        onChangeCalendarView={setCalendarView}
-        onClose={closeDrawer}
-        onNavigate={navigateToSection}
-        visible={drawerOpen}
-      />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  headerSafeArea: {
     backgroundColor: colors.background,
-    flex: 1,
   },
   appBar: {
     ...shadows.panel,
@@ -109,10 +111,6 @@ const styles = StyleSheet.create({
   appBarProduct: {
     ...typography.caption,
     color: colors.textMuted,
-  },
-  content: {
-    backgroundColor: colors.background,
-    flex: 1,
   },
   pressed: {
     opacity: 0.62,
