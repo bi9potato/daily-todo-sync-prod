@@ -18,6 +18,7 @@ import {
   type RenderItemParams,
 } from "react-native-draggable-flatlist";
 import { RefreshControl } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
@@ -110,6 +111,11 @@ type TodayScreenProps = {
   viewMode?: "my-day" | "long-term" | "low-priority";
 };
 
+// The Composer floats over the list (absolute, ~56pt tall, sitting spacing.sm
+// above the bottom). This is how much bottom padding the scroll content needs
+// so the final card scrolls clear of it rather than hiding underneath.
+const COMPOSER_CLEARANCE = 56 + spacing.sm + spacing.md;
+
 const TASK_REORDER_SPRING = {
   damping: 22,
   mass: 0.45,
@@ -168,6 +174,7 @@ export function TodayScreen({
   viewMode = "my-day",
 }: TodayScreenProps) {
   const queryClient = useQueryClient();
+  const insets = useSafeAreaInsets();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
@@ -542,7 +549,13 @@ export function TodayScreen({
     />
   ) : (
     <NestableScrollContainer
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[
+        styles.scrollContent,
+        // Clear the floating Composer (absolutely positioned above this list)
+        // plus the bottom safe area, so the last task card is never hidden
+        // behind the input bar.
+        { paddingBottom: COMPOSER_CLEARANCE + insets.bottom },
+      ]}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
       overScrollMode="always"

@@ -1,7 +1,15 @@
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
 import Animated, { SlideInLeft, SlideOutLeft } from "react-native-reanimated";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
 import { enterEasing, exitEasing, motionDurations } from "@/lib/motion";
@@ -41,60 +49,15 @@ type AppDrawerProps = {
 };
 
 const navItems = [
-  {
-    key: "today",
-    label: "我的一天",
-    meta: "今日任务",
-    icon: "sunny-outline",
-  },
-  {
-    key: "long-term",
-    label: "长期任务",
-    meta: "每天持续显示",
-    icon: "pricetag-outline",
-  },
-  {
-    key: "low-priority",
-    label: "低优先级",
-    meta: "稍后处理",
-    icon: "leaf-outline",
-  },
-  {
-    key: "analytics",
-    label: "分析",
-    meta: "今日复盘",
-    icon: "analytics-outline",
-  },
-  {
-    key: "calendar",
-    label: "日历",
-    meta: "选择日期",
-    icon: "calendar-outline",
-  },
-  {
-    key: "mobility",
-    label: "足迹地图",
-    meta: "轨迹、步数与地点",
-    icon: "map-outline",
-  },
-  {
-    key: "sleep",
-    label: "睡眠",
-    meta: "手环数据 · Health Connect",
-    icon: "moon-outline",
-  },
-  {
-    key: "passwords",
-    label: "密码管理",
-    meta: "本机加密保存",
-    icon: "key-outline",
-  },
-  {
-    key: "ai",
-    label: "AI 助手",
-    meta: "自然语言管理",
-    icon: "sparkles-outline",
-  },
+  { key: "today", label: "我的一天", icon: "sunny-outline" },
+  { key: "long-term", label: "长期任务", icon: "pricetag-outline" },
+  { key: "low-priority", label: "低优先级", icon: "leaf-outline" },
+  { key: "analytics", label: "分析", icon: "analytics-outline" },
+  { key: "calendar", label: "日历", icon: "calendar-outline" },
+  { key: "mobility", label: "足迹地图", icon: "map-outline" },
+  { key: "sleep", label: "睡眠", icon: "moon-outline" },
+  { key: "passwords", label: "密码管理", icon: "key-outline" },
+  { key: "ai", label: "AI 助手", icon: "sparkles-outline" },
 ] as const;
 
 export function AppDrawer({
@@ -107,6 +70,7 @@ export function AppDrawer({
   onNavigate,
   visible,
 }: AppDrawerProps) {
+  const insets = useSafeAreaInsets();
   const initial = displayName.trim().slice(0, 1).toUpperCase() || "D";
 
   function navigate(section: AppSection) {
@@ -122,53 +86,56 @@ export function AppDrawer({
       transparent
       visible={visible}>
       <View style={styles.overlay}>
-        <BlurView intensity={28} style={styles.scrim} tint="dark">
+        <BlurView intensity={26} style={styles.scrim} tint="dark">
           <Pressable
             accessibilityLabel="关闭侧边栏"
             onPress={onClose}
             style={StyleSheet.absoluteFill}
           />
         </BlurView>
-        <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
-          <Animated.View
-            entering={PANEL_ENTERING}
-            exiting={PANEL_EXITING}
-            style={styles.panel}>
-            <View style={styles.accountRow}>
-              <Pressable
-                accessibilityLabel="打开我的账户"
-                onPress={() => navigate("profile")}
-                style={({ pressed }) => [
-                  styles.accountButton,
-                  activeSection === "profile" && styles.accountButtonActive,
-                  pressed && styles.pressed,
-                ]}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{initial}</Text>
-                </View>
-                <View style={styles.accountCopy}>
-                  <Text numberOfLines={1} style={styles.accountName}>
-                    {displayName}
-                  </Text>
-                  <Text style={styles.accountMeta}>账户与同步设置</Text>
-                </View>
-                <AppIcon
-                  color={colors.textMuted}
-                  name="chevron-forward"
-                  size={18}
-                />
-              </Pressable>
-              <Pressable
-                accessibilityLabel="关闭侧边栏"
-                onPress={onClose}
-                style={({ pressed }) => [
-                  styles.closeButton,
-                  pressed && styles.pressed,
-                ]}>
-                <AppIcon color={colors.textMuted} name="close" size={22} />
-              </Pressable>
+        {/* insets applied on the panel itself (rather than a SafeAreaView,
+            which under-reports inside a translucent Modal on Android) so the
+            content clears the status bar and gesture bar. */}
+        <Animated.View
+          entering={PANEL_ENTERING}
+          exiting={PANEL_EXITING}
+          style={[
+            styles.panel,
+            {
+              paddingTop: insets.top + spacing.lg,
+              paddingBottom: insets.bottom + spacing.md,
+            },
+          ]}>
+          <Pressable
+            accessibilityLabel="打开我的账户"
+            onPress={() => navigate("profile")}
+            style={({ pressed }) => [
+              styles.account,
+              activeSection === "profile" && styles.accountActive,
+              pressed && styles.pressed,
+            ]}>
+            <LinearGradient
+              colors={[colors.accent, colors.accentPressed]}
+              end={{ x: 1, y: 1 }}
+              start={{ x: 0, y: 0 }}
+              style={styles.avatar}>
+              <Text style={styles.avatarText}>{initial}</Text>
+            </LinearGradient>
+            <View style={styles.accountCopy}>
+              <Text numberOfLines={1} style={styles.accountName}>
+                {displayName}
+              </Text>
+              <Text style={styles.accountMeta}>账户与同步设置</Text>
             </View>
+            <AppIcon color={colors.textMuted} name="chevron-forward" size={18} />
+          </Pressable>
 
+          <View style={styles.divider} />
+
+          <ScrollView
+            contentContainerStyle={styles.scrollBody}
+            showsVerticalScrollIndicator={false}
+            style={styles.scroll}>
             <View style={styles.navigation}>
               {navItems.map((item) => {
                 const active = activeSection === item.key;
@@ -183,17 +150,17 @@ export function AppDrawer({
                       active && styles.navItemActive,
                       pressed && styles.pressed,
                     ]}>
-                    <View style={styles.navIcon}>
-                      <AppIcon
-                        color={colors.accent}
-                        name={item.icon}
-                        size={21}
-                      />
-                    </View>
-                    <View style={styles.navCopy}>
-                      <Text style={styles.navLabel}>{item.label}</Text>
-                      <Text style={styles.navMeta}>{item.meta}</Text>
-                    </View>
+                    <AppIcon
+                      color={active ? colors.accent : colors.textMuted}
+                      name={item.icon}
+                      size={21}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.navLabel, active && styles.navLabelActive]}>
+                      {item.label}
+                    </Text>
+                    {active ? <View style={styles.activeDot} /> : null}
                   </Pressable>
                 );
               })}
@@ -204,7 +171,8 @@ export function AppDrawer({
               <View style={styles.segmented}>
                 {(["day", "week", "month"] as const).map((view) => {
                   const active = calendarView === view;
-                  const label = view === "day" ? "日" : view === "week" ? "周" : "月";
+                  const label =
+                    view === "day" ? "日" : view === "week" ? "周" : "月";
                   return (
                     <Pressable
                       accessibilityRole="button"
@@ -232,14 +200,13 @@ export function AppDrawer({
                 })}
               </View>
             </View>
+          </ScrollView>
 
-            <View style={styles.currentDate}>
-              <Text style={styles.sectionLabel}>当前日期</Text>
-              <Text style={styles.currentDateValue}>{currentDate}</Text>
-              <Text style={styles.currentDateHint}>日期仅在日历中切换</Text>
-            </View>
-          </Animated.View>
-        </SafeAreaView>
+          <View style={styles.footer}>
+            <Text style={styles.sectionLabel}>当前日期</Text>
+            <Text style={styles.footerDate}>{currentDate}</Text>
+          </View>
+        </Animated.View>
       </View>
     </Modal>
   );
@@ -252,53 +219,42 @@ const styles = StyleSheet.create({
   },
   scrim: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(22, 27, 24, 0.18)",
-  },
-  safeArea: {
-    width: "86%",
-    maxWidth: 332,
+    backgroundColor: "rgba(22, 27, 24, 0.22)",
   },
   panel: {
+    // No flex here: in the row-direction overlay, flex:1 would stretch the
+    // panel to full width and swallow the tap-to-close scrim. Width sets the
+    // horizontal size; the default cross-axis stretch gives it full height.
     ...shadows.floating,
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-    borderRightWidth: 1,
-    flex: 1,
-    gap: spacing.xl,
-    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRightColor: colors.border,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    maxWidth: 320,
+    paddingHorizontal: spacing.md,
+    width: "84%",
   },
-  accountRow: {
+  account: {
     alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.sm,
-  },
-  accountButton: {
-    alignItems: "center",
-    borderColor: "transparent",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flex: 1,
+    borderRadius: radius.lg,
     flexDirection: "row",
     gap: spacing.md,
-    minHeight: 56,
-    padding: spacing.xs,
+    marginBottom: spacing.md,
+    padding: spacing.sm,
   },
-  accountButtonActive: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
+  accountActive: {
+    backgroundColor: colors.surfaceMuted,
   },
   avatar: {
     alignItems: "center",
-    backgroundColor: colors.accent,
-    borderRadius: radius.sm,
-    height: 42,
+    borderRadius: radius.full,
+    height: 46,
     justifyContent: "center",
-    width: 42,
+    width: 46,
   },
   avatarText: {
     color: colors.white,
-    fontSize: 17,
-    fontWeight: "900",
+    fontSize: 18,
+    fontWeight: "800",
   },
   accountCopy: {
     flex: 1,
@@ -307,84 +263,84 @@ const styles = StyleSheet.create({
   },
   accountName: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "800",
+    letterSpacing: 0.2,
   },
   accountMeta: {
     ...typography.caption,
     color: colors.textMuted,
   },
-  closeButton: {
-    alignItems: "center",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    height: 40,
-    justifyContent: "center",
-    width: 40,
+  divider: {
+    backgroundColor: colors.border,
+    height: StyleSheet.hairlineWidth,
+    marginBottom: spacing.sm,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollBody: {
+    gap: spacing.xl,
+    paddingVertical: spacing.sm,
   },
   navigation: {
-    gap: spacing.xs,
+    gap: 2,
   },
   navItem: {
     alignItems: "center",
-    borderColor: "transparent",
-    borderRadius: radius.sm,
-    borderWidth: 1,
+    borderRadius: radius.md,
     flexDirection: "row",
     gap: spacing.md,
-    minHeight: 62,
+    minHeight: 50,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
   },
   navItemActive: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-  },
-  navIcon: {
-    alignItems: "center",
-    height: 28,
-    justifyContent: "center",
-    width: 28,
-  },
-  navCopy: {
-    flex: 1,
-    gap: 2,
+    backgroundColor: colors.accentSoft,
   },
   navLabel: {
     color: colors.text,
-    fontSize: 15,
+    flex: 1,
+    fontSize: 15.5,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  navLabelActive: {
+    color: colors.accent,
     fontWeight: "800",
   },
-  navMeta: {
-    ...typography.caption,
-    color: colors.textMuted,
+  activeDot: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    height: 7,
+    width: 7,
   },
   viewSection: {
     gap: spacing.sm,
+    paddingHorizontal: spacing.xs,
   },
   sectionLabel: {
     ...typography.label,
     color: colors.textMuted,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
   },
   segmented: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
     flexDirection: "row",
     gap: spacing.xs,
+    padding: spacing.xs,
   },
   segment: {
     alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderColor: "transparent",
     borderRadius: radius.sm,
-    borderWidth: 1,
     flex: 1,
     justifyContent: "center",
-    minHeight: 42,
+    minHeight: 40,
   },
   segmentActive: {
+    ...shadows.card,
     backgroundColor: colors.surface,
-    borderColor: colors.borderStrong,
   },
   segmentText: {
     ...typography.label,
@@ -394,23 +350,19 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontWeight: "800",
   },
-  currentDate: {
+  footer: {
     borderTopColor: colors.border,
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     gap: spacing.xs,
-    marginTop: "auto",
-    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.xs,
+    paddingTop: spacing.md,
   },
-  currentDateValue: {
+  footerDate: {
     color: colors.text,
-    fontSize: 17,
-    fontWeight: "800",
-  },
-  currentDateHint: {
-    ...typography.caption,
-    color: colors.textMuted,
+    fontSize: 16,
+    fontWeight: "700",
   },
   pressed: {
-    opacity: 0.62,
+    opacity: 0.6,
   },
 });

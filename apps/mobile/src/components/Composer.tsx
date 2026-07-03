@@ -106,7 +106,10 @@ export function Composer({
   const wrapperStyle =
     Platform.OS === "android" && keyboardVisible
       ? { bottom: keyboardInset }
-      : null;
+      : // Keyboard down: rest above the bottom safe area (gesture bar / home
+        // indicator) instead of the flat 8pt, so the bar never sits under the
+        // system navigation.
+        { bottom: spacing.sm + insets.bottom };
 
   return (
     <View style={[styles.wrapper, wrapperStyle]}>

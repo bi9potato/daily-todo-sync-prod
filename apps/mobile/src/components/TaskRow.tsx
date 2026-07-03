@@ -106,12 +106,6 @@ export const TaskRow = memo(function TaskRow({
             </Text>
           </View>
         ) : null}
-        {task.isPinned ? (
-          <View style={styles.pinnedTag}>
-            <AppIcon name="bookmark" color={colors.accent} size={12} />
-            <Text style={styles.pinnedText}>置顶</Text>
-          </View>
-        ) : null}
       </View>
 
       {task.attachments[0] ? (
@@ -256,23 +250,6 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     flexShrink: 1,
-  },
-  pinnedTag: {
-    alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "#E3EEE5",
-    borderColor: "#A9BDAE",
-    borderRadius: radius.full,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 2,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  pinnedText: {
-    color: colors.accent,
-    fontSize: 11,
-    fontWeight: "700",
   },
   actionButton: {
     alignItems: "center",
