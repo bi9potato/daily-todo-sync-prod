@@ -32,6 +32,17 @@ def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float
 # (raw coordinates, no fabrication) so stop detection still sees how long
 # the dwell lasted.
 STATIONARY_KEEPALIVE_SECONDS = 300.0
+# The movement floor above is the *sum* of both fixes' accuracy radii, so a
+# pair of trusted-but-coarse fixes (30-50m each) demanded 60-100m of travel
+# before a point counted as movement. On a real walk sampled every few
+# seconds that dropped almost every intermediate fix, leaving a sparse,
+# corner-cutting polyline and too few points for the leg to register as a
+# trip at all. Capping each fix's contribution keeps the floor high enough to
+# swallow genuine standstill jitter (a still phone rarely wanders past ~40m)
+# while letting a moving one keep its shape. Distance stays protected
+# separately by haversine_meters(), which still uses the uncapped radii, so
+# densifying the kept track cannot fabricate distance.
+ACCURACY_NOISE_CAP_METERS = 20.0
 # Nothing the app can record travels faster than an airliner; a shorter leg
 # implying more than this is a corrupted fix.
 GLITCH_SPEED_MPS = 350.0
@@ -63,7 +74,8 @@ def thin_stationary_points(points: list[LocationPoint]) -> list[LocationPoint]:
         )
         moved = distance >= max(
             GPS_NOISE_FLOOR_METERS,
-            (anchor.accuracy or 0) + (point.accuracy or 0),
+            min(anchor.accuracy or 0, ACCURACY_NOISE_CAP_METERS)
+            + min(point.accuracy or 0, ACCURACY_NOISE_CAP_METERS),
         )
         if moved and distance / max(gap_seconds, 1.0) > GLITCH_SPEED_MPS:
             continue
@@ -84,9 +96,16 @@ def haversine_meters(first: LocationPoint, second: LocationPoint) -> float:
         float(second.longitude),
     )
 
+    # Capped the same way as the thinning floor: without it, a leg between two
+    # trusted-but-coarse (30-50m) fixes was zeroed unless it spanned 60-100m,
+    # so a genuine walk kept by thinning still contributed 0 distance and read
+    # as "步行 · 0.00 公里". Stationary wobble stays at 0 (a still phone rarely
+    # wanders past the ~40m capped floor), and day distance only sums trip
+    # segments, so stops can't fabricate distance regardless.
     noise_floor = max(
         GPS_NOISE_FLOOR_METERS,
-        (first.accuracy or 0) + (second.accuracy or 0),
+        min(first.accuracy or 0, ACCURACY_NOISE_CAP_METERS)
+        + min(second.accuracy or 0, ACCURACY_NOISE_CAP_METERS),
     )
     if distance < noise_floor:
         return 0

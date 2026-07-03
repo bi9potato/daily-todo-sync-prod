@@ -7,6 +7,7 @@ from django.test import Client, TestCase
 from django.utils import timezone
 
 from accounts.tokens import issue_access_token
+from mobility.geo import thin_stationary_points
 from mobility.models import LocationPoint, MobilityRecording
 from mobility.segmentation import build_day_segments
 
@@ -653,6 +654,28 @@ class MobilitySegmentationTests(TestCase):
 
         self.assertEqual([segment["type"] for segment in segments], ["trip"])
         self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_coarse_accuracy_walk_keeps_a_dense_track_and_walking_trip(self):
+        # A ~7 minute walk sampled every minute, ~55m per fix, at the 35m
+        # accuracy a phone commonly reports in the city. The movement floor
+        # was the sum of both radii (70m), so a 55m leg only counted as
+        # movement once it had accumulated across two fixes - the kept track
+        # dropped to every other point, cutting corners off the drawn line.
+        # Capping each fix's accuracy contribution (40m floor) keeps every
+        # real step, so the polyline hugs the walk and the leg is a trip.
+        points = [
+            self.make_point(39.9000 + 0.0005 * step, 116.3000, step, accuracy=35)
+            for step in range(8)
+        ]
+
+        # Every moving fix is retained rather than thinned to every other one
+        # (which is what the old summed-radius floor did here).
+        self.assertGreaterEqual(len(thin_stationary_points(points)), 7)
+
+        segments = build_day_segments(points, dwell_minutes=5)
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+        self.assertGreater(segments[0]["distanceMeters"], 200)
 
     def test_short_noisy_trip_defaults_to_walking(self):
         # Two fixes 150m apart within 30 seconds is indistinguishable from a
