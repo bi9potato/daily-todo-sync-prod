@@ -287,13 +287,21 @@ def _merge_nearby_visits(
 ) -> list[tuple[int, int]]:
     """Fold a visit into the previous one when their anchors are within the
     dedup radius, so wobbling in and out of one place doesn't show up as a
-    string of separate stops."""
+    string of separate stops.
+
+    But only when the traveller never actually left in between: if a fix
+    between the two stops strayed past the dedup radius, it was a real outing
+    (a walk around the block and back), not the stop detector splitting one
+    continuous stay on a little wobble. Collapsing those two stops would
+    silently swallow the walk between them; keeping them separate lets the
+    trip surface, the same leave-and-return Google Timeline shows."""
     merged: list[tuple[int, int]] = []
     for start_index, end_index in windows:
         if merged:
-            previous_anchor = points[merged[-1][0]]
+            previous_start, previous_end = merged[-1]
+            previous_anchor = points[previous_start]
             anchor = points[start_index]
-            if (
+            anchors_close = (
                 haversine_distance_meters(
                     float(previous_anchor.latitude),
                     float(previous_anchor.longitude),
@@ -301,8 +309,19 @@ def _merge_nearby_visits(
                     float(anchor.longitude),
                 )
                 <= VISIT_DEDUP_RADIUS_METERS
-            ):
-                merged[-1] = (merged[-1][0], end_index)
+            )
+            left_and_returned = any(
+                haversine_distance_meters(
+                    float(previous_anchor.latitude),
+                    float(previous_anchor.longitude),
+                    float(points[between].latitude),
+                    float(points[between].longitude),
+                )
+                > VISIT_DEDUP_RADIUS_METERS
+                for between in range(previous_end + 1, start_index)
+            )
+            if anchors_close and not left_and_returned:
+                merged[-1] = (previous_start, end_index)
                 continue
         merged.append((start_index, end_index))
     return merged

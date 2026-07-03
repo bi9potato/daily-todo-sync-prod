@@ -631,6 +631,30 @@ class MobilitySegmentationTests(TestCase):
         self.assertGreaterEqual(segments[1]["durationMinutes"], 15)
         self.assertGreater(segments[2]["distanceMeters"], 400)
 
+    def test_walk_out_and_back_between_two_stays_is_not_swallowed(self):
+        # Stay home, walk ~250m up the road and back, then stay home again.
+        # Both stays anchor at the same spot (well inside the 120m dedup
+        # radius), so folding them together used to erase the walk entirely -
+        # the day collapsed to a single visit. The excursion past the dedup
+        # radius must keep the two stays distinct and surface the walk.
+        home = [self.make_point(39.9000, 116.3000, offset) for offset in range(7)]
+        walk = [
+            self.make_point(39.9000 + 0.0008, 116.3000, 8),
+            self.make_point(39.9000 + 0.0016, 116.3000, 9),
+            self.make_point(39.9000 + 0.0022, 116.3000, 10),
+            self.make_point(39.9000 + 0.0016, 116.3000, 11),
+            self.make_point(39.9000 + 0.0008, 116.3000, 12),
+        ]
+        home_again = [
+            self.make_point(39.9000, 116.3000, offset) for offset in range(13, 20)
+        ]
+
+        segments = build_day_segments(home + walk + home_again, dwell_minutes=5)
+
+        types = [segment["type"] for segment in segments]
+        self.assertEqual(types.count("visit"), 2)
+        self.assertIn("trip", types)
+
     def test_single_cluster_all_day_is_one_visit_no_trip(self):
         points = [
             self.make_point(39.9000, 116.3000, offset)
