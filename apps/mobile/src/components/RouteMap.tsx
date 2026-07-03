@@ -123,7 +123,11 @@ function createMapHtml() {
           markers[0].setLatLng(points[0]);
           markers[1].setLatLng(points[points.length-1]);
         }else{
-          route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round',smoothFactor:1.5}).addTo(map);
+          // smoothFactor 1 (Leaflet's default) instead of 1.5: the higher
+          // value simplifies the polyline and visibly cut corners off an
+          // already-thinned, sparse track, so the drawn route drifted away
+          // from where you actually walked. 1 keeps it faithful to the points.
+          route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round',lineJoin:'round',smoothFactor:1}).addTo(map);
           markers=[
             L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map),
             L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map)
