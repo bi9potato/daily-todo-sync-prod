@@ -9,12 +9,25 @@ import {
   useState,
   type ForwardedRef,
 } from "react";
-import { Platform, StyleSheet, Text, View } from "react-native";
+import {
+  Animated as RNAnimated,
+  Easing,
+  Platform,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import Svg, { Circle, Line, Polyline } from "react-native-svg";
-import { WebView } from "react-native-webview";
+import {
+  Animated as MapLibreAnimated,
+  Camera,
+  GeoJSONSource,
+  Layer,
+  Map,
+  type CameraRef,
+} from "@maplibre/maplibre-react-native";
 
 import { AppIcon } from "./AppIcon";
-import { recordClientLog } from "@/lib/client-logs";
 import { colors, radius, typography } from "@/theme";
 import type { MobilityPoint } from "@/types";
 
@@ -34,316 +47,423 @@ type RouteMapProps = {
 
 const EMPTY_POINTS: MobilityPoint[] = [];
 
-function serializePoints(points: MobilityPoint[]) {
-  return JSON.stringify(
-    points.map((point) => [
-      point.latitude,
-      point.longitude,
-      new Date(point.recordedAt).getTime(),
-    ]),
-  ).replace(/</g, "\\u003c");
+// OpenFreeMap: open-source, no API key, no registration. Positron is a clean
+// light basemap that lets the green route stand out. WGS84 (OSM-derived) so it
+// aligns with the raw GPS points - no GCJ-02 offset. Swap the last path segment
+// (e.g. "liberty") for a more detailed style.
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+
+const ROUTE_COLOR = "#2C5745";
+const PLAYBACK_COLOR = "#E8853A";
+// Throttle for the scrubber progress ping back to the consumer, matching the
+// old WebView cadence so the slider stays smooth without a 60fps flood.
+const PROGRESS_PING_MS = 120;
+
+// A route point flattened to what the map + playback math need.
+type RoutePoint = { lon: number; lat: number; t: number };
+
+function toRoutePoints(points: MobilityPoint[]): RoutePoint[] {
+  return points.map((point) => ({
+    lon: point.longitude,
+    lat: point.latitude,
+    t: new Date(point.recordedAt).getTime(),
+  }));
 }
 
-function createRouteScript(points: MobilityPoint[], fitRoute: boolean) {
-  return `window.setRoute(${serializePoints(points)},${fitRoute});true;`;
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
-function createMapHtml() {
-  return `<!doctype html>
-<html>
-  <head>
-    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-    <style>
-      html,body,#map{height:100%;width:100%;margin:0;background:#e9ece7}
-      .leaflet-control-attribution{font:10px system-ui;color:#687168;background:rgba(255,255,255,.82)!important}
-      .leaflet-control-zoom a{width:42px!important;height:42px!important;line-height:42px!important;font-size:24px!important;color:#2C5745!important}
-    </style>
-  </head>
-  <body>
-    <div id="map"></div>
-    <script>
-      // unpkg is frequently unreachable from mainland-China networks, which
-      // used to leave the map (and with it the whole playback UI) blank
-      // until the 10s timeout kicked in. npmmirror serves the same files
-      // domestically; unpkg stays as the fallback for everyone else. A
-      // terminal failure posts map-load-failed so RN can swap to the SVG
-      // preview immediately instead of waiting out the timeout.
-      const LEAFLET_SOURCES=[
-        'https://registry.npmmirror.com/leaflet/1.9.4/files/dist',
-        'https://unpkg.com/leaflet@1.9.4/dist'
-      ];
-      function loadCss(base){
-        const link=document.createElement('link');
-        link.rel='stylesheet';
-        link.href=base+'/leaflet.css';
-        document.head.appendChild(link);
-      }
-      function loadLeaflet(index){
-        if(index>=LEAFLET_SOURCES.length){
-          window.ReactNativeWebView.postMessage('map-load-failed');
-          return;
-        }
-        const base=LEAFLET_SOURCES[index];
-        const script=document.createElement('script');
-        script.src=base+'/leaflet.js';
-        script.onload=()=>{loadCss(base);initMap()};
-        script.onerror=()=>loadLeaflet(index+1);
-        document.body.appendChild(script);
-      }
-      const fallback=[39.9042,116.4074];
-      function initMap(){
-      const map=L.map('map',{
-        attributionControl:true,
-        boxZoom:true,
-        doubleClickZoom:true,
-        dragging:true,
-        keyboard:true,
-        scrollWheelZoom:true,
-        touchZoom:true,
-        zoomControl:true
-      });
-      map.zoomControl.setPosition('bottomright');
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-        maxZoom:19,
-        attribution:'© OpenStreetMap'
-      }).addTo(map);
-      let route=null;
-      let markers=[];
-      let routePoints=[];
-      let playbackMarker=null;
-      let playbackTimer=null;
-      let playbackState=null;
-      let lastProgressPostedAt=0;
-      map.setView(fallback,11);
-      window.setRoute=(points,fitRoute)=>{
-        if(!points.length){return}
-        routePoints=points;
-        if(route){
-          route.setLatLngs(points);
-          markers[0].setLatLng(points[0]);
-          markers[1].setLatLng(points[points.length-1]);
-        }else{
-          // smoothFactor 1 (Leaflet's default) instead of 1.5: the higher
-          // value simplifies the polyline and visibly cut corners off an
-          // already-thinned, sparse track, so the drawn route drifted away
-          // from where you actually walked. 1 keeps it faithful to the points.
-          route=L.polyline(points,{color:'#2C5745',weight:5,opacity:.92,lineCap:'round',lineJoin:'round',smoothFactor:1}).addTo(map);
-          markers=[
-            L.circleMarker(points[0],{radius:7,color:'#fff',weight:3,fillColor:'#2C5745',fillOpacity:1}).addTo(map),
-            L.circleMarker(points[points.length-1],{radius:7,color:'#2C5745',weight:3,fillColor:'#fff',fillOpacity:1}).addTo(map)
-          ];
-        }
-        if(fitRoute){
-          if(points.length===1){map.setView(points[0],16)}
-          else{map.fitBounds(route.getBounds(),{padding:[28,28]})}
-        }
-      };
-
-      // Playback runs entirely inside the WebView (driven by
-      // requestAnimationFrame) instead of the RN bridge so the animation
-      // stays smooth regardless of the route-update throttle used while a
-      // recording is live. Only a throttled progress ping goes back to RN,
-      // to keep the scrubber in sync without flooding the bridge at 60fps.
-      function pointAtVirtualTime(vt){
-        if(!routePoints.length){return null}
-        if(vt<=routePoints[0][2]){return routePoints[0]}
-        const lastIndex=routePoints.length-1;
-        if(vt>=routePoints[lastIndex][2]){return routePoints[lastIndex]}
-        let lo=0,hi=lastIndex;
-        while(hi-lo>1){
-          const mid=(lo+hi)>>1;
-          if(routePoints[mid][2]<=vt){lo=mid}else{hi=mid}
-        }
-        const a=routePoints[lo],b=routePoints[hi];
-        const span=b[2]-a[2];
-        const t=span>0?(vt-a[2])/span:0;
-        return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,vt];
-      }
-      function ensurePlaybackMarker(){
-        if(!playbackMarker){
-          playbackMarker=L.circleMarker(routePoints[0],{radius:8,color:'#fff',weight:3,fillColor:'#E8853A',fillOpacity:1}).addTo(map);
-        }
-      }
-      function renderPlaybackAt(vt,notifyRN){
-        const point=pointAtVirtualTime(vt);
-        if(!point){return}
-        ensurePlaybackMarker();
-        playbackMarker.setLatLng(point);
-        if(notifyRN){
-          const first=routePoints[0][2],last=routePoints[routePoints.length-1][2];
-          const ratio=last>first?(vt-first)/(last-first):0;
-          window.ReactNativeWebView.postMessage(JSON.stringify({type:'playback-progress',ratio:Math.max(0,Math.min(1,ratio)),timestamp:vt}));
-        }
-      }
-      function stopPlaybackLoop(){
-        if(playbackTimer){cancelAnimationFrame(playbackTimer);playbackTimer=null}
-      }
-      window.startPlayback=(speed)=>{
-        if(!routePoints.length){return}
-        const first=routePoints[0][2],last=routePoints[routePoints.length-1][2];
-        const currentVt=playbackState?playbackState.currentVt:first;
-        playbackState={playing:true,speed:speed||1,anchorRealMs:Date.now(),anchorVt:currentVt,currentVt};
-        stopPlaybackLoop();
-        const step=()=>{
-          if(!playbackState||!playbackState.playing){return}
-          const elapsedReal=Date.now()-playbackState.anchorRealMs;
-          const vt=Math.min(playbackState.anchorVt+elapsedReal*playbackState.speed,last);
-          playbackState.currentVt=vt;
-          const now=Date.now();
-          const shouldNotify=now-lastProgressPostedAt>=120;
-          if(shouldNotify){lastProgressPostedAt=now}
-          renderPlaybackAt(vt,shouldNotify);
-          if(vt>=last){
-            playbackState.playing=false;
-            window.ReactNativeWebView.postMessage(JSON.stringify({type:'playback-ended'}));
-            return;
-          }
-          playbackTimer=requestAnimationFrame(step);
-        };
-        playbackTimer=requestAnimationFrame(step);
-      };
-      window.pausePlayback=()=>{
-        if(playbackState&&playbackState.playing){
-          const elapsedReal=Date.now()-playbackState.anchorRealMs;
-          playbackState.currentVt=playbackState.anchorVt+elapsedReal*playbackState.speed;
-          playbackState.playing=false;
-        }
-        stopPlaybackLoop();
-      };
-      window.seekPlayback=(ratio)=>{
-        if(!routePoints.length){return}
-        const first=routePoints[0][2],last=routePoints[routePoints.length-1][2];
-        const vt=first+(last-first)*Math.max(0,Math.min(1,ratio));
-        playbackState={playing:false,speed:(playbackState&&playbackState.speed)||1,anchorRealMs:Date.now(),anchorVt:vt,currentVt:vt};
-        stopPlaybackLoop();
-        renderPlaybackAt(vt,true);
-      };
-      window.stopPlayback=()=>{
-        stopPlaybackLoop();
-        playbackState=null;
-        if(playbackMarker){map.removeLayer(playbackMarker);playbackMarker=null}
-      };
-
-        window.ReactNativeWebView.postMessage('map-ready');
-      }
-      loadLeaflet(0);
-    </script>
-  </body>
-</html>`;
+// Linearly interpolate the position along the route at a virtual time (ms),
+// mirroring the old in-WebView pointAtVirtualTime so playback keeps the same
+// GPS-timestamp-driven variable speed.
+function positionAtVirtualTime(pts: RoutePoint[], vt: number): [number, number] {
+  if (!pts.length) {
+    return [0, 0];
+  }
+  if (vt <= pts[0].t) {
+    return [pts[0].lon, pts[0].lat];
+  }
+  const last = pts.length - 1;
+  if (vt >= pts[last].t) {
+    return [pts[last].lon, pts[last].lat];
+  }
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].t <= vt) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  const a = pts[lo];
+  const b = pts[hi];
+  const span = b.t - a.t;
+  const ratio = span > 0 ? (vt - a.t) / span : 0;
+  return [a.lon + (b.lon - a.lon) * ratio, a.lat + (b.lat - a.lat) * ratio];
 }
 
-const MAP_SOURCE = { html: createMapHtml() };
-// While a recording is active, new points can arrive every few seconds.
-// Pushing the full route across the WebView bridge on every single arrival
-// (re-serializing potentially thousands of points each time) is what made
-// the map feel slow or briefly lock up, so trailing updates are coalesced
-// into at most one bridge call per interval.
-const ROUTE_UPDATE_THROTTLE_MS = 2_000;
+// Index i such that pts[i].t <= vt <= pts[i+1].t (the leg starting at vt).
+function legIndexForVirtualTime(pts: RoutePoint[], vt: number): number {
+  const last = pts.length - 1;
+  if (vt <= pts[0].t) {
+    return 0;
+  }
+  if (vt >= pts[last].t) {
+    return last;
+  }
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].t <= vt) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+function pointGeometry(coordinates: [number, number]): GeoJSON.Point {
+  return { type: "Point", coordinates };
+}
 
 function RouteMapComponent(
   { points = EMPTY_POINTS, onFallback, onPlaybackEnded, onPlaybackProgress }: RouteMapProps,
   ref: ForwardedRef<RouteMapHandle>,
 ) {
-  const webViewRef = useRef<WebView>(null);
-  const mapReadyRef = useRef(false);
-  const webViewStartedRef = useRef(false);
-  const [mapFailed, setMapFailed] = useState(false);
-  // Separate from mapFailed: becomes true only once the WebView has
-  // actually loaded Leaflet and confirmed via the "map-ready" postMessage
-  // that window.startPlayback/etc. exist. Playback controls must stay
-  // hidden until this flips - otherwise tapping play while the page is
-  // still loading calls a function that doesn't exist yet in the WebView's
-  // JS context and silently does nothing.
+  const cameraRef = useRef<CameraRef>(null);
+  const hasFitRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
-  const lastPushedAtRef = useRef(0);
-  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const updateRoute = useCallback(
-    (fitRoute: boolean) => {
-      if (pendingTimerRef.current) {
-        clearTimeout(pendingTimerRef.current);
-        pendingTimerRef.current = null;
-      }
-      const push = () => {
-        lastPushedAtRef.current = Date.now();
-        webViewRef.current?.injectJavaScript(
-          createRouteScript(points, fitRoute),
-        );
-      };
-      if (fitRoute) {
-        // Explicit fit requests (map just became ready, or the user changed
-        // the selected day) should always apply immediately.
-        push();
-        return;
-      }
-      const elapsed = Date.now() - lastPushedAtRef.current;
-      if (elapsed >= ROUTE_UPDATE_THROTTLE_MS) {
-        push();
-      } else {
-        pendingTimerRef.current = setTimeout(push, ROUTE_UPDATE_THROTTLE_MS - elapsed);
-      }
-    },
+  const [playbackVisible, setPlaybackVisible] = useState(false);
+  // The playback marker is kept in state (not just a ref) because it is passed
+  // as the `data` prop of the animated source, i.e. it is needed for rendering.
+  const [playbackPoint, setPlaybackPoint] = useState<InstanceType<
+    typeof MapLibreAnimated.Point
+  > | null>(null);
+
+  // Route data as memoized GeoJSON. Native GeoJSONSource diffs updates
+  // efficiently, so unlike the old WebView (which re-serialized the whole
+  // route across the bridge on every live point) no throttle is needed here.
+  const routeLine = useMemo<GeoJSON.Feature<GeoJSON.LineString>>(
+    () => ({
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "LineString",
+        coordinates: points.map((point) => [point.longitude, point.latitude]),
+      },
+    }),
     [points],
   );
 
-  useEffect(
-    () => () => {
-      if (pendingTimerRef.current) {
-        clearTimeout(pendingTimerRef.current);
+  const endpoints = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(() => {
+    if (!points.length) {
+      return { type: "FeatureCollection", features: [] };
+    }
+    const first = points[0];
+    const last = points[points.length - 1];
+    return {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { role: "start" },
+          geometry: { type: "Point", coordinates: [first.longitude, first.latitude] },
+        },
+        {
+          type: "Feature",
+          properties: { role: "end" },
+          geometry: { type: "Point", coordinates: [last.longitude, last.latitude] },
+        },
+      ],
+    };
+  }, [points]);
+
+  // Playback state kept in refs so the animation callbacks never read stale
+  // values. The marker itself is an AnimatedPoint animated natively; the refs
+  // only drive leg chaining, the progress ticker, and pause/seek bookkeeping.
+  const routePointsRef = useRef<RoutePoint[]>([]);
+  const playbackPointRef = useRef<InstanceType<typeof MapLibreAnimated.Point> | null>(
+    null,
+  );
+  const currentAnimRef = useRef<RNAnimated.CompositeAnimation | null>(null);
+  const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const playingRef = useRef(false);
+  const speedRef = useRef(1);
+  const currentVtRef = useRef(0);
+  const anchorVtRef = useRef(0);
+  const anchorRealMsRef = useRef(0);
+
+  useEffect(() => {
+    const pts = toRoutePoints(points);
+    routePointsRef.current = pts;
+    // Create the marker (and seed the virtual clock) once, when the route first
+    // has points. Live appends within the same day must not reset an in-flight
+    // playback; a day change remounts this component (key={selectedDate}).
+    if (pts.length && !playbackPointRef.current) {
+      currentVtRef.current = pts[0].t;
+      const created = new MapLibreAnimated.Point(
+        pointGeometry([pts[0].lon, pts[0].lat]),
+      );
+      playbackPointRef.current = created;
+      setPlaybackPoint(created);
+    }
+  }, [points]);
+
+  const clearTicker = useCallback(() => {
+    if (tickerRef.current) {
+      clearInterval(tickerRef.current);
+      tickerRef.current = null;
+    }
+  }, []);
+
+  const ensurePlaybackPoint = useCallback(() => {
+    const pts = routePointsRef.current;
+    if (!playbackPointRef.current && pts.length) {
+      const created = new MapLibreAnimated.Point(
+        pointGeometry([pts[0].lon, pts[0].lat]),
+      );
+      playbackPointRef.current = created;
+      setPlaybackPoint(created);
+    }
+    return playbackPointRef.current;
+  }, []);
+
+  const stopAnim = useCallback(() => {
+    currentAnimRef.current?.stop();
+    currentAnimRef.current = null;
+  }, []);
+
+  const finishPlayback = useCallback(() => {
+    const pts = routePointsRef.current;
+    playingRef.current = false;
+    clearTicker();
+    stopAnim();
+    if (pts.length) {
+      currentVtRef.current = pts[pts.length - 1].t;
+      onPlaybackProgress?.(1, currentVtRef.current);
+    }
+    onPlaybackEnded?.();
+  }, [clearTicker, onPlaybackEnded, onPlaybackProgress, stopAnim]);
+
+  // Animate the marker one GPS leg at a time; each leg's duration is its real
+  // GPS time span divided by speed, so the dot moves at the true recorded pace
+  // - the animation runs natively for smoothness. The chain recurses through a
+  // ref so the callback can reference the next iteration without a self-cycle.
+  const animateLegChainRef = useRef<(fromVt: number, speed: number) => void>(
+    () => undefined,
+  );
+  const animateLegChain = useCallback(
+    (fromVt: number, speed: number) => {
+      const pts = routePointsRef.current;
+      const point = playbackPointRef.current;
+      if (!point || pts.length < 2) {
+        finishPlayback();
+        return;
       }
+      const legIndex = legIndexForVirtualTime(pts, fromVt);
+      if (legIndex >= pts.length - 1) {
+        finishPlayback();
+        return;
+      }
+      const target = pts[legIndex + 1];
+      const duration = Math.max(1, (target.t - fromVt) / speed);
+      const anim = point.timing({
+        toValue: pointGeometry([target.lon, target.lat]),
+        duration,
+        easing: Easing.linear,
+      });
+      currentAnimRef.current = anim;
+      anim.start(({ finished }) => {
+        if (!finished || !playingRef.current) {
+          return;
+        }
+        if (legIndex + 1 >= pts.length - 1) {
+          finishPlayback();
+          return;
+        }
+        animateLegChainRef.current(target.t, speed);
+      });
     },
-    [],
+    [finishPlayback],
+  );
+  useEffect(() => {
+    animateLegChainRef.current = animateLegChain;
+  }, [animateLegChain]);
+
+  const startProgressTicker = useCallback(() => {
+    clearTicker();
+    tickerRef.current = setInterval(() => {
+      if (!playingRef.current) {
+        return;
+      }
+      const pts = routePointsRef.current;
+      if (!pts.length) {
+        return;
+      }
+      const t0 = pts[0].t;
+      const tN = pts[pts.length - 1].t;
+      const vt = Math.min(
+        tN,
+        anchorVtRef.current + (Date.now() - anchorRealMsRef.current) * speedRef.current,
+      );
+      const ratio = tN > t0 ? (vt - t0) / (tN - t0) : 0;
+      onPlaybackProgress?.(clamp01(ratio), vt);
+    }, PROGRESS_PING_MS);
+  }, [clearTicker, onPlaybackProgress]);
+
+  const startPlayback = useCallback(
+    (speed: number) => {
+      const pts = routePointsRef.current;
+      if (pts.length < 2) {
+        return;
+      }
+      const t0 = pts[0].t;
+      const tN = pts[pts.length - 1].t;
+      // If already playing, settle the current virtual time before re-anchoring
+      // (this path also handles a live speed change).
+      if (playingRef.current) {
+        currentVtRef.current = Math.min(
+          tN,
+          anchorVtRef.current + (Date.now() - anchorRealMsRef.current) * speedRef.current,
+        );
+      }
+      if (currentVtRef.current >= tN) {
+        currentVtRef.current = t0;
+      }
+      const point = ensurePlaybackPoint();
+      if (!point) {
+        return;
+      }
+      setPlaybackVisible(true);
+      playingRef.current = true;
+      speedRef.current = speed;
+      anchorVtRef.current = currentVtRef.current;
+      anchorRealMsRef.current = Date.now();
+      stopAnim();
+      point.setValue(pointGeometry(positionAtVirtualTime(pts, currentVtRef.current)));
+      animateLegChain(currentVtRef.current, speed);
+      startProgressTicker();
+    },
+    [animateLegChain, ensurePlaybackPoint, startProgressTicker, stopAnim],
   );
 
-  useEffect(() => {
-    if (mapReadyRef.current) {
-      updateRoute(false);
-    }
-  }, [updateRoute]);
-
-  useEffect(() => {
-    if (Platform.OS === "web" || !points.length) {
-      webViewStartedRef.current = false;
+  const pausePlayback = useCallback(() => {
+    const pts = routePointsRef.current;
+    if (!playingRef.current || !pts.length) {
       return;
     }
-    if (webViewStartedRef.current) {
-      return;
-    }
-    webViewStartedRef.current = true;
-    mapReadyRef.current = false;
-    setMapFailed(false);
-    setMapReady(false);
-    // Generous because a cold load may be fetching Leaflet over a slow
-    // domestic connection; explicit failures (map-load-failed, renderer
-    // death) bail out long before this fires.
-    const timer = setTimeout(() => {
-      if (!mapReadyRef.current) {
-        setMapFailed(true);
-        recordClientLog("warn", "Mobility route map failed to become ready in time", {
-          source: "mobility-map",
-        });
-      }
-    }, 10000);
-    return () => clearTimeout(timer);
-  }, [points.length]);
-
-  useEffect(() => {
-    onFallback?.(
-      Platform.OS === "web" || mapFailed || !points.length || !mapReady,
+    const t0 = pts[0].t;
+    const tN = pts[pts.length - 1].t;
+    currentVtRef.current = Math.max(
+      t0,
+      Math.min(
+        tN,
+        anchorVtRef.current + (Date.now() - anchorRealMsRef.current) * speedRef.current,
+      ),
     );
-  }, [mapFailed, mapReady, onFallback, points.length]);
+    playingRef.current = false;
+    stopAnim();
+    clearTicker();
+  }, [clearTicker, stopAnim]);
+
+  const seekPlayback = useCallback(
+    (ratio: number) => {
+      const pts = routePointsRef.current;
+      if (!pts.length) {
+        return;
+      }
+      const t0 = pts[0].t;
+      const tN = pts[pts.length - 1].t;
+      const vt = t0 + (tN - t0) * clamp01(ratio);
+      playingRef.current = false;
+      stopAnim();
+      clearTicker();
+      currentVtRef.current = vt;
+      const point = ensurePlaybackPoint();
+      if (point) {
+        setPlaybackVisible(true);
+        point.setValue(pointGeometry(positionAtVirtualTime(pts, vt)));
+      }
+      onPlaybackProgress?.(clamp01(ratio), vt);
+    },
+    [clearTicker, ensurePlaybackPoint, onPlaybackProgress, stopAnim],
+  );
+
+  const stopPlayback = useCallback(() => {
+    const pts = routePointsRef.current;
+    playingRef.current = false;
+    stopAnim();
+    clearTicker();
+    currentVtRef.current = pts.length ? pts[0].t : 0;
+    setPlaybackVisible(false);
+  }, [clearTicker, stopAnim]);
 
   useImperativeHandle(
     ref,
     () => ({
-      play: (speed) =>
-        webViewRef.current?.injectJavaScript(`window.startPlayback(${speed});true;`),
-      pause: () => webViewRef.current?.injectJavaScript("window.pausePlayback();true;"),
-      seek: (ratio) =>
-        webViewRef.current?.injectJavaScript(`window.seekPlayback(${ratio});true;`),
-      stop: () => webViewRef.current?.injectJavaScript("window.stopPlayback();true;"),
+      play: startPlayback,
+      pause: pausePlayback,
+      seek: seekPlayback,
+      stop: stopPlayback,
     }),
+    [pausePlayback, seekPlayback, startPlayback, stopPlayback],
+  );
+
+  // Tear down timers/animations if the component unmounts mid-playback.
+  useEffect(
+    () => () => {
+      if (tickerRef.current) {
+        clearInterval(tickerRef.current);
+      }
+      currentAnimRef.current?.stop();
+    },
     [],
   );
+
+  const fitToRoute = useCallback(() => {
+    const camera = cameraRef.current;
+    if (!camera || !points.length) {
+      return;
+    }
+    const lons = points.map((point) => point.longitude);
+    const lats = points.map((point) => point.latitude);
+    let west = Math.min(...lons);
+    let east = Math.max(...lons);
+    let south = Math.min(...lats);
+    let north = Math.max(...lats);
+    // Pad a zero-area (single point) box so fitBounds doesn't zoom to infinity.
+    if (points.length === 1) {
+      west -= 0.003;
+      east += 0.003;
+      south -= 0.003;
+      north += 0.003;
+    }
+    camera.fitBounds([west, south, east, north], {
+      padding: { top: 36, right: 36, bottom: 36, left: 36 },
+      duration: 300,
+    });
+  }, [points]);
+
+  // Fit once per mount when the map is ready and points are present. Live
+  // appends within the same day must not keep re-centering (MobilityScreen
+  // remounts this via key={selectedDate} when the day changes).
+  useEffect(() => {
+    if (mapReady && points.length && !hasFitRef.current) {
+      hasFitRef.current = true;
+      fitToRoute();
+    }
+  }, [mapReady, points.length, fitToRoute]);
+
+  // Native map is available whenever there are points; only web falls back to
+  // the SVG preview. (The old WebView-specific failure paths are gone.)
+  useEffect(() => {
+    onFallback?.(Platform.OS === "web" || !points.length);
+  }, [onFallback, points.length]);
 
   if (!points.length) {
     return (
@@ -357,84 +477,66 @@ function RouteMapComponent(
     );
   }
 
-  if (Platform.OS === "web" || mapFailed) {
+  if (Platform.OS === "web") {
     return <RoutePreview points={points} />;
   }
 
   return (
-    <WebView
-      ref={webViewRef}
-      javaScriptEnabled
-      nestedScrollEnabled
-      onMessage={({ nativeEvent }) => {
-        if (nativeEvent.data === "map-ready") {
-          mapReadyRef.current = true;
-          setMapFailed(false);
-          setMapReady(true);
-          updateRoute(true);
-          return;
-        }
-        if (nativeEvent.data === "map-load-failed") {
-          // Every Leaflet source failed - swap to the SVG preview now
-          // instead of letting the readiness timeout run out.
-          setMapFailed(true);
-          recordClientLog("warn", "Mobility route map assets failed to load", {
-            source: "mobility-map",
-          });
-          return;
-        }
-        try {
-          const payload = JSON.parse(nativeEvent.data) as {
-            type?: string;
-            ratio?: number;
-            timestamp?: number;
-          };
-          if (
-            payload.type === "playback-progress" &&
-            typeof payload.ratio === "number"
-          ) {
-            onPlaybackProgress?.(payload.ratio, payload.timestamp ?? 0);
-          } else if (payload.type === "playback-ended") {
-            onPlaybackEnded?.();
-          }
-        } catch {
-          // Ignore malformed bridge messages.
-        }
-      }}
-      onError={(event) => {
-        setMapFailed(true);
-        recordClientLog("warn", "Mobility route map WebView error", {
-          source: "mobility-map",
-          context: { description: event.nativeEvent.description },
-        });
-      }}
-      onRenderProcessGone={() => {
-        // Android reclaims WebView renderer processes under memory
-        // pressure (commonly while the app sits in the background). The
-        // page's JS context is gone with it: the map shows blank and every
-        // playback function stops existing. Reload rebuilds the page; the
-        // map-ready handshake then re-pushes the route.
-        mapReadyRef.current = false;
-        setMapReady(false);
-        recordClientLog("warn", "Mobility route map renderer was reclaimed; reloading", {
-          source: "mobility-map",
-        });
-        webViewRef.current?.reload();
-      }}
-      onHttpError={(event) => {
-        setMapFailed(true);
-        recordClientLog("warn", "Mobility route map WebView HTTP error", {
-          source: "mobility-map",
-          context: { statusCode: event.nativeEvent.statusCode },
-        });
-      }}
-      originWhitelist={["*"]}
-      overScrollMode="never"
-      scrollEnabled={false}
-      setSupportMultipleWindows={false}
-      source={MAP_SOURCE}
-      style={styles.webview}
-    />
+    <Map
+      mapStyle={MAP_STYLE_URL}
+      onDidFinishLoadingMap={() => setMapReady(true)}
+      style={styles.map}>
+      <Camera ref={cameraRef} />
+
+      <GeoJSONSource id="route-source" data={routeLine}>
+        <Layer
+          id="route-line"
+          type="line"
+          layout={{ "line-cap": "round", "line-join": "round" }}
+          paint={{ "line-color": ROUTE_COLOR, "line-width": 5, "line-opacity": 0.92 }}
+        />
+      </GeoJSONSource>
+
+      <GeoJSONSource id="endpoints-source" data={endpoints}>
+        <Layer
+          id="route-start"
+          type="circle"
+          filter={["==", ["get", "role"], "start"]}
+          paint={{
+            "circle-radius": 7,
+            "circle-color": ROUTE_COLOR,
+            "circle-stroke-width": 3,
+            "circle-stroke-color": "#ffffff",
+          }}
+        />
+        <Layer
+          id="route-end"
+          type="circle"
+          filter={["==", ["get", "role"], "end"]}
+          paint={{
+            "circle-radius": 7,
+            "circle-color": "#ffffff",
+            "circle-stroke-width": 3,
+            "circle-stroke-color": ROUTE_COLOR,
+          }}
+        />
+      </GeoJSONSource>
+
+      {playbackVisible && playbackPoint ? (
+        <MapLibreAnimated.GeoJSONSource id="playback-source" data={playbackPoint}>
+          <Layer
+            id="playback-dot"
+            type="circle"
+            paint={{
+              "circle-radius": 8,
+              "circle-color": PLAYBACK_COLOR,
+              "circle-stroke-width": 3,
+              "circle-stroke-color": "#ffffff",
+            }}
+          />
+        </MapLibreAnimated.GeoJSONSource>
+      ) : null}
+    </Map>
   );
 }
 
@@ -496,7 +598,7 @@ function RoutePreview({ points }: RouteMapProps) {
 export const RouteMap = memo(forwardRef(RouteMapComponent));
 
 const styles = StyleSheet.create({
-  webview: {
+  map: {
     backgroundColor: colors.background,
     flex: 1,
   },

@@ -67,6 +67,7 @@
       ],
       "./plugins/with-native-mobility-service",
       "./plugins/with-health-connect",
+      "@maplibre/maplibre-react-native",
       [
         "expo-image-picker",
         {
