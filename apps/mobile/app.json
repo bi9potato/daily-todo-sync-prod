@@ -57,12 +57,18 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "允许 Daily Todo 在你主动开启足迹记录后持续记录行走路线。",
+          "locationAlwaysAndWhenInUsePermission": "允许 Daily Todo 在你主动开启足迹记录后持续记录行走路线，并在你设置“到达地点提醒”时检测是否到达。",
           "locationWhenInUsePermission": "允许 Daily Todo 获取当前位置并为任务记录地点。",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true,
           "androidForegroundServiceIcon": "./assets/images/location-foreground-service-icon.png"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#2C5745"
         }
       ],
       "./plugins/with-native-mobility-service",

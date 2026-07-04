@@ -44,6 +44,8 @@ export type TaskLocation = {
   latitude: number;
   longitude: number;
   recordedAt: string;
+  reminderEnabled: boolean;
+  radiusMeters: number;
 };
 
 export type TodoOccurrence = {

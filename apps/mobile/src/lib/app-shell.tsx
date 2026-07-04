@@ -16,6 +16,7 @@ import { routeForSection, type AppSection } from "@/lib/app-routes";
 import { toDateKey } from "@/lib/date";
 import { useDeviceTimelineRuntime } from "@/lib/useDeviceTimelineRuntime";
 import { useMobilityRuntime } from "@/lib/useMobilityRuntime";
+import { useReminders } from "@/lib/useReminders";
 import type { CalendarViewMode } from "@/screens/CalendarScreen";
 
 type AppShellContextValue = {
@@ -47,6 +48,7 @@ export function AppShellProvider({ children }: PropsWithChildren) {
   const [calendarView, setCalendarView] = useState<CalendarViewMode>("week");
   const mobilityRuntime = useMobilityRuntime(today);
   const deviceTimeline = useDeviceTimelineRuntime();
+  useReminders(today);
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe });
   const displayName =
     meQuery.data?.displayName || meQuery.data?.username || "Daily Todo";

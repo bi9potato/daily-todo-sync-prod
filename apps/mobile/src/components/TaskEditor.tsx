@@ -8,6 +8,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -20,6 +21,12 @@ import { AppIcon } from "./AppIcon";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { ScreenEnter } from "./ScreenEnter";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
+import {
+  hasLocationReminderPermission,
+  requestLocationReminderPermission,
+} from "@/lib/location-reminders";
+import { ensureNotificationPermission } from "@/lib/notifications";
+import { reverseGeocode } from "@/lib/reverse-geocode";
 import { colors, radius, spacing, typography } from "@/theme";
 import type {
   LocalAttachmentFile,
@@ -45,6 +52,11 @@ const repeatUnitOptions: { value: Exclude<RepeatKind, "none" | "weekdays">; labe
   { value: "monthly", label: "月" },
   { value: "yearly", label: "年" },
 ];
+
+// Mirrors the ballpark radius choices Apple/Google Reminders offer: tighter
+// than ~100m risks never firing (consumer GPS error alone is often 10-50m,
+// worse indoors), wider than ~500m stops reading as "arrival".
+const LOCATION_REMINDER_RADIUS_OPTIONS = [100, 150, 300, 500] as const;
 
 function reminderTimeAsDate(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
@@ -234,7 +246,39 @@ export function TaskEditor({
   );
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState("");
+  const [isRequestingLocationReminder, setIsRequestingLocationReminder] =
+    useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [reminderPermissionWarning, setReminderPermissionWarning] = useState("");
+
+  async function toggleLocationReminder() {
+    if (!taskLocation) {
+      return;
+    }
+    if (taskLocation.reminderEnabled) {
+      setTaskLocation({ ...taskLocation, reminderEnabled: false });
+      return;
+    }
+    setIsRequestingLocationReminder(true);
+    setLocationError("");
+    try {
+      if (Platform.OS !== "android") {
+        throw new Error("到达地点提醒目前仅支持 Android。");
+      }
+      if (!(await hasLocationReminderPermission())) {
+        if (!(await requestLocationReminderPermission())) {
+          throw new Error("需要选择“始终允许”位置权限才能在到达时提醒。");
+        }
+      }
+      setTaskLocation({ ...taskLocation, reminderEnabled: true });
+    } catch (error) {
+      setLocationError(
+        error instanceof Error ? error.message : "开启到达提醒失败",
+      );
+    } finally {
+      setIsRequestingLocationReminder(false);
+    }
+  }
 
   async function useCurrentLocation() {
     setIsLocating(true);
@@ -257,16 +301,16 @@ export function TaskEditor({
         8000,
         "定位暂时不可用，请稍后重试。",
       );
-      let name = "";
-      try {
-        const [address] = await Location.reverseGeocodeAsync(current.coords);
-        name =
-          address?.name ||
-          address?.formattedAddress ||
-          [address?.district, address?.city].filter(Boolean).join(" · ");
-      } catch {
-        // Coordinates remain usable when reverse geocoding is unavailable.
-      }
+      // The platform Geocoder resolves through whatever backend the OEM
+      // wired in - on Chinese ROMs that is typically a GCJ-02-offset vendor
+      // service, which mismatches the raw WGS84 GPS coordinate above and
+      // silently resolves the wrong building/street (see the identical fix
+      // and full rationale in reverse-geocode.ts, originally applied to
+      // mobility visit points).
+      const name = await reverseGeocode(
+        current.coords.latitude,
+        current.coords.longitude,
+      ).catch(() => null);
       setTaskLocation({
         name:
           name ||
@@ -274,6 +318,8 @@ export function TaskEditor({
         latitude: current.coords.latitude,
         longitude: current.coords.longitude,
         recordedAt: new Date(current.timestamp).toISOString(),
+        reminderEnabled: taskLocation?.reminderEnabled ?? false,
+        radiusMeters: taskLocation?.radiusMeters ?? 150,
       });
     } catch (error) {
       setLocationError(
@@ -467,10 +513,21 @@ export function TaskEditor({
                   setTimePickerOpen(false);
                   if (event.type === "set" && date) {
                     setReminderTime(dayjs(date).format("HH:mm"));
+                    setReminderPermissionWarning("");
+                    void ensureNotificationPermission().then((granted) => {
+                      if (!granted) {
+                        setReminderPermissionWarning(
+                          "需要开启通知权限，提醒才能弹出。",
+                        );
+                      }
+                    });
                   }
                 }}
                 value={reminderTimeAsDate(reminderTime)}
               />
+            ) : null}
+            {reminderPermissionWarning ? (
+              <Text style={styles.reminderWarning}>{reminderPermissionWarning}</Text>
             ) : null}
             <View style={styles.locationBlock}>
               <View style={[styles.detailRow, styles.locationRow]}>
@@ -517,6 +574,62 @@ export function TaskEditor({
                   </Pressable>
                 ) : null}
               </View>
+              {taskLocation ? (
+                <View style={styles.locationReminderRow}>
+                  <View style={styles.locationReminderToggle}>
+                    <AppIcon
+                      name="navigate-circle-outline"
+                      color={colors.textMuted}
+                      size={18}
+                    />
+                    <Text style={styles.locationReminderLabel}>到达时提醒</Text>
+                    {isRequestingLocationReminder ? (
+                      <ActivityIndicator color={colors.accent} size="small" />
+                    ) : (
+                      <Switch
+                        accessibilityLabel="到达时提醒"
+                        onValueChange={toggleLocationReminder}
+                        trackColor={{
+                          false: colors.borderStrong,
+                          true: colors.accent,
+                        }}
+                        thumbColor={colors.white}
+                        value={taskLocation.reminderEnabled}
+                      />
+                    )}
+                  </View>
+                  {taskLocation.reminderEnabled ? (
+                    <View style={styles.radiusOptions}>
+                      {LOCATION_REMINDER_RADIUS_OPTIONS.map((radius) => {
+                        const selected = taskLocation.radiusMeters === radius;
+                        return (
+                          <Pressable
+                            accessibilityLabel={`提醒范围 ${radius} 米`}
+                            accessibilityRole="button"
+                            key={radius}
+                            onPress={() =>
+                              setTaskLocation((current) =>
+                                current ? { ...current, radiusMeters: radius } : current,
+                              )
+                            }
+                            style={[
+                              styles.radiusChip,
+                              selected && styles.radiusChipSelected,
+                            ]}>
+                            <Text
+                              style={[
+                                styles.radiusChipText,
+                                selected && styles.radiusChipTextSelected,
+                              ]}>
+                              {radius}m
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
               {locationError ? (
                 <Text style={styles.locationError}>{locationError}</Text>
               ) : null}
@@ -779,6 +892,12 @@ const styles = StyleSheet.create({
   reminderPlaceholder: {
     color: colors.textMuted,
   },
+  reminderWarning: {
+    ...typography.caption,
+    color: colors.danger,
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
   locationBlock: {
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -818,6 +937,42 @@ const styles = StyleSheet.create({
     color: colors.danger,
     paddingBottom: spacing.sm,
     paddingHorizontal: spacing.md,
+  },
+  locationReminderRow: {
+    gap: spacing.sm,
+    paddingBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  locationReminderToggle: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  locationReminderLabel: {
+    ...typography.body,
+    color: colors.text,
+    flex: 1,
+  },
+  radiusOptions: {
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  radiusChip: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+  },
+  radiusChipSelected: {
+    backgroundColor: colors.accent,
+  },
+  radiusChipText: {
+    ...typography.label,
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  radiusChipTextSelected: {
+    color: colors.white,
   },
   noteRow: {
     alignItems: "flex-start",

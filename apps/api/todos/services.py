@@ -1,4 +1,4 @@
-from datetime import date, timedelta, time
+from datetime import date, time, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -703,17 +703,23 @@ def update_occurrence(
             occurrence.location_latitude = None
             occurrence.location_longitude = None
             occurrence.location_recorded_at = None
+            occurrence.location_reminder_enabled = False
+            occurrence.location_radius_meters = 150
         else:
             occurrence.location_name = location["name"]
             occurrence.location_latitude = location["latitude"]
             occurrence.location_longitude = location["longitude"]
             occurrence.location_recorded_at = location["recorded_at"]
+            occurrence.location_reminder_enabled = location["reminder_enabled"]
+            occurrence.location_radius_meters = location["radius_meters"]
         occurrence_changed_fields.extend(
             [
                 "location_name",
                 "location_latitude",
                 "location_longitude",
                 "location_recorded_at",
+                "location_reminder_enabled",
+                "location_radius_meters",
             ]
         )
 

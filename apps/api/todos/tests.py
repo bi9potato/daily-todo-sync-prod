@@ -665,6 +665,85 @@ class TodoApiTests(TestCase):
         self.assertEqual(cleared.status_code, 200)
         self.assertIsNone(cleared.json()["location"])
 
+    def test_patch_occurrence_can_set_location_arrival_reminder(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Buy milk")
+
+        response = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps(
+                {
+                    "location": {
+                        "name": "超市",
+                        "latitude": 39.99123,
+                        "longitude": 116.30234,
+                        "reminderEnabled": True,
+                        "radiusMeters": 300,
+                    }
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()["location"]
+        self.assertTrue(body["reminderEnabled"])
+        self.assertEqual(body["radiusMeters"], 300)
+        occurrence.refresh_from_db()
+        self.assertTrue(occurrence.location_reminder_enabled)
+        self.assertEqual(occurrence.location_radius_meters, 300)
+
+    def test_location_radius_is_clamped_to_a_sane_range(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Buy milk")
+
+        response = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps(
+                {
+                    "location": {
+                        "name": "超市",
+                        "latitude": 39.99123,
+                        "longitude": 116.30234,
+                        "reminderEnabled": True,
+                        "radiusMeters": 5,
+                    }
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.json()["location"]["radiusMeters"], 50)
+
+    def test_clearing_location_also_clears_arrival_reminder(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Buy milk")
+        self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps(
+                {
+                    "location": {
+                        "name": "超市",
+                        "latitude": 39.99123,
+                        "longitude": 116.30234,
+                        "reminderEnabled": True,
+                    }
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        response = self.client.patch(
+            f"/api/occurrences/{occurrence.id}",
+            data=json.dumps({"location": None}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        occurrence.refresh_from_db()
+        self.assertFalse(occurrence.location_reminder_enabled)
+
     def test_create_long_term_task_returns_future_content(self):
         response = self.client.post(
             "/api/days/2026-06-20/tasks",

@@ -52,6 +52,8 @@ class TaskLocationOut(Schema):
     latitude: float
     longitude: float
     recordedAt: str
+    reminderEnabled: bool
+    radiusMeters: int
 
 
 class TodoOccurrenceOut(Schema):
@@ -110,6 +112,8 @@ class TaskLocationIn(Schema):
     latitude: float
     longitude: float
     recordedAt: datetime | None = None
+    reminderEnabled: bool = False
+    radiusMeters: int = 150
 
 
 class TaskCreateIn(Schema):
@@ -189,6 +193,11 @@ def location_payload(location: TaskLocationIn | None) -> dict | None:
         "latitude": location.latitude,
         "longitude": location.longitude,
         "recorded_at": location.recordedAt or timezone.now(),
+        "reminder_enabled": location.reminderEnabled,
+        # Clamped to a sane range: tighter than ~50m is smaller than typical
+        # consumer GPS error (the geofence would rarely fire), and wider than
+        # 2km stops being a useful "arrival" signal.
+        "radius_meters": max(50, min(location.radiusMeters or 150, 2000)),
     }
 
 
@@ -269,6 +278,8 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
                 "latitude": float(occurrence.location_latitude),
                 "longitude": float(occurrence.location_longitude),
                 "recordedAt": occurrence.location_recorded_at.isoformat(),
+                "reminderEnabled": occurrence.location_reminder_enabled,
+                "radiusMeters": occurrence.location_radius_meters,
             }
             if (
                 occurrence.location_latitude is not None

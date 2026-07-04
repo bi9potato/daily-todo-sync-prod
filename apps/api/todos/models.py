@@ -120,6 +120,12 @@ class TodoOccurrence(models.Model):
         blank=True,
     )
     location_recorded_at = models.DateTimeField(null=True, blank=True)
+    # "Remind me when I arrive" - a separate opt-in from just tagging where a
+    # task was created. The radius mirrors Apple/Google Reminders' default
+    # geofence sizing (~100-500m; consumer GPS in a building rarely resolves
+    # tighter than that, so a smaller radius would just never fire).
+    location_reminder_enabled = models.BooleanField(default=False)
+    location_radius_meters = models.PositiveIntegerField(default=150)
     carryover_from_occurrence = models.ForeignKey(
         "self",
         null=True,
