@@ -46,6 +46,17 @@ function withDeviceTimelineManifest(config) {
     // Settings > Usage access (see DeviceTimelineModule.openUsageAccessSettings),
     // same as every other on-device screen-time app.
     addUsesPermission(manifestConfig, "android.permission.PACKAGE_USAGE_STATS");
+    // Since Android 14 (API 34) every foreground service type needs its own
+    // matching android.permission.FOREGROUND_SERVICE_<TYPE> permission
+    // declared, in addition to the plain FOREGROUND_SERVICE permission
+    // (already declared via app.json for the mobility service's "location"
+    // type). Missing this makes startForeground() throw
+    // "requires permissions: ... FOREGROUND_SERVICE_DATA_SYNC" at runtime -
+    // exactly the crash this service hit without it.
+    addUsesPermission(
+      manifestConfig,
+      "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+    );
 
     const mainApplication = AndroidConfig.Manifest.getMainApplicationOrThrow(
       manifestConfig.modResults,
