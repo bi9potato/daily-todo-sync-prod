@@ -17,6 +17,7 @@ import type {
   MobilityPointInput,
   MobilityRecording,
   MobilityTimelineExport,
+  PlaceSearchResult,
   RangeTodos,
   TaskAttachment,
   TaskCreatePayload,
@@ -246,6 +247,12 @@ export function login(payload: { identifier: string; password: string }) {
     "/auth/login",
     { method: "POST", body: JSON.stringify(payload) },
     false,
+  );
+}
+
+export function searchPlaces(query: string) {
+  return request<PlaceSearchResult[]>(
+    `/places/search?q=${encodeURIComponent(query.trim())}`,
   );
 }
 

@@ -13,6 +13,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
+import { DeviceTimelineAppIcon } from "@/components/DeviceTimelineAppIcon";
 import { ScreenEnter } from "@/components/ScreenEnter";
 import { getDeviceTimelineDay } from "@/lib/api";
 import type { DeviceTimelineRuntime } from "@/lib/useDeviceTimelineRuntime";
@@ -205,6 +206,9 @@ export function DeviceTimelineScreen({
             />
           )}
         </View>
+        <Text style={styles.localIconDisclosure}>
+          应用图标仅在本机读取和缓存，不会上传服务器
+        </Text>
 
         {runtime.runtime.enabled && !runtime.runtime.hasUsageAccess ? (
           <Pressable
@@ -271,9 +275,7 @@ export function DeviceTimelineScreen({
             <View style={styles.usageList}>
               {appUsage.map((item) => (
                 <View key={item.packageName} style={styles.usageRow}>
-                  <View style={styles.appIcon}>
-                    <AppIcon name="apps-outline" color={colors.accent} size={18} />
-                  </View>
+                  <DeviceTimelineAppIcon packageName={item.packageName} />
                   <View style={styles.usageCopy}>
                     <View style={styles.usageHeading}>
                       <Text numberOfLines={1} style={styles.usageLabel}>
@@ -358,15 +360,18 @@ function TimelineRow({
           <View style={styles.appDot} />
           {!isLast ? <View style={styles.line} /> : null}
         </View>
-        <View style={styles.rowCopy}>
-          <Text style={styles.rowTitle}>{item.appLabel || item.packageName}</Text>
-          <Text style={styles.rowMeta}>
-            {item.startTime ? formatTime(item.startTime) : ""}
-            {item.endTime && item.endTime !== item.startTime
-              ? ` - ${formatTime(item.endTime)}`
-              : ""}
-            {` · ${formatDuration(durationSeconds(item))}`}
-          </Text>
+        <View style={styles.appRowContent}>
+          <DeviceTimelineAppIcon packageName={item.packageName} size={34} />
+          <View style={styles.rowCopy}>
+            <Text style={styles.rowTitle}>{item.appLabel || item.packageName}</Text>
+            <Text style={styles.rowMeta}>
+              {item.startTime ? formatTime(item.startTime) : ""}
+              {item.endTime && item.endTime !== item.startTime
+                ? ` - ${formatTime(item.endTime)}`
+                : ""}
+              {` · ${formatDuration(durationSeconds(item))}`}
+            </Text>
+          </View>
         </View>
       </View>
     );
@@ -428,6 +433,12 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     lineHeight: 18,
+  },
+  localIconDisclosure: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: -spacing.sm,
+    paddingHorizontal: spacing.xs,
   },
   permissionCard: {
     ...shadows.card,
@@ -527,14 +538,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.md,
   },
-  appIcon: {
-    alignItems: "center",
-    backgroundColor: colors.accentSoft,
-    borderRadius: radius.sm,
-    height: 36,
-    justifyContent: "center",
-    width: 36,
-  },
   usageCopy: {
     flex: 1,
     gap: 5,
@@ -610,6 +613,12 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingBottom: spacing.md,
     paddingLeft: spacing.sm,
+  },
+  appRowContent: {
+    alignItems: "flex-start",
+    flex: 1,
+    flexDirection: "row",
+    minWidth: 0,
   },
   rowTitle: {
     ...typography.body,

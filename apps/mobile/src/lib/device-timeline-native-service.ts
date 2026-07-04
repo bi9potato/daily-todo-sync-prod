@@ -13,11 +13,13 @@ type NativeDeviceTimelineModule = {
   getLastError: () => Promise<string>;
   getQueuedEventCount: () => Promise<number>;
   clearLocalQueue: () => Promise<boolean>;
+  getApplicationIcon: (packageName: string) => Promise<string | null>;
 };
 
 const NativeDeviceTimeline = NativeModules.DeviceTimeline as
   | NativeDeviceTimelineModule
   | undefined;
+const appIconCache = new Map<string, Promise<string | null>>();
 
 export function isNativeDeviceTimelineServiceAvailable() {
   return Platform.OS === "android" && Boolean(NativeDeviceTimeline);
@@ -105,4 +107,19 @@ export async function clearNativeDeviceTimelineQueue() {
     return false;
   }
   return NativeDeviceTimeline.clearLocalQueue();
+}
+
+export function getDeviceTimelineAppIcon(packageName: string) {
+  if (!isNativeDeviceTimelineServiceAvailable() || !NativeDeviceTimeline) {
+    return Promise.resolve(null);
+  }
+  const cached = appIconCache.get(packageName);
+  if (cached) {
+    return cached;
+  }
+  const request = NativeDeviceTimeline.getApplicationIcon(packageName).catch(
+    () => null,
+  );
+  appIconCache.set(packageName, request);
+  return request;
 }

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
+import requests
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -15,6 +16,7 @@ from integrations.services import (
 )
 
 from .models import Task, TaskAttachment, TodoOccurrence
+from .place_search import search_places
 from .services import (
     add_task_attachment,
     archive_long_term_task,
@@ -54,6 +56,14 @@ class TaskLocationOut(Schema):
     recordedAt: str
     reminderEnabled: bool
     radiusMeters: int
+
+
+class PlaceSearchOut(Schema):
+    id: str
+    name: str
+    address: str
+    latitude: float
+    longitude: float
 
 
 class TodoOccurrenceOut(Schema):
@@ -328,6 +338,19 @@ def get_day(request, day: date):
     user = request.auth
     ensure_day(user, day)
     return serialize_day(user, day)
+
+
+@router.get("/places/search", response=list[PlaceSearchOut], auth=bearer_auth)
+def search_task_places(request, q: str):
+    query = q.strip()
+    if len(query) < 2:
+        raise HttpError(400, "Please enter at least two characters.")
+    if len(query) > 120:
+        raise HttpError(400, "Place query is too long.")
+    try:
+        return search_places(query)
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        raise HttpError(502, "Place search is temporarily unavailable.") from exc
 
 
 @router.get("/range", response=RangeTodosOut, auth=bearer_auth)

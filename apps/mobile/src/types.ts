@@ -48,6 +48,14 @@ export type TaskLocation = {
   radiusMeters: number;
 };
 
+export type PlaceSearchResult = {
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+};
+
 export type TodoOccurrence = {
   id: string;
   taskId: string;

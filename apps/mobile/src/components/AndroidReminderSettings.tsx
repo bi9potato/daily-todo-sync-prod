@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   StyleSheet,
   Switch,
@@ -12,7 +13,7 @@ import Slider from "@react-native-community/slider";
 
 import { AppIcon } from "./AppIcon";
 import { colors, radius, spacing, typography } from "@/theme";
-import type { TaskLocation } from "@/types";
+import type { PlaceSearchResult, TaskLocation } from "@/types";
 
 const MIN_RADIUS_METERS = 100;
 const MAX_RADIUS_METERS = 2_000;
@@ -38,7 +39,8 @@ type AndroidReminderSettingsProps = {
   onClearTime: () => void;
   onOpenExactAlarmSettings: () => void;
   onOpenTimePicker: () => void;
-  onSearchLocation: (address: string) => Promise<void>;
+  onSearchLocation: (address: string) => Promise<PlaceSearchResult[]>;
+  onSelectSearchResult: (result: PlaceSearchResult) => void;
   onToggleLocationReminder: (enabled: boolean) => void;
   onUseCurrentLocation: () => void;
   reminderPermissionWarning: string;
@@ -57,6 +59,7 @@ export function AndroidReminderSettings({
   onOpenExactAlarmSettings,
   onOpenTimePicker,
   onSearchLocation,
+  onSelectSearchResult,
   onToggleLocationReminder,
   onUseCurrentLocation,
   reminderPermissionWarning,
@@ -66,11 +69,22 @@ export function AndroidReminderSettings({
   const [isLocationExpanded, setIsLocationExpanded] = useState(
     !location || Boolean(location.reminderEnabled),
   );
+  const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
 
   const locationReminderEnabled = Boolean(location?.reminderEnabled);
   const locationSummary = location
     ? `${location.name || "已选地点"} · ${formatRadius(location.radiusMeters)}`
     : "输入地点后可开启";
+
+  async function handleSearch() {
+    if (!address.trim()) {
+      return;
+    }
+    const results = await onSearchLocation(address);
+    setSearchResults(results);
+    setHasSearched(true);
+  }
 
   return (
     <View style={styles.section}>
@@ -181,7 +195,7 @@ export function AndroidReminderSettings({
                 accessibilityLabel="输入地点或地址"
                 autoCorrect={false}
                 onChangeText={setAddress}
-                onSubmitEditing={() => void onSearchLocation(address)}
+                onSubmitEditing={() => void handleSearch()}
                 placeholder="输入地点或地址"
                 placeholderTextColor={colors.textMuted}
                 returnKeyType="search"
@@ -194,7 +208,7 @@ export function AndroidReminderSettings({
                 <Pressable
                   accessibilityRole="button"
                   disabled={!address.trim()}
-                  onPress={() => void onSearchLocation(address)}
+                  onPress={() => void handleSearch()}
                   style={({ pressed }) => [
                     styles.searchButton,
                     !address.trim() && styles.buttonDisabled,
@@ -204,6 +218,49 @@ export function AndroidReminderSettings({
                 </Pressable>
               )}
             </View>
+
+            {searchResults.length ? (
+              <View style={styles.searchResults}>
+                {searchResults.map((result) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    key={result.id}
+                    onPress={() => {
+                      setAddress(result.name);
+                      setSearchResults([]);
+                      setHasSearched(false);
+                      onSelectSearchResult(result);
+                    }}
+                    style={({ pressed }) => [
+                      styles.searchResult,
+                      pressed && styles.pressed,
+                    ]}>
+                    <AppIcon
+                      name="location-outline"
+                      color={colors.accent}
+                      size={19}
+                    />
+                    <View style={styles.searchResultCopy}>
+                      <Text numberOfLines={1} style={styles.searchResultName}>
+                        {result.name}
+                      </Text>
+                      <Text numberOfLines={2} style={styles.searchResultAddress}>
+                        {result.address}
+                      </Text>
+                    </View>
+                    <AppIcon
+                      name="chevron-forward"
+                      color={colors.textMuted}
+                      size={17}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            ) : hasSearched && !isLocationBusy ? (
+              <Text style={styles.noSearchResults}>
+                没有找到结果，请补充城市、区县或道路名称
+              </Text>
+            ) : null}
 
             <Pressable
               accessibilityRole="button"
@@ -297,6 +354,16 @@ export function AndroidReminderSettings({
                 {locationError}
               </Text>
             ) : null}
+            <Pressable
+              accessibilityRole="link"
+              onPress={() =>
+                void Linking.openURL("https://www.openstreetmap.org/copyright")
+              }
+              style={styles.attribution}>
+              <Text style={styles.attributionText}>
+                地点数据 © OpenStreetMap contributors
+              </Text>
+            </Pressable>
           </View>
         ) : null}
       </View>
@@ -458,6 +525,42 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minHeight: 44,
   },
+  searchResults: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  searchResult: {
+    alignItems: "center",
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 64,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  searchResultCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  searchResultName: {
+    ...typography.label,
+    color: colors.text,
+    fontSize: 14,
+  },
+  searchResultAddress: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  noSearchResults: {
+    ...typography.caption,
+    color: colors.textMuted,
+    paddingHorizontal: spacing.xs,
+  },
   currentLocationText: {
     ...typography.label,
     color: colors.accent,
@@ -522,6 +625,16 @@ const styles = StyleSheet.create({
   locationError: {
     ...typography.caption,
     color: colors.danger,
+  },
+  attribution: {
+    alignSelf: "flex-start",
+    minHeight: 32,
+    justifyContent: "center",
+  },
+  attributionText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textDecorationLine: "underline",
   },
   pressed: {
     opacity: 0.68,

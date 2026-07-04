@@ -46,6 +46,12 @@ function withDeviceTimelineManifest(config) {
     // Settings > Usage access (see DeviceTimelineModule.openUsageAccessSettings),
     // same as every other on-device screen-time app.
     addUsesPermission(manifestConfig, "android.permission.PACKAGE_USAGE_STATS");
+    // The timeline's core user-facing purpose is to identify every app the
+    // user opened, including its label and icon. Android 11+ otherwise
+    // filters PackageManager lookups for arbitrary packages. Google Play
+    // treats this as a sensitive permission and requires a declaration plus
+    // prominent disclosure for distributed builds.
+    addUsesPermission(manifestConfig, "android.permission.QUERY_ALL_PACKAGES");
     // Since Android 14 (API 34) every foreground service type needs its own
     // matching android.permission.FOREGROUND_SERVICE_<TYPE> permission
     // declared, in addition to the plain FOREGROUND_SERVICE permission
@@ -303,14 +309,18 @@ const deviceTimelineModuleSource = `package ${PACKAGE_NAME}.devicetimeline
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Build
 import android.provider.Settings
+import android.util.Base64
 import androidx.core.content.ContextCompat
 import com.dailytodosync.app.DeviceTimelineService
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import java.io.ByteArrayOutputStream
 
 class DeviceTimelineModule(
   private val reactContext: ReactApplicationContext
@@ -417,7 +427,33 @@ class DeviceTimelineModule(
     }
   }
 
+  @ReactMethod
+  fun getApplicationIcon(packageName: String, promise: Promise) {
+    try {
+      val drawable = reactContext.packageManager.getApplicationIcon(packageName)
+      val bitmap = Bitmap.createBitmap(
+        APP_ICON_SIZE_PX,
+        APP_ICON_SIZE_PX,
+        Bitmap.Config.ARGB_8888,
+      )
+      val canvas = Canvas(bitmap)
+      val previousBounds = drawable.copyBounds()
+      drawable.setBounds(0, 0, APP_ICON_SIZE_PX, APP_ICON_SIZE_PX)
+      drawable.draw(canvas)
+      drawable.bounds = previousBounds
+      val output = ByteArrayOutputStream()
+      bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+      bitmap.recycle()
+      val encoded = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+      promise.resolve("data:image/png;base64,\${encoded}")
+    } catch (error: Throwable) {
+      promise.resolve(null)
+    }
+  }
+
   companion object {
+    private const val APP_ICON_SIZE_PX = 96
+
     fun deviceHasUsageAccess(context: Context): Boolean {
       val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
         ?: return false

@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from unittest.mock import patch
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
@@ -589,6 +590,37 @@ class TodoApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["text"], "Read")
+
+    @patch("todos.api.search_places")
+    def test_place_search_returns_nominatim_candidates(self, search_mock):
+        search_mock.return_value = [
+            {
+                "id": "node-1",
+                "name": "静安大悦城",
+                "address": "静安大悦城, 静安区, 上海市, 中国",
+                "latitude": 31.2459874,
+                "longitude": 121.467506,
+            }
+        ]
+
+        response = self.client.get(
+            "/api/places/search",
+            {"q": "上海 静安大悦城"},
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["name"], "静安大悦城")
+        search_mock.assert_called_once_with("上海 静安大悦城")
+
+    def test_place_search_rejects_too_short_query(self):
+        response = self.client.get(
+            "/api/places/search",
+            {"q": "上"},
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     def test_create_task_with_client_id_is_idempotent_and_uses_that_id(self):
         client_id = str(uuid4())

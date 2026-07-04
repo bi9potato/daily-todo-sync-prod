@@ -18,7 +18,10 @@
 
 ### 地点提醒
 
-- 用户可手动输入地点/地址，使用 `expo-location` 的系统正向地理编码得到经纬度；也可使用当前位置。
+- 用户可手动输入地点/地址，点击“查找”后使用 OpenStreetMap Nominatim
+  返回中国范围内的 WGS‑84 候选地点；也可使用当前位置。
+- 搜索不做自动联想；客户端限制为每秒最多一次请求，并缓存最近 50 个查询 30 天。
+- 地点编辑区展示 `© OpenStreetMap contributors` 署名和版权链接。
 - 用户每次从范围外进入以所选地点为圆心、指定半径的区域时触发本地通知；完成任务或关闭地点提醒后停止监控。
 - 半径允许 100 米到 2 公里；默认 150 米。Android 官方建议实际围栏至少 100–150 米。
 - 需要精确前台位置、后台“始终允许”位置和通知权限。只有用户主动开启地点提醒时才申请后台位置。
@@ -62,6 +65,9 @@
   https://developer.android.com/reference/android/app/usage/UsageEvents.Event
 - Expo Location 的地址解析、后台权限和 Geofencing API  
   https://docs.expo.dev/versions/v56.0.0/sdk/location/
+- Nominatim 公共服务使用政策和搜索 API
+  https://operations.osmfoundation.org/policies/nominatim/
+  https://nominatim.org/release-docs/latest/api/Search/
 - Expo Notifications 的 Android 精确闹钟要求  
   https://docs.expo.dev/versions/v56.0.0/sdk/notifications/
 - Apple Reminders 的地址输入、当前位置和可调围栏交互参考  

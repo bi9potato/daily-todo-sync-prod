@@ -28,6 +28,9 @@ import {
 } from "@/lib/android-reminder-settings";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
 import {
+  searchNominatimPlaces,
+} from "@/lib/place-search";
+import {
   hasLocationReminderPermission,
   requestLocationReminderPermission,
 } from "@/lib/location-reminders";
@@ -37,6 +40,7 @@ import { colors, radius, spacing, typography } from "@/theme";
 import type {
   LocalAttachmentFile,
   RepeatKind,
+  PlaceSearchResult,
   TaskAttachment,
   TaskLocation,
   TaskUpdatePayload,
@@ -311,39 +315,36 @@ export function TaskEditor({
     const query = address.trim();
     if (!query) {
       setLocationError("请输入地点或地址。");
-      return;
+      return [];
     }
     setIsSearchingLocation(true);
     setLocationError("");
     try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error("需要位置权限才能查找地点。");
-      }
-      const results = await withTimeout(
-        Location.geocodeAsync(query),
-        10_000,
+      return await withTimeout(
+        searchNominatimPlaces(query),
+        12_000,
         "地点查找超时，请稍后重试。",
       );
-      const result = results[0];
-      if (!result) {
-        throw new Error("没有找到这个地点，请输入更完整的地址。");
-      }
-      setTaskLocation({
-        name: query,
-        latitude: result.latitude,
-        longitude: result.longitude,
-        recordedAt: new Date().toISOString(),
-        reminderEnabled: taskLocation?.reminderEnabled ?? false,
-        radiusMeters: Math.max(100, taskLocation?.radiusMeters ?? 150),
-      });
     } catch (error) {
       setLocationError(
         error instanceof Error ? error.message : "无法查找这个地点",
       );
+      return [];
     } finally {
       setIsSearchingLocation(false);
     }
+  }
+
+  function selectSearchResult(result: PlaceSearchResult) {
+    setLocationError("");
+    setTaskLocation({
+      name: result.name,
+      latitude: result.latitude,
+      longitude: result.longitude,
+      recordedAt: new Date().toISOString(),
+      reminderEnabled: taskLocation?.reminderEnabled ?? false,
+      radiusMeters: Math.max(100, taskLocation?.radiusMeters ?? 150),
+    });
   }
 
   async function captureCurrentLocation() {
@@ -565,6 +566,7 @@ export function TaskEditor({
                   }}
                   onOpenTimePicker={() => setTimePickerOpen(true)}
                   onSearchLocation={searchLocation}
+                  onSelectSearchResult={selectSearchResult}
                   onToggleLocationReminder={(enabled) =>
                     void toggleLocationReminder(enabled)
                   }
