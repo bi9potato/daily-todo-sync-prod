@@ -460,6 +460,7 @@ def ensure_recurring_occurrences(user, start_date: date, end_date: date) -> None
     recurring_tasks = Task.objects.filter(
         user=user,
         deleted_at__isnull=True,
+        is_archived=False,
         recurrence_start_date__lte=end_date,
     ).exclude(recurrence_kind=Task.RecurrenceKind.NONE)
 
@@ -577,6 +578,7 @@ def ensure_range(
                 status=TodoOccurrence.Status.PENDING,
                 deleted_at__isnull=True,
                 task__deleted_at__isnull=True,
+                task__is_archived=False,
             )
             .order_by("-is_pinned", "sort_order", "created_at")
         )
@@ -863,6 +865,65 @@ def copy_long_term_occurrence_as_regular(user, occurrence_id: UUID) -> TodoOccur
     )
     _copy_task_attachments_to_occurrence(user, source.task, copied)
     return copied
+
+
+@transaction.atomic
+def archive_long_term_task(user, occurrence_id: UUID) -> TodoOccurrence:
+    occurrence = TodoOccurrence.objects.select_for_update().select_related("task").get(
+        id=occurrence_id,
+        user=user,
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
+    )
+    if not _uses_future_content(occurrence.task):
+        raise ValueError("Only long-term tasks can be archived.")
+    if not occurrence.task.is_archived:
+        occurrence.task.is_archived = True
+        occurrence.task.archived_at = timezone.now()
+        occurrence.task.save(update_fields=["is_archived", "archived_at", "updated_at"])
+    return occurrence
+
+
+@transaction.atomic
+def unarchive_long_term_task(user, occurrence_id: UUID) -> TodoOccurrence:
+    occurrence = TodoOccurrence.objects.select_for_update().select_related("task").get(
+        id=occurrence_id,
+        user=user,
+        deleted_at__isnull=True,
+        task__deleted_at__isnull=True,
+    )
+    if occurrence.task.is_archived:
+        occurrence.task.is_archived = False
+        occurrence.task.archived_at = None
+        occurrence.task.save(update_fields=["is_archived", "archived_at", "updated_at"])
+        # The daily recurrence and carryover sweeps both skip archived tasks,
+        # so today's occurrence may never have been generated while archived.
+        # Rewinding lets the next ensure_range call re-walk forward and heal
+        # the gap the same way restoring a deleted occurrence does.
+        _rewind_sync_cursor(user, timezone.localdate())
+    return occurrence
+
+
+def list_archived_long_term_tasks(user) -> list[TodoOccurrence]:
+    occurrences = (
+        TodoOccurrence.objects.select_related("task")
+        .prefetch_related("attachments")
+        .filter(
+            user=user,
+            task__is_archived=True,
+            task__deleted_at__isnull=True,
+            deleted_at__isnull=True,
+        )
+        .order_by("-task__archived_at", "-task_date")
+    )
+    seen_roots = set()
+    archived: list[TodoOccurrence] = []
+    for occurrence in occurrences:
+        if occurrence.root_id in seen_roots:
+            continue
+        seen_roots.add(occurrence.root_id)
+        archived.append(occurrence)
+    return archived
 
 
 @transaction.atomic

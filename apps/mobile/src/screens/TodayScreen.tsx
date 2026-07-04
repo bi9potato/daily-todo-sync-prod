@@ -28,6 +28,7 @@ import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
 import {
   ApiError,
+  archiveOccurrence,
   chatWithAi,
   copyLongTermOccurrenceAsRegular,
   createTask,
@@ -95,6 +96,8 @@ function createOptimisticOccurrence(
     reminderAt: null,
     isRecurring: Boolean(payload.repeat && payload.repeat.kind !== "none"),
     isLongTerm: payload.isLongTerm ?? false,
+    isArchived: false,
+    archivedAt: null,
     repeat: payload.repeat ?? {
       kind: "none",
       interval: 1,
@@ -340,6 +343,27 @@ export function TodayScreen({
         current ? { ...current, pending: [...current.pending, task] } : current,
       );
       setSelectedTaskId(task.id);
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: archiveOccurrence,
+    onSuccess: (task) => {
+      // The server stops surfacing an archived long-term task from every
+      // day view (including future days it would otherwise keep recurring
+      // into), so drop it from the cached day here too instead of waiting
+      // on a refetch.
+      queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
+        current
+          ? {
+              ...current,
+              pending: current.pending.filter((item) => item.id !== task.id),
+              done: current.done.filter((item) => item.id !== task.id),
+            }
+          : current,
+      );
+      setSelectedTaskId(null);
       void queryClient.invalidateQueries({ queryKey: ["range"] });
     },
   });
@@ -636,6 +660,7 @@ export function TodayScreen({
           reorderAttachmentsMutation.isPending
         }
         isSaving={updateMutation.isPending}
+        onArchive={(task) => archiveMutation.mutate(task.id)}
         onClose={() => setSelectedTaskId(null)}
         onCopyAsRegular={(task) => copyMutation.mutate(task.id)}
         onDelete={confirmDelete}

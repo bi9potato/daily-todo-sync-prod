@@ -23,6 +23,7 @@ import {
   bindGoogleAccount,
   clearTrash,
   disconnectGoogleAccount,
+  getArchivedLongTermTasks,
   getGoogleCalendarStatus,
   getLatestMobileRelease,
   getMe,
@@ -30,6 +31,7 @@ import {
   restoreOccurrence,
   setGoogleCalendarSyncEnabled,
   syncGoogleCalendar,
+  unarchiveOccurrence,
   updateMe,
 } from "@/lib/api";
 import { useSession } from "@/session";
@@ -38,6 +40,7 @@ import type {
   DeletedTodoOccurrence,
   GoogleCalendarStatus,
   MobileRelease,
+  TodoOccurrence,
 } from "@/types";
 
 const currentVersion = Constants.expoConfig?.version ?? "1.0.0";
@@ -61,6 +64,10 @@ export function ProfileScreen() {
   const trashQuery = useQuery({
     queryKey: ["trash"],
     queryFn: getTrash,
+  });
+  const archivedQuery = useQuery({
+    queryKey: ["archived-long-term"],
+    queryFn: getArchivedLongTermTasks,
   });
   const releaseQuery = useQuery({
     queryKey: ["mobile-release"],
@@ -97,6 +104,14 @@ export function ProfileScreen() {
   const clearTrashMutation = useMutation({
     mutationFn: clearTrash,
     onSuccess: () => queryClient.setQueryData(["trash"], []),
+  });
+  const unarchiveMutation = useMutation({
+    mutationFn: unarchiveOccurrence,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["archived-long-term"] });
+      void queryClient.invalidateQueries({ queryKey: ["day"] });
+      void queryClient.invalidateQueries({ queryKey: ["range"] });
+    },
   });
   const toggleSyncMutation = useMutation({
     mutationFn: ({
@@ -311,6 +326,14 @@ export function ProfileScreen() {
           />
         </Section>
 
+        <Section title="已归档长期任务">
+          <ArchivedLongTermPanel
+            isBusy={archivedQuery.isFetching || unarchiveMutation.isPending}
+            items={archivedQuery.data ?? []}
+            onUnarchive={(id) => unarchiveMutation.mutate(id)}
+          />
+        </Section>
+
         <Pressable
           onPress={() =>
             Alert.alert("退出登录？", "本机的登录信息将被清除。", [
@@ -484,6 +507,45 @@ function TrashPanel({
           <Text style={styles.clearTrashText}>清空回收站</Text>
         </Pressable>
       ) : null}
+    </View>
+  );
+}
+
+function ArchivedLongTermPanel({
+  isBusy,
+  items,
+  onUnarchive,
+}: {
+  isBusy: boolean;
+  items: TodoOccurrence[];
+  onUnarchive: (id: string) => void;
+}) {
+  return (
+    <View style={styles.trashPanel}>
+      {items.length ? (
+        items.map((item) => (
+          <View key={item.id} style={styles.trashRow}>
+            <View style={styles.trashCopy}>
+              <Text numberOfLines={1} style={styles.trashTitle}>
+                {item.text}
+              </Text>
+              <Text style={styles.trashMeta}>
+                {item.archivedAt
+                  ? `归档于 ${item.archivedAt.slice(0, 10)}`
+                  : item.taskDate}
+              </Text>
+            </View>
+            <Pressable
+              disabled={isBusy}
+              onPress={() => onUnarchive(item.id)}
+              style={styles.restoreButton}>
+              <Text style={styles.restoreText}>取消归档</Text>
+            </Pressable>
+          </View>
+        ))
+      ) : (
+        <Text style={styles.emptySetting}>暂无已归档的长期任务。</Text>
+      )}
     </View>
   );
 }

@@ -17,18 +17,21 @@ from integrations.services import (
 from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
+    archive_long_term_task,
     clear_completed,
     clear_trash,
     copy_long_term_occurrence_as_regular,
     create_task_for_day,
-    delete_task_attachment,
     delete_occurrence,
+    delete_task_attachment,
     ensure_day,
     ensure_range,
+    list_archived_long_term_tasks,
     list_deleted_occurrences,
     reorder_day,
     reorder_task_attachments,
     restore_occurrence,
+    unarchive_long_term_task,
     update_occurrence,
 )
 
@@ -72,6 +75,8 @@ class TodoOccurrenceOut(Schema):
     reminderAt: str | None
     isRecurring: bool
     isLongTerm: bool
+    isArchived: bool
+    archivedAt: str | None
     repeat: dict
     location: TaskLocationOut | None
     attachments: list[TaskAttachmentOut]
@@ -250,6 +255,8 @@ def serialize_occurrence(occurrence: TodoOccurrence) -> dict:
         "reminderAt": reminder_at(occurrence),
         "isRecurring": task.recurrence_kind != Task.RecurrenceKind.NONE,
         "isLongTerm": is_long_term,
+        "isArchived": task.is_archived,
+        "archivedAt": task.archived_at.isoformat() if task.archived_at else None,
         "repeat": {
             "kind": task.recurrence_kind,
             "interval": task.recurrence_interval,
@@ -290,6 +297,7 @@ def serialize_day(user, day: date) -> dict:
             task_date=day,
             deleted_at__isnull=True,
             task__deleted_at__isnull=True,
+            task__is_archived=False,
         )
         .order_by("-is_pinned", "sort_order", "created_at")
     )
@@ -393,6 +401,37 @@ def copy_occurrence_to_regular_task(request, occurrence_id: UUID):
         raise HttpError(400, str(exc)) from exc
     sync_occurrence_to_google_calendar(request.auth, occurrence)
     return 201, serialize_occurrence(occurrence)
+
+
+@router.post(
+    "/occurrences/{occurrence_id}/archive",
+    response=TodoOccurrenceOut,
+    auth=bearer_auth,
+)
+def archive_occurrence(request, occurrence_id: UUID):
+    try:
+        occurrence = archive_long_term_task(request.auth, occurrence_id)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+    return serialize_occurrence(occurrence)
+
+
+@router.post(
+    "/occurrences/{occurrence_id}/unarchive",
+    response=TodoOccurrenceOut,
+    auth=bearer_auth,
+)
+def unarchive_occurrence(request, occurrence_id: UUID):
+    occurrence = unarchive_long_term_task(request.auth, occurrence_id)
+    return serialize_occurrence(occurrence)
+
+
+@router.get("/archived", response=list[TodoOccurrenceOut], auth=bearer_auth)
+def get_archived_long_term_tasks(request):
+    return [
+        serialize_occurrence(occurrence)
+        for occurrence in list_archived_long_term_tasks(request.auth)
+    ]
 
 
 @router.delete("/occurrences/{occurrence_id}", response={204: None}, auth=bearer_auth)

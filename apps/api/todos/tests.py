@@ -7,17 +7,21 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 
 from accounts.tokens import issue_access_token
+
 from .models import Task, TaskAttachment, TodoOccurrence
 from .services import (
     add_task_attachment,
+    archive_long_term_task,
     copy_long_term_occurrence_as_regular,
     create_task_for_day,
     delete_occurrence,
     ensure_day,
     ensure_range,
+    list_archived_long_term_tasks,
     list_deleted_occurrences,
     reorder_day,
     restore_occurrence,
+    unarchive_long_term_task,
     update_occurrence,
 )
 
@@ -381,6 +385,84 @@ class CarryoverTests(TestCase):
             )
             attachment.file.close()
 
+    def test_archiving_long_term_task_stops_future_recurrence_and_carryover(self):
+        start = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Read a book a month",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        ensure_range(self.user, date(2026, 6, 21), date(2026, 6, 21), today=date(2026, 6, 21))
+        today_occurrence = TodoOccurrence.objects.get(
+            root_id=start.root_id, task_date=date(2026, 6, 21)
+        )
+
+        archive_long_term_task(self.user, today_occurrence.id)
+        start.task.refresh_from_db()
+        self.assertTrue(start.task.is_archived)
+        self.assertIsNotNone(start.task.archived_at)
+
+        ensure_range(self.user, date(2026, 6, 22), date(2026, 6, 23), today=date(2026, 6, 23))
+
+        self.assertFalse(
+            TodoOccurrence.objects.filter(
+                root_id=start.root_id,
+                task_date__gt=date(2026, 6, 21),
+                deleted_at__isnull=True,
+            ).exists()
+        )
+
+    def test_archiving_regular_task_is_rejected(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Buy milk")
+        with self.assertRaises(ValueError):
+            archive_long_term_task(self.user, occurrence.id)
+
+    def test_unarchiving_long_term_task_resumes_recurrence(self):
+        start = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Water the plants",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        ensure_range(self.user, date(2026, 6, 21), date(2026, 6, 21), today=date(2026, 6, 21))
+        today_occurrence = TodoOccurrence.objects.get(
+            root_id=start.root_id, task_date=date(2026, 6, 21)
+        )
+        archive_long_term_task(self.user, today_occurrence.id)
+
+        unarchive_long_term_task(self.user, today_occurrence.id)
+        start.task.refresh_from_db()
+        self.assertFalse(start.task.is_archived)
+        self.assertIsNone(start.task.archived_at)
+
+        ensure_range(self.user, date(2026, 6, 22), date(2026, 6, 22), today=date(2026, 6, 22))
+        self.assertTrue(
+            TodoOccurrence.objects.filter(
+                root_id=start.root_id,
+                task_date=date(2026, 6, 22),
+                deleted_at__isnull=True,
+            ).exists()
+        )
+
+    def test_list_archived_long_term_tasks_returns_latest_occurrence_per_root(self):
+        start = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Learn guitar",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        ensure_range(self.user, date(2026, 6, 21), date(2026, 6, 21), today=date(2026, 6, 21))
+        latest = TodoOccurrence.objects.get(root_id=start.root_id, task_date=date(2026, 6, 21))
+        archive_long_term_task(self.user, latest.id)
+
+        archived = list_archived_long_term_tasks(self.user)
+
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].id, latest.id)
+
     def test_turning_long_term_recurring_task_regular_stops_future_recurrence(self):
         start = create_task_for_day(
             self.user,
@@ -657,6 +739,84 @@ class TodoApiTests(TestCase):
         self.assertFalse(body["isLongTerm"])
         self.assertFalse(body["isRecurring"])
         self.assertEqual(body["note"], "copy this")
+
+    def test_archive_endpoint_hides_task_from_day_and_lists_it(self):
+        occurrence = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Learn piano",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+
+        archive_response = self.client.post(
+            f"/api/occurrences/{occurrence.id}/archive",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        archived_body = archive_response.json()
+        self.assertTrue(archived_body["isArchived"])
+        self.assertIsNotNone(archived_body["archivedAt"])
+
+        day_response = self.client.get(
+            "/api/days/2026-06-20",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        day_body = day_response.json()
+        self.assertNotIn(
+            str(occurrence.id),
+            [item["id"] for item in [*day_body["pending"], *day_body["done"]]],
+        )
+
+        archived_list_response = self.client.get(
+            "/api/archived",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        self.assertEqual(
+            [item["id"] for item in archived_list_response.json()],
+            [str(occurrence.id)],
+        )
+
+    def test_unarchive_endpoint_restores_visibility(self):
+        occurrence = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Learn piano",
+            content_mode=Task.ContentMode.FUTURE,
+            recurrence_kind=Task.RecurrenceKind.DAILY,
+        )
+        self.client.post(
+            f"/api/occurrences/{occurrence.id}/archive",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        unarchive_response = self.client.post(
+            f"/api/occurrences/{occurrence.id}/unarchive",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(unarchive_response.status_code, 200)
+        self.assertFalse(unarchive_response.json()["isArchived"])
+
+        day_response = self.client.get(
+            "/api/days/2026-06-20",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        day_body = day_response.json()
+        self.assertIn(
+            str(occurrence.id),
+            [item["id"] for item in [*day_body["pending"], *day_body["done"]]],
+        )
+
+    def test_archiving_regular_task_endpoint_returns_400(self):
+        occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Buy milk")
+
+        response = self.client.post(
+            f"/api/occurrences/{occurrence.id}/archive",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     def test_trash_endpoint_can_restore_deleted_task(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Read")

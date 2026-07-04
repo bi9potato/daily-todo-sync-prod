@@ -191,6 +191,7 @@ type TaskEditorProps = {
   task: TodoOccurrence | null;
   isAttachmentMutating: boolean;
   isSaving: boolean;
+  onArchive: (task: TodoOccurrence) => void;
   onClose: () => void;
   onCopyAsRegular: (task: TodoOccurrence) => void;
   onDelete: (task: TodoOccurrence) => void;
@@ -204,6 +205,7 @@ export function TaskEditor({
   task,
   isAttachmentMutating,
   isSaving,
+  onArchive,
   onClose,
   onCopyAsRegular,
   onDelete,
@@ -557,6 +559,17 @@ export function TaskEditor({
                     ]}>
                     <AppIcon name="copy-outline" color={colors.accent} size={20} />
                     <Text style={styles.copyText}>复制为普通任务</Text>
+                  </Pressable>
+                ) : null}
+                {task.isLongTerm && !task.isArchived ? (
+                  <Pressable
+                    onPress={() => onArchive(task)}
+                    style={({ pressed }) => [
+                      styles.copyButton,
+                      pressed && styles.pressed,
+                    ]}>
+                    <AppIcon name="archive-outline" color={colors.accent} size={20} />
+                    <Text style={styles.copyText}>归档</Text>
                   </Pressable>
                 ) : null}
                 <Pressable

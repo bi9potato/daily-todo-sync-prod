@@ -47,6 +47,8 @@ class Task(models.Model):
     recurrence_days_of_week = models.JSONField(default=list, blank=True)
     recurrence_until = models.DateField(null=True, blank=True)
     recurrence_start_date = models.DateField(null=True, blank=True)
+    is_archived = models.BooleanField(default=False)
+    archived_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -58,6 +60,10 @@ class Task(models.Model):
             models.Index(
                 fields=["user", "recurrence_kind", "recurrence_start_date"],
                 name="todos_task_user_id_29e252_idx",
+            ),
+            models.Index(
+                fields=["user", "is_archived"],
+                name="todos_task_user_archived_idx",
             ),
         ]
 

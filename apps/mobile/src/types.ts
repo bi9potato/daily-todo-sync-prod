@@ -67,6 +67,8 @@ export type TodoOccurrence = {
   reminderAt: string | null;
   isRecurring: boolean;
   isLongTerm: boolean;
+  isArchived: boolean;
+  archivedAt: string | null;
   repeat: RepeatRule;
   location: TaskLocation | null;
   attachments: TaskAttachment[];

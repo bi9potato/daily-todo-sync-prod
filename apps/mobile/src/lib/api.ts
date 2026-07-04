@@ -404,6 +404,22 @@ export function copyLongTermOccurrenceAsRegular(id: string) {
   });
 }
 
+export function archiveOccurrence(id: string) {
+  return request<TodoOccurrence>(`/occurrences/${id}/archive`, {
+    method: "POST",
+  });
+}
+
+export function unarchiveOccurrence(id: string) {
+  return request<TodoOccurrence>(`/occurrences/${id}/unarchive`, {
+    method: "POST",
+  });
+}
+
+export function getArchivedLongTermTasks() {
+  return request<TodoOccurrence[]>("/archived");
+}
+
 export function reorderDay(date: string, orderedIds: string[]) {
   return request<void>(`/days/${date}/reorder`, {
     method: "PATCH",
