@@ -31,6 +31,7 @@ import {
 
 import { AppIcon } from "./AppIcon";
 import { recordClientLog } from "@/lib/client-logs";
+import type { LiveLocation } from "@/lib/useLiveLocation";
 import { colors, radius, typography } from "@/theme";
 import type { MobilityPoint } from "@/types";
 
@@ -39,13 +40,25 @@ export type RouteMapHandle = {
   pause: () => void;
   seek: (ratio: number) => void;
   stop: () => void;
+  // Recenter the camera on the live location and zoom in to a street-level
+  // view, the way tapping Google Maps' locate button snaps to your position.
+  centerOnLive: () => void;
 };
 
 type RouteMapProps = {
   points: MobilityPoint[];
+  // The live "you are here" fix (foreground position + compass heading). When
+  // present the map draws a blue puck and heading beam on top of the recorded
+  // route, independent of the coarse background footprint recording.
+  liveLocation?: LiveLocation | null;
+  // While true the camera keeps the live puck centered as new fixes arrive.
+  followLive?: boolean;
   onFallback?: (fallback: boolean) => void;
   onPlaybackEnded?: () => void;
   onPlaybackProgress?: (ratio: number, timestampMs: number) => void;
+  // Fired when the user pans/zooms the map by hand, so the screen can drop out
+  // of follow mode instead of fighting the gesture on the next fix.
+  onUserPan?: () => void;
 };
 
 const EMPTY_POINTS: MobilityPoint[] = [];
@@ -86,9 +99,68 @@ const MAP_STYLE: StyleSpecification = {
 
 const ROUTE_COLOR = "#2C5745";
 const PLAYBACK_COLOR = "#E8853A";
+// The live puck uses the same blue every consumer map (Google/Apple) uses for
+// "you are here", deliberately distinct from the green recorded route so the
+// two never read as the same thing.
+const LIVE_COLOR = "#1A73E8";
+// How long to glide the live dot to each new fix. Position arrives ~1Hz; a
+// short linear tween turns those steps into continuous motion like a nav app
+// instead of a teleport every second.
+const LIVE_TWEEN_MS = 950;
+const LIVE_FOLLOW_ZOOM = 16;
 // Throttle for the scrubber progress ping back to the consumer, matching the
 // old WebView cadence so the slider stays smooth without a 60fps flood.
 const PROGRESS_PING_MS = 120;
+
+// Heading beam geometry. The beam is a small circular sector in real-world
+// meters pointing where the phone faces - the same metaphor as Google Maps'
+// blue cone - built as a GeoJSON polygon so it rotates purely from data with
+// no image asset to bundle or rotate natively.
+const EARTH_RADIUS_METERS = 6378137;
+const BEAM_RADIUS_METERS = 32;
+const BEAM_HALF_ANGLE_DEGREES = 30;
+const BEAM_ARC_STEPS = 12;
+
+// Offset a lon/lat by a local east/north displacement in meters using the
+// standard equirectangular approximation. Accurate to well under a meter at
+// the beam's ~30m scale, which is all the visual needs.
+function offsetMeters(
+  lon: number,
+  lat: number,
+  eastMeters: number,
+  northMeters: number,
+): [number, number] {
+  const dLat = (northMeters / EARTH_RADIUS_METERS) * (180 / Math.PI);
+  const dLon =
+    (eastMeters / (EARTH_RADIUS_METERS * Math.cos((lat * Math.PI) / 180))) *
+    (180 / Math.PI);
+  return [lon + dLon, lat + dLat];
+}
+
+// Build the heading beam as a wedge fanning out from the current position
+// toward `headingDeg` (degrees clockwise from north).
+function headingBeam(
+  lon: number,
+  lat: number,
+  headingDeg: number,
+): GeoJSON.Feature<GeoJSON.Polygon> {
+  const ring: [number, number][] = [[lon, lat]];
+  const start = headingDeg - BEAM_HALF_ANGLE_DEGREES;
+  const end = headingDeg + BEAM_HALF_ANGLE_DEGREES;
+  for (let step = 0; step <= BEAM_ARC_STEPS; step += 1) {
+    const bearing =
+      ((start + ((end - start) * step) / BEAM_ARC_STEPS) * Math.PI) / 180;
+    const east = Math.sin(bearing) * BEAM_RADIUS_METERS;
+    const north = Math.cos(bearing) * BEAM_RADIUS_METERS;
+    ring.push(offsetMeters(lon, lat, east, north));
+  }
+  ring.push([lon, lat]);
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: { type: "Polygon", coordinates: [ring] },
+  };
+}
 
 // A route point flattened to what the map + playback math need.
 type RoutePoint = { lon: number; lat: number; t: number };
@@ -185,7 +257,15 @@ function routeBounds(points: MobilityPoint[]): LngLatBounds {
 }
 
 function RouteMapComponent(
-  { points = EMPTY_POINTS, onFallback, onPlaybackEnded, onPlaybackProgress }: RouteMapProps,
+  {
+    points = EMPTY_POINTS,
+    liveLocation = null,
+    followLive = false,
+    onFallback,
+    onPlaybackEnded,
+    onPlaybackProgress,
+    onUserPan,
+  }: RouteMapProps,
   ref: ForwardedRef<RouteMapHandle>,
 ) {
   const cameraRef = useRef<CameraRef>(null);
@@ -469,6 +549,96 @@ function RouteMapComponent(
     setPlaybackVisible(false);
   }, [clearTicker, stopAnim]);
 
+  // --- Live "you are here" puck + heading beam -----------------------------
+  // The live fix is animated with its own MapLibreAnimated.Point (independent
+  // of the playback dot) so it glides between the ~1Hz fixes instead of
+  // teleporting, matching a nav app's continuous motion.
+  const liveLocationRef = useRef<LiveLocation | null>(null);
+  const livePointRef = useRef<InstanceType<typeof MapLibreAnimated.Point> | null>(
+    null,
+  );
+  const [livePoint, setLivePoint] = useState<InstanceType<
+    typeof MapLibreAnimated.Point
+  > | null>(null);
+  const hasCenteredLiveRef = useRef(false);
+
+  const beamFeature = useMemo<GeoJSON.Feature<GeoJSON.Polygon> | null>(() => {
+    if (!liveLocation || liveLocation.heading == null) {
+      return null;
+    }
+    return headingBeam(
+      liveLocation.longitude,
+      liveLocation.latitude,
+      liveLocation.heading,
+    );
+  }, [liveLocation]);
+
+  const centerOnLive = useCallback(() => {
+    const current = liveLocationRef.current;
+    const camera = cameraRef.current;
+    if (!current || !camera) {
+      return;
+    }
+    // v11 CameraRef: setStop takes a CameraStop ({ center, zoom, duration,
+    // easing }); there is no setCamera/moveTo in this version.
+    void camera
+      .setStop({
+        center: [current.longitude, current.latitude],
+        zoom: LIVE_FOLLOW_ZOOM,
+        duration: 600,
+        easing: "ease",
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    liveLocationRef.current = liveLocation;
+    if (!liveLocation) {
+      return;
+    }
+    const geometry = pointGeometry([
+      liveLocation.longitude,
+      liveLocation.latitude,
+    ]);
+    const point = livePointRef.current;
+    if (!point) {
+      const created = new MapLibreAnimated.Point(geometry);
+      livePointRef.current = created;
+      setLivePoint(created);
+    } else {
+      point
+        .timing({ toValue: geometry, duration: LIVE_TWEEN_MS, easing: Easing.linear })
+        .start();
+    }
+    if (followLive && cameraRef.current) {
+      // Linear easing (not "fly") so following glides straight to the new fix
+      // instead of arcing out and back; zoom is omitted to keep the user's
+      // current zoom level.
+      void cameraRef.current
+        .setStop({
+          center: [liveLocation.longitude, liveLocation.latitude],
+          duration: LIVE_TWEEN_MS,
+          easing: "linear",
+        })
+        .catch(() => undefined);
+    }
+  }, [liveLocation, followLive]);
+
+  // With no recorded route to frame, snap to the first live fix once so the
+  // map opens on the user instead of null island; the route-bounds path above
+  // already covers the with-route case.
+  useEffect(() => {
+    if (
+      mapReady &&
+      !points.length &&
+      liveLocation &&
+      !hasCenteredLiveRef.current
+    ) {
+      hasCenteredLiveRef.current = true;
+      centerOnLive();
+    }
+  }, [mapReady, points.length, liveLocation, centerOnLive]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -476,8 +646,9 @@ function RouteMapComponent(
       pause: pausePlayback,
       seek: seekPlayback,
       stop: stopPlayback,
+      centerOnLive,
     }),
-    [pausePlayback, seekPlayback, startPlayback, stopPlayback],
+    [centerOnLive, pausePlayback, seekPlayback, startPlayback, stopPlayback],
   );
 
   // Tear down timers/animations if the component unmounts mid-playback.
@@ -512,13 +683,14 @@ function RouteMapComponent(
     }
   }, [mapReady, points.length, fitToRoute]);
 
-  // Native map is available whenever there are points; only web falls back to
-  // the SVG preview. (The old WebView-specific failure paths are gone.)
+  // The native map is worth showing whenever there is either a recorded route
+  // or a live fix to place the puck on; only web (no native map) and the truly
+  // empty state fall back to the SVG preview / empty card.
   useEffect(() => {
-    onFallback?.(Platform.OS === "web" || !points.length);
-  }, [onFallback, points.length]);
+    onFallback?.(Platform.OS === "web" || (!points.length && !liveLocation));
+  }, [onFallback, points.length, liveLocation]);
 
-  if (!points.length) {
+  if (!points.length && !liveLocation) {
     return (
       <View style={styles.empty}>
         <AppIcon name="map-outline" color={colors.accent} size={30} />
@@ -559,6 +731,14 @@ function RouteMapComponent(
         });
       }}
       onDidFinishLoadingMap={() => setMapReady(true)}
+      // A hand pan/zoom drops follow mode so the camera stops chasing the puck
+      // and fighting the gesture; programmatic follow moves report
+      // userInteraction false and are ignored here.
+      onRegionDidChange={(event) => {
+        if (event.nativeEvent.userInteraction) {
+          onUserPan?.();
+        }
+      }}
       style={styles.map}>
       <Camera ref={cameraRef} initialViewState={initialViewState} />
 
@@ -604,6 +784,41 @@ function RouteMapComponent(
             paint={{
               "circle-radius": 8,
               "circle-color": PLAYBACK_COLOR,
+              "circle-stroke-width": 3,
+              "circle-stroke-color": "#ffffff",
+            }}
+          />
+        </MapLibreAnimated.GeoJSONSource>
+      ) : null}
+
+      {/* Heading beam sits under the dot so the dot always reads on top. */}
+      {beamFeature ? (
+        <GeoJSONSource id="live-heading-source" data={beamFeature}>
+          <Layer
+            id="live-heading-fill"
+            type="fill"
+            paint={{ "fill-color": LIVE_COLOR, "fill-opacity": 0.22 }}
+          />
+        </GeoJSONSource>
+      ) : null}
+
+      {liveLocation && livePoint ? (
+        <MapLibreAnimated.GeoJSONSource id="live-source" data={livePoint}>
+          <Layer
+            id="live-accuracy"
+            type="circle"
+            paint={{
+              "circle-radius": 11,
+              "circle-color": LIVE_COLOR,
+              "circle-opacity": 0.18,
+            }}
+          />
+          <Layer
+            id="live-dot"
+            type="circle"
+            paint={{
+              "circle-radius": 7,
+              "circle-color": LIVE_COLOR,
               "circle-stroke-width": 3,
               "circle-stroke-color": "#ffffff",
             }}

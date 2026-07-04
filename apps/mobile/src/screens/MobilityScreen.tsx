@@ -56,6 +56,7 @@ import {
   stopMobilityLocationTracking,
   supportsBackgroundLocationTracking,
 } from "@/lib/mobility-tracking";
+import { useLiveLocation } from "@/lib/useLiveLocation";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
@@ -602,6 +603,54 @@ export function MobilityScreen({
   const [playbackRatio, setPlaybackRatio] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
 
+  // Live "you are here" puck + heading. It only makes sense for today (a past
+  // day has no "now"), and only runs once we hold foreground location
+  // permission - always true while recording, otherwise requested on demand
+  // when the user taps the locate button. This is intentionally separate from
+  // the background footprint recording, which stays coarse for battery/history.
+  const [userEnabledLive, setUserEnabledLive] = useState(false);
+  const [followLive, setFollowLive] = useState(false);
+  const liveEnabled = isToday && (recordingEnabled || userEnabledLive);
+  const liveLocation = useLiveLocation(liveEnabled);
+
+  const handleUserPan = useCallback(() => {
+    setFollowLive(false);
+  }, []);
+
+  const handleLocatePress = useCallback(async () => {
+    if (Platform.OS === "web") {
+      setActionError("网页端不支持实时定位，请在 Android 上使用。");
+      return;
+    }
+    // A second tap while following simply releases follow mode; the puck stays.
+    if (followLive) {
+      setFollowLive(false);
+      return;
+    }
+    try {
+      const { granted } = await Location.getForegroundPermissionsAsync();
+      if (!granted) {
+        if (!(await Location.hasServicesEnabledAsync())) {
+          setActionError("请先打开系统定位服务。");
+          return;
+        }
+        const requested = await Location.requestForegroundPermissionsAsync();
+        if (!requested.granted) {
+          setActionError("需要位置权限才能显示当前位置。");
+          return;
+        }
+      }
+      setActionError("");
+      setUserEnabledLive(true);
+      setFollowLive(true);
+      // Snaps to the puck immediately if a fix already exists; otherwise the
+      // follow effect centers on the first fix within ~1s.
+      routeMapRef.current?.centerOnLive();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "定位失败");
+    }
+  }, [followLive]);
+
   const changeSelectedDate = useCallback(
     (updater: (date: string) => string) => {
       setSelectedDateOverride((current) => {
@@ -610,6 +659,7 @@ export function MobilityScreen({
       });
       setIsPlaying(false);
       setPlaybackRatio(0);
+      setFollowLive(false);
     },
     [today],
   );
@@ -756,15 +806,39 @@ export function MobilityScreen({
         ) : (
           <RouteMap
             key={selectedDate}
+            followLive={followLive}
+            liveLocation={isToday ? liveLocation : null}
             onFallback={handleMapFallback}
             onPlaybackEnded={handlePlaybackEnded}
             onPlaybackProgress={handlePlaybackProgress}
+            onUserPan={handleUserPan}
             points={routePoints}
             ref={routeMapRef}
           />
         )}
+        {isToday && Platform.OS !== "web" && !dayQuery.isPending ? (
+          <Pressable
+            accessibilityLabel={followLive ? "停止跟随当前位置" : "定位到当前位置"}
+            accessibilityRole="button"
+            onPress={handleLocatePress}
+            style={({ pressed }) => [
+              styles.locateButton,
+              followLive && styles.locateButtonActive,
+              pressed && styles.pressed,
+            ]}>
+            <AppIcon
+              name={followLive ? "navigate" : "locate"}
+              color={followLive ? colors.white : colors.accent}
+              size={20}
+            />
+          </Pressable>
+        ) : null}
       </View>
-      <Text style={styles.mapHint}>双指缩放 · 拖动查看路线</Text>
+      <Text style={styles.mapHint}>
+        {isToday
+          ? "双指缩放 · 拖动查看路线 · 点定位按钮跟随当前位置和朝向"
+          : "双指缩放 · 拖动查看路线"}
+      </Text>
 
       {mapAvailable && routePoints.length > 1 ? (
         <View style={styles.playbackBar}>
@@ -1408,6 +1482,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flex: 1,
     justifyContent: "center",
+  },
+  locateButton: {
+    ...shadows.card,
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    bottom: spacing.md,
+    height: 44,
+    justifyContent: "center",
+    position: "absolute",
+    right: spacing.md,
+    width: 44,
+  },
+  locateButtonActive: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   mapHint: {
     ...typography.caption,
