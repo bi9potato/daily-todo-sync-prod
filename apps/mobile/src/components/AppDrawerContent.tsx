@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { usePathname } from "expo-router";
 import {
@@ -23,6 +23,21 @@ const navItems = [
   { key: "passwords", label: "密码管理", icon: "key-outline" },
   { key: "ai", label: "AI 助手", icon: "sparkles-outline" },
 ] as const;
+
+type NavItemKey = (typeof navItems)[number]["key"];
+
+const androidHiddenNavItems: ReadonlySet<NavItemKey> = new Set([
+  "analytics",
+  "calendar",
+  "sleep",
+  "passwords",
+  "ai",
+]);
+
+const platformNavItems =
+  Platform.OS === "android"
+    ? navItems.filter((item) => !androidHiddenNavItems.has(item.key))
+    : navItems;
 
 // Content of the app's navigation drawer. Rendered by expo-router's <Drawer>
 // (via its `drawerContent` prop), which owns the panel chrome, safe areas,
@@ -75,7 +90,7 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
         <View style={styles.divider} />
 
         <View style={styles.navigation}>
-          {navItems.map((item) => {
+          {platformNavItems.map((item) => {
             const active = activeSection === item.key;
             return (
               <Pressable
