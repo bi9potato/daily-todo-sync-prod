@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AppIcon } from "@/components/AppIcon";
 import { useSession } from "@/session";
 import { colors, radius, spacing, typography } from "@/theme";
 
@@ -20,18 +21,52 @@ type AuthMode = "login" | "register";
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
-  const { signIn, signUp } = useSession();
+  const {
+    requestRegistrationCode,
+    signIn,
+    signInWithGoogle,
+    signUp,
+  } = useSession();
+  const isAndroid = Platform.OS === "android";
   const [mode, setMode] = useState<AuthMode>("login");
   const [identifier, setIdentifier] = useState("");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isPending, setIsPending] = useState(false);
+  const [isCodePending, setIsCodePending] = useState(false);
+  const [isGooglePending, setIsGooglePending] = useState(false);
+  const [codeCooldown, setCodeCooldown] = useState(0);
 
-  const canSubmit =
+  useEffect(() => {
+    if (codeCooldown <= 0) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setCodeCooldown((seconds) => Math.max(0, seconds - 1)),
+      1_000,
+    );
+    return () => clearTimeout(timer);
+  }, [codeCooldown]);
+
+  const registrationFieldsReady = Boolean(
+    username.trim() &&
+      email.trim() &&
+      (!isAndroid || /^\d{6}$/.test(verificationCode.trim())),
+  );
+  const canSubmit = Boolean(
     password.length >= 6 &&
-    (mode === "login" ? identifier.trim() : username.trim() && email.trim());
+      (mode === "login" ? identifier.trim() : registrationFieldsReady),
+  );
+  const canRequestCode = Boolean(
+    isAndroid &&
+      mode === "register" &&
+      email.trim().includes("@") &&
+      codeCooldown === 0 &&
+      !isCodePending,
+  );
 
   async function submit() {
     if (!canSubmit || isPending) {
@@ -43,12 +78,48 @@ export function AuthScreen() {
       if (mode === "login") {
         await signIn(identifier.trim(), password);
       } else {
-        await signUp(username.trim(), email.trim(), password);
+        await signUp(
+          username.trim(),
+          email.trim(),
+          password,
+          verificationCode.trim(),
+        );
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "认证失败，请稍后重试。");
     } finally {
       setIsPending(false);
+    }
+  }
+
+  async function sendVerificationCode() {
+    if (!canRequestCode) {
+      return;
+    }
+    setError("");
+    setIsCodePending(true);
+    try {
+      const retryAfterSeconds = await requestRegistrationCode(email.trim());
+      setCodeCooldown(retryAfterSeconds);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "验证码发送失败，请稍后重试。");
+    } finally {
+      setIsCodePending(false);
+    }
+  }
+
+  async function continueWithGoogle() {
+    if (isGooglePending) {
+      return;
+    }
+    setError("");
+    setIsGooglePending(true);
+    try {
+      await signInWithGoogle();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Google 登录失败，请稍后重试。");
+    } finally {
+      setIsGooglePending(false);
     }
   }
 
@@ -114,10 +185,56 @@ export function AuthScreen() {
                 autoCapitalize="none"
                 keyboardType="email-address"
                 label="邮箱"
-                onChangeText={setEmail}
+                onChangeText={(value) => {
+                  setEmail(value);
+                  setVerificationCode("");
+                  setCodeCooldown(0);
+                }}
                 returnKeyType="next"
                 value={email}
               />
+              {isAndroid ? (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>邮箱验证码</Text>
+                  <View style={styles.codeRow}>
+                    <TextInput
+                      autoCapitalize="none"
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      onChangeText={(value) =>
+                        setVerificationCode(value.replace(/\D/g, ""))
+                      }
+                      placeholder="6 位验证码"
+                      placeholderTextColor={colors.textMuted}
+                      selectionColor={colors.accent}
+                      style={[styles.input, styles.codeInput]}
+                      value={verificationCode}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={!canRequestCode}
+                      onPress={sendVerificationCode}
+                      style={({ pressed }) => [
+                        styles.codeButton,
+                        !canRequestCode && styles.secondaryButtonDisabled,
+                        pressed && styles.pressed,
+                      ]}>
+                      {isCodePending ? (
+                        <ActivityIndicator color={colors.accent} size="small" />
+                      ) : (
+                        <Text style={styles.codeButtonText}>
+                          {codeCooldown > 0
+                            ? `${codeCooldown} 秒`
+                            : "发送验证码"}
+                        </Text>
+                      )}
+                    </Pressable>
+                  </View>
+                  {codeCooldown > 0 ? (
+                    <Text style={styles.codeHint}>验证码已发送，请检查收件箱和垃圾邮件。</Text>
+                  ) : null}
+                </View>
+              ) : null}
             </>
           )}
           <Input
@@ -148,6 +265,34 @@ export function AuthScreen() {
               </Text>
             )}
           </Pressable>
+
+          {isAndroid ? (
+            <>
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>或</Text>
+                <View style={styles.dividerLine} />
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isGooglePending || isPending}
+                onPress={continueWithGoogle}
+                style={({ pressed }) => [
+                  styles.googleButton,
+                  (isGooglePending || isPending) && styles.secondaryButtonDisabled,
+                  pressed && styles.pressed,
+                ]}>
+                {isGooglePending ? (
+                  <ActivityIndicator color={colors.text} />
+                ) : (
+                  <>
+                    <AppIcon color="#4285F4" name="logo-google" size={21} />
+                    <Text style={styles.googleButtonText}>使用 Google 登录</Text>
+                  </>
+                )}
+              </Pressable>
+            </>
+          ) : null}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -247,6 +392,31 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: spacing.md,
   },
+  codeRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  codeInput: {
+    flex: 1,
+  },
+  codeButton: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    justifyContent: "center",
+    minWidth: 112,
+    paddingHorizontal: spacing.md,
+  },
+  codeButtonText: {
+    ...typography.label,
+    color: colors.accent,
+  },
+  codeHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
   error: {
     ...typography.label,
     color: colors.danger,
@@ -263,6 +433,39 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: colors.white,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  secondaryButtonDisabled: {
+    opacity: 0.45,
+  },
+  dividerRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+  dividerLine: {
+    backgroundColor: colors.border,
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  dividerText: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  googleButton: {
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "center",
+    minHeight: 52,
+  },
+  googleButtonText: {
+    color: colors.text,
     fontSize: 16,
     fontWeight: "700",
   },

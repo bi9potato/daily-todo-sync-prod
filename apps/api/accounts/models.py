@@ -32,3 +32,48 @@ class RefreshToken(models.Model):
     @staticmethod
     def hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+class EmailVerificationCode(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField()
+    code_hash = models.CharField(max_length=128)
+    request_ip = models.GenericIPAddressField(null=True, blank=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["email", "created_at"],
+                name="accounts_em_email_5e7f7e_idx",
+            ),
+            models.Index(
+                fields=["expires_at"],
+                name="accounts_em_expires_64f0a2_idx",
+            ),
+        ]
+
+
+class GoogleLoginExchangeCode(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    code_hash = models.CharField(max_length=64, unique=True)
+    code_challenge = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["expires_at"],
+                name="accounts_go_expires_560f35_idx",
+            ),
+        ]
+
+    @staticmethod
+    def hash_code(code: str) -> str:
+        return hashlib.sha256(code.encode("ascii")).hexdigest()

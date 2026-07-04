@@ -14,7 +14,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { OfflineBanner } from "@/components/OfflineBanner";
-import { SessionProvider } from "@/session";
+import { SessionProvider, useSession } from "@/session";
 import {
   flushClientLogs,
   installClientLogCapture,
@@ -79,6 +79,7 @@ const persister = createAsyncStoragePersister({
 // added/renamed) so stale-shaped cache entries get discarded instead of
 // crashing the screen that reads them.
 const QUERY_CACHE_BUSTER = "v1";
+const STACK_SCREEN_OPTIONS = { headerShown: false } as const;
 
 // Coming back online is when queued offline work actually has a chance to
 // land, so flush both offline queues and refetch so any change made
@@ -131,12 +132,31 @@ export default function RootLayout() {
             },
           }}>
           <SessionProvider>
-            <Stack screenOptions={{ headerShown: false }} />
+            <AppNavigator />
             <OfflineBanner />
             <StatusBar style="dark" />
           </SessionProvider>
         </PersistQueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+  );
+}
+
+function AppNavigator() {
+  const { status } = useSession();
+
+  if (Platform.OS !== "android") {
+    return <Stack screenOptions={STACK_SCREEN_OPTIONS} />;
+  }
+
+  return (
+    <Stack screenOptions={STACK_SCREEN_OPTIONS}>
+      <Stack.Protected guard={status !== "authenticated"}>
+        <Stack.Screen name="index" />
+      </Stack.Protected>
+      <Stack.Protected guard={status === "authenticated"}>
+        <Stack.Screen name="(app)" />
+      </Stack.Protected>
+    </Stack>
   );
 }

@@ -124,10 +124,33 @@ REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "30"))
 # accounts/tokens.py:issue_mobility_token.
 MOBILITY_TOKEN_TTL_DAYS = int(os.getenv("MOBILITY_TOKEN_TTL_DAYS", "30"))
 
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
+)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "false").lower() == "true"
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Daily Todo <noreply@localhost>")
+EMAIL_VERIFICATION_CODE_TTL_MINUTES = int(
+    os.getenv("EMAIL_VERIFICATION_CODE_TTL_MINUTES", "10")
+)
+EMAIL_VERIFICATION_RESEND_SECONDS = int(
+    os.getenv("EMAIL_VERIFICATION_RESEND_SECONDS", "60")
+)
+
 GOOGLE_CALENDAR_CLIENT_ID = os.getenv("GOOGLE_CALENDAR_CLIENT_ID", "")
 GOOGLE_CALENDAR_CLIENT_SECRET = os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET", "")
 GOOGLE_CALENDAR_REDIRECT_URI = os.getenv("GOOGLE_CALENDAR_REDIRECT_URI", "")
 GOOGLE_AUTH_REDIRECT_URI = os.getenv("GOOGLE_AUTH_REDIRECT_URI", "")
+ANDROID_GOOGLE_AUTH_RETURN_URL = os.getenv(
+    "ANDROID_GOOGLE_AUTH_RETURN_URL",
+    "daily-todo://auth/google",
+)
 GOOGLE_CALENDAR_DEFAULT_ID = os.getenv("GOOGLE_CALENDAR_DEFAULT_ID", "primary")
 GOOGLE_CALENDAR_NAME = os.getenv("GOOGLE_CALENDAR_NAME", "Daily Todo Sync")
 GOOGLE_CALENDAR_EVENT_DURATION_MINUTES = int(

@@ -8,8 +8,14 @@ import {
   type PropsWithChildren,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Platform } from "react-native";
 
-import { login, register } from "@/lib/api";
+import {
+  login,
+  register,
+  registerAndroid,
+  requestAndroidRegistrationCode,
+} from "@/lib/api";
 import {
   clearTokens,
   loadTokens,
@@ -17,13 +23,22 @@ import {
   subscribeToTokenClear,
 } from "@/lib/auth-storage";
 import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
+import { authenticateWithGoogle } from "@/lib/google-auth";
+import type { TokenPair } from "@/types";
 
 type SessionStatus = "loading" | "authenticated" | "unauthenticated";
 
 type SessionContextValue = {
   status: SessionStatus;
   signIn: (identifier: string, password: string) => Promise<void>;
-  signUp: (username: string, email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<boolean>;
+  requestRegistrationCode: (email: string) => Promise<number>;
+  signUp: (
+    username: string,
+    email: string,
+    password: string,
+    verificationCode?: string,
+  ) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -66,24 +81,61 @@ export function SessionProvider({ children }: PropsWithChildren) {
     }
   }, [status]);
 
-  const signIn = useCallback(async (identifier: string, password: string) => {
-    const tokens = await login({ identifier, password });
+  const establishSession = useCallback(async (tokens: TokenPair, event: string) => {
     await saveTokens(tokens);
     setStatus("authenticated");
-    recordClientLog("info", "User signed in", { source: "session" });
+    recordClientLog("info", event, { source: "session" });
     void flushClientLogs();
   }, []);
 
-  const signUp = useCallback(
-    async (username: string, email: string, password: string) => {
-      const tokens = await register({ username, email, password });
-      await saveTokens(tokens);
-      setStatus("authenticated");
-      recordClientLog("info", "User signed up", { source: "session" });
-      void flushClientLogs();
+  const signIn = useCallback(
+    async (identifier: string, password: string) => {
+      const tokens = await login({ identifier, password });
+      await establishSession(tokens, "User signed in");
     },
-    [],
+    [establishSession],
   );
+
+  const requestRegistrationCode = useCallback(async (email: string) => {
+    if (Platform.OS !== "android") {
+      throw new Error("邮箱验证码注册仅用于 Android。");
+    }
+    const result = await requestAndroidRegistrationCode(email);
+    return result.retryAfterSeconds;
+  }, []);
+
+  const signUp = useCallback(
+    async (
+      username: string,
+      email: string,
+      password: string,
+      verificationCode = "",
+    ) => {
+      const tokens =
+        Platform.OS === "android"
+          ? await registerAndroid({
+              username,
+              email,
+              password,
+              verificationCode,
+            })
+          : await register({ username, email, password });
+      await establishSession(tokens, "User signed up");
+    },
+    [establishSession],
+  );
+
+  const signInWithGoogle = useCallback(async () => {
+    if (Platform.OS !== "android") {
+      throw new Error("Google 登录目前仅用于 Android。");
+    }
+    const tokens = await authenticateWithGoogle();
+    if (!tokens) {
+      return false;
+    }
+    await establishSession(tokens, "User signed in with Google");
+    return true;
+  }, [establishSession]);
 
   const signOut = useCallback(async () => {
     recordClientLog("info", "User signed out", { source: "session" });
@@ -94,8 +146,22 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [queryClient]);
 
   const value = useMemo(
-    () => ({ status, signIn, signUp, signOut }),
-    [signIn, signOut, signUp, status],
+    () => ({
+      status,
+      requestRegistrationCode,
+      signIn,
+      signInWithGoogle,
+      signOut,
+      signUp,
+    }),
+    [
+      requestRegistrationCode,
+      signIn,
+      signInWithGoogle,
+      signOut,
+      signUp,
+      status,
+    ],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

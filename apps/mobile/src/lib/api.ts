@@ -260,6 +260,46 @@ export function register(payload: {
   );
 }
 
+export function requestAndroidRegistrationCode(email: string) {
+  return request<{ detail: string; retryAfterSeconds: number }>(
+    "/auth/android/register/code",
+    { method: "POST", body: JSON.stringify({ email }) },
+    false,
+  );
+}
+
+export function registerAndroid(payload: {
+  username: string;
+  email: string;
+  password: string;
+  verificationCode: string;
+}) {
+  return request<TokenPair>(
+    "/auth/android/register",
+    { method: "POST", body: JSON.stringify(payload) },
+    false,
+  );
+}
+
+export function startAndroidGoogleLogin(codeChallenge: string) {
+  return request<{ authorizationUrl: string; redirectUrl: string }>(
+    "/auth/android/google",
+    { method: "POST", body: JSON.stringify({ codeChallenge }) },
+    false,
+  );
+}
+
+export function exchangeAndroidGoogleLogin(code: string, codeVerifier: string) {
+  return request<TokenPair>(
+    "/auth/android/google/exchange",
+    {
+      method: "POST",
+      body: JSON.stringify({ code, codeVerifier }),
+    },
+    false,
+  );
+}
+
 export function getMe() {
   return request<User>("/auth/me");
 }
