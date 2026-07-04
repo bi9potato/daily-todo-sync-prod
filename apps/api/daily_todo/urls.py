@@ -8,6 +8,7 @@ from ninja import NinjaAPI
 
 from accounts.api import router as auth_router
 from daily_todo.ai_api import router as ai_router
+from device_timeline.api import router as device_timeline_router
 from diagnostics.api import router as diagnostics_router
 from integrations.api import router as integrations_router
 from mobility.api import router as mobility_router
@@ -38,6 +39,7 @@ def latest_mobile_release(request):
 
 api.add_router("/auth", auth_router)
 api.add_router("/ai", ai_router)
+api.add_router("/device-timeline", device_timeline_router)
 api.add_router("/diagnostics", diagnostics_router)
 api.add_router("/integrations", integrations_router)
 api.add_router("/mobility", mobility_router)

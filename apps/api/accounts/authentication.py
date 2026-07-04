@@ -1,6 +1,10 @@
 from ninja.security import HttpBearer
 
-from .tokens import authenticate_access_token, authenticate_mobility_token
+from .tokens import (
+    authenticate_access_token,
+    authenticate_device_timeline_token,
+    authenticate_mobility_token,
+)
 
 
 class AccessTokenAuth(HttpBearer):
@@ -20,6 +24,18 @@ class MobilityUploadAuth(HttpBearer):
         )
 
 
+class DeviceTimelineUploadAuth(HttpBearer):
+    """Mirrors MobilityUploadAuth for the device-timeline foreground
+    service: accepts its long-lived scoped token, falling back to a regular
+    access token for the JS app's own queue flushes."""
+
+    def authenticate(self, request, token):
+        return authenticate_device_timeline_token(
+            token
+        ) or authenticate_access_token(token)
+
+
 bearer_auth = AccessTokenAuth()
 mobility_upload_auth = MobilityUploadAuth()
+device_timeline_upload_auth = DeviceTimelineUploadAuth()
 

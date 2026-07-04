@@ -166,6 +166,21 @@ export type MobilityTimelineExport = {
   timelineObjects: unknown[];
 };
 
+export type DeviceTimelineItem = {
+  type: "app" | "screen_on" | "screen_off" | "unlock" | "shutdown" | "boot";
+  time: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  durationMinutes: number | null;
+  packageName: string | null;
+  appLabel: string | null;
+};
+
+export type DeviceTimelineDay = {
+  date: string;
+  timeline: DeviceTimelineItem[];
+};
+
 export type MobilityPointInput = {
   clientId: string;
   recordedAt: string;

@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "accounts",
+    "device_timeline",
     "diagnostics",
     "integrations",
     "mobility",
@@ -123,6 +124,12 @@ REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "30"))
 # Scoped token the Android tracking service uploads with; see
 # accounts/tokens.py:issue_mobility_token.
 MOBILITY_TOKEN_TTL_DAYS = int(os.getenv("MOBILITY_TOKEN_TTL_DAYS", "30"))
+
+# Scoped token the Android device-timeline service uploads with; see
+# accounts/tokens.py:issue_device_timeline_token.
+DEVICE_TIMELINE_TOKEN_TTL_DAYS = int(
+    os.getenv("DEVICE_TIMELINE_TOKEN_TTL_DAYS", "30")
+)
 
 EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",

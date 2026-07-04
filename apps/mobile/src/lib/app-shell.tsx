@@ -14,6 +14,7 @@ import { AppState } from "react-native";
 import { getMe } from "@/lib/api";
 import { routeForSection, type AppSection } from "@/lib/app-routes";
 import { toDateKey } from "@/lib/date";
+import { useDeviceTimelineRuntime } from "@/lib/useDeviceTimelineRuntime";
 import { useMobilityRuntime } from "@/lib/useMobilityRuntime";
 import type { CalendarViewMode } from "@/screens/CalendarScreen";
 
@@ -25,6 +26,7 @@ type AppShellContextValue = {
   setCalendarView: (view: CalendarViewMode) => void;
   displayName: string;
   mobilityRuntime: ReturnType<typeof useMobilityRuntime>;
+  deviceTimeline: ReturnType<typeof useDeviceTimelineRuntime>;
   navigateToSection: (section: AppSection) => void;
   openDate: (date: string) => void;
 };
@@ -44,6 +46,7 @@ export function AppShellProvider({ children }: PropsWithChildren) {
   const selectedDate = selectedDateOverride ?? today;
   const [calendarView, setCalendarView] = useState<CalendarViewMode>("week");
   const mobilityRuntime = useMobilityRuntime(today);
+  const deviceTimeline = useDeviceTimelineRuntime();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe });
   const displayName =
     meQuery.data?.displayName || meQuery.data?.username || "Daily Todo";
@@ -124,6 +127,7 @@ export function AppShellProvider({ children }: PropsWithChildren) {
       setCalendarView,
       displayName,
       mobilityRuntime,
+      deviceTimeline,
       navigateToSection,
       openDate,
     }),
@@ -133,6 +137,7 @@ export function AppShellProvider({ children }: PropsWithChildren) {
       calendarView,
       displayName,
       mobilityRuntime,
+      deviceTimeline,
       navigateToSection,
       openDate,
       setSelectedDate,

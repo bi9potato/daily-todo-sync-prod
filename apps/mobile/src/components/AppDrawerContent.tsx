@@ -19,6 +19,7 @@ const navItems = [
   { key: "analytics", label: "分析", icon: "analytics-outline" },
   { key: "calendar", label: "日历", icon: "calendar-outline" },
   { key: "mobility", label: "足迹地图", icon: "map-outline" },
+  { key: "device-timeline", label: "设备时间线", icon: "time-outline" },
   { key: "sleep", label: "睡眠", icon: "moon-outline" },
   { key: "passwords", label: "密码管理", icon: "key-outline" },
   { key: "ai", label: "AI 助手", icon: "sparkles-outline" },
@@ -34,10 +35,18 @@ const androidHiddenNavItems: ReadonlySet<NavItemKey> = new Set([
   "ai",
 ]);
 
-const platformNavItems =
+// The reverse of the set above: features with no non-Android implementation
+// at all (device-timeline has no iOS/web native service, unlike mobility
+// which supports iOS through expo-task-manager).
+const androidOnlyNavItems: ReadonlySet<NavItemKey> = new Set([
+  "device-timeline",
+]);
+
+const platformNavItems = navItems.filter((item) =>
   Platform.OS === "android"
-    ? navItems.filter((item) => !androidHiddenNavItems.has(item.key))
-    : navItems;
+    ? !androidHiddenNavItems.has(item.key)
+    : !androidOnlyNavItems.has(item.key),
+);
 
 // Content of the app's navigation drawer. Rendered by expo-router's <Drawer>
 // (via its `drawerContent` prop), which owns the panel chrome, safe areas,

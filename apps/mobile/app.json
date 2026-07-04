@@ -66,6 +66,7 @@
         }
       ],
       "./plugins/with-native-mobility-service",
+      "./plugins/with-device-timeline-service",
       "./plugins/with-health-connect",
       "@maplibre/maplibre-react-native",
       [

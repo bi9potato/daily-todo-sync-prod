@@ -39,6 +39,23 @@ def issue_mobility_token(user) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
 
 
+def issue_device_timeline_token(user) -> str:
+    """Long-lived token scoped to device-timeline uploads only, mirroring
+    issue_mobility_token: the Android foreground service that logs app
+    switches and screen lock/unlock runs far longer than a 15-minute access
+    token survives. Accepted exclusively by device-timeline endpoints."""
+    now = timezone.now()
+    payload = {
+        "type": "device_timeline",
+        "sub": str(user.id),
+        "iat": int(now.timestamp()),
+        "exp": int(
+            (now + timedelta(days=settings.DEVICE_TIMELINE_TOKEN_TTL_DAYS)).timestamp()
+        ),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
 def issue_refresh_token(request, user) -> str:
     raw_token = token_urlsafe(48)
     RefreshToken.objects.create(
@@ -82,4 +99,8 @@ def authenticate_access_token(token: str):
 
 def authenticate_mobility_token(token: str):
     return _authenticate_token_of_type(token, "mobility")
+
+
+def authenticate_device_timeline_token(token: str):
+    return _authenticate_token_of_type(token, "device_timeline")
 

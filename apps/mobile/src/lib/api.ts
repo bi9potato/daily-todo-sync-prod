@@ -7,6 +7,7 @@ import type {
   ClientLogBatchPayload,
   DayTodos,
   DeletedTodoOccurrence,
+  DeviceTimelineDay,
   GoogleCalendarAuthUrl,
   GoogleCalendarStatus,
   GoogleCalendarSyncResult,
@@ -382,6 +383,23 @@ export function setMobilityStepSample(
     method: "PUT",
     body: JSON.stringify(payload),
   });
+}
+
+export function getDeviceTimelineDay(date: string) {
+  return request<DeviceTimelineDay>(`/device-timeline/days/${date}`);
+}
+
+// Long-lived, upload-only token for the Android foreground service, mirroring
+// getMobilityDeviceToken - see that function's comment for why the service
+// cannot just use the 15-minute access token.
+export function getDeviceTimelineDeviceToken() {
+  return request<{ token: string }>("/device-timeline/device-token", {
+    method: "POST",
+  });
+}
+
+export function clearDeviceTimelineHistory() {
+  return request<void>("/device-timeline/history", { method: "DELETE" });
 }
 
 export function createTask(date: string, payload: TaskCreatePayload) {
