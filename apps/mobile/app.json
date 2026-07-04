@@ -27,7 +27,8 @@
         "android.permission.ACTIVITY_RECOGNITION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.SCHEDULE_EXACT_ALARM"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#FFFEFA",
@@ -73,6 +74,7 @@
       ],
       "./plugins/with-native-mobility-service",
       "./plugins/with-device-timeline-service",
+      "./plugins/with-reminder-settings",
       "./plugins/with-health-connect",
       "@maplibre/maplibre-react-native",
       [

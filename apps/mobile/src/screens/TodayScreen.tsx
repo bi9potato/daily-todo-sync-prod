@@ -277,6 +277,7 @@ export function TodayScreen({
             ? { reminderTime: payload.reminderTime }
             : {}),
           ...(payload.repeat !== undefined ? { repeat: payload.repeat } : {}),
+          ...(payload.location !== undefined ? { location: payload.location } : {}),
         };
         queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
           replaceTask(current, optimistic),

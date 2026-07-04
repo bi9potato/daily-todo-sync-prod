@@ -194,10 +194,10 @@ def location_payload(location: TaskLocationIn | None) -> dict | None:
         "longitude": location.longitude,
         "recorded_at": location.recordedAt or timezone.now(),
         "reminder_enabled": location.reminderEnabled,
-        # Clamped to a sane range: tighter than ~50m is smaller than typical
-        # consumer GPS error (the geofence would rarely fire), and wider than
-        # 2km stops being a useful "arrival" signal.
-        "radius_meters": max(50, min(location.radiusMeters or 150, 2000)),
+        # Android's official geofencing guidance recommends a minimum radius
+        # of 100-150m. Smaller fences are unreliable with normal Wi-Fi/GPS
+        # accuracy; 2km remains a practical upper bound for an arrival cue.
+        "radius_meters": max(100, min(location.radiusMeters or 150, 2000)),
     }
 
 

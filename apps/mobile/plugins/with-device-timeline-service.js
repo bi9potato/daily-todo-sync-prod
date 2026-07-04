@@ -459,6 +459,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.dailytodosync.app.devicetimeline.DeviceTimelineModule
 import com.dailytodosync.app.devicetimeline.DeviceTimelineQueue
@@ -491,6 +492,7 @@ class DeviceTimelineService : Service() {
   private var pollHandler: Handler? = null
   private var lastEventQueryTime = 0L
   private var lastForegroundPackage: String? = null
+  private var lastHeartbeatAt = 0L
   private var screenReceiverRegistered = false
 
   private val screenStateReceiver = object : BroadcastReceiver() {
@@ -650,7 +652,11 @@ class DeviceTimelineService : Service() {
 
   private fun startPolling() {
     if (pollThread != null) return
-    lastEventQueryTime = System.currentTimeMillis()
+    val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+    if (powerManager?.isInteractive == false) return
+    // Query a short lookback on service start so the app already in front is
+    // discovered immediately instead of waiting for the next app switch.
+    lastEventQueryTime = System.currentTimeMillis() - EVENT_LOOKBACK_MS
     val handlerThread = HandlerThread("DeviceTimelinePoll").apply { start() }
     pollThread = handlerThread
     val handler = Handler(handlerThread.looper)
@@ -670,6 +676,7 @@ class DeviceTimelineService : Service() {
     pollThread?.quitSafely()
     pollThread = null
     lastForegroundPackage = null
+    lastHeartbeatAt = 0L
   }
 
   private fun pollForegroundApp() {
@@ -679,19 +686,32 @@ class DeviceTimelineService : Service() {
       val now = System.currentTimeMillis()
       val events = usageStatsManager.queryEvents(lastEventQueryTime, now)
       lastEventQueryTime = now
-      var latestPackage: String? = null
-      var latestTime = 0L
       val event = UsageEvents.Event()
       while (events.hasNextEvent()) {
         events.getNextEvent(event)
-        if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND && event.timeStamp >= latestTime) {
-          latestTime = event.timeStamp
-          latestPackage = event.packageName
+        // ACTIVITY_RESUMED is the documented API 29+ name for the legacy
+        // MOVE_TO_FOREGROUND value and carries the real transition time.
+        if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
+          val foregroundPackage = event.packageName ?: continue
+          if (foregroundPackage != lastForegroundPackage) {
+            lastForegroundPackage = foregroundPackage
+            lastHeartbeatAt = event.timeStamp
+            enqueue(
+              EVENT_APP_FOREGROUND,
+              foregroundPackage,
+              resolveAppLabel(foregroundPackage),
+              event.timeStamp,
+            )
+            scheduleUpload()
+          }
         }
       }
-      if (latestPackage != null && latestPackage != lastForegroundPackage) {
-        lastForegroundPackage = latestPackage
-        enqueue(EVENT_APP_FOREGROUND, latestPackage, resolveAppLabel(latestPackage))
+      // A minute heartbeat bounds the error for a still-open app segment and
+      // lets the server report useful totals before the next app switch.
+      val currentPackage = lastForegroundPackage
+      if (currentPackage != null && now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+        lastHeartbeatAt = now
+        enqueue(EVENT_APP_FOREGROUND, currentPackage, resolveAppLabel(currentPackage), now)
         scheduleUpload()
       }
     } catch (error: Throwable) {
@@ -708,11 +728,16 @@ class DeviceTimelineService : Service() {
     }
   }
 
-  private fun enqueue(eventType: String, packageName: String?, appLabel: String?) {
+  private fun enqueue(
+    eventType: String,
+    packageName: String?,
+    appLabel: String?,
+    occurredAtMillis: Long = System.currentTimeMillis(),
+  ) {
     try {
-      val recordedAt = ISO_FORMAT.get().format(Date())
+      val recordedAt = ISO_FORMAT.get().format(Date(occurredAtMillis))
       val event = JSONObject()
-        .put("clientId", "native-\${eventType}-\${System.currentTimeMillis()}-\${random.nextInt(1_000_000)}")
+        .put("clientId", "native-\${eventType}-\${occurredAtMillis}-\${random.nextInt(1_000_000)}")
         .put("eventType", eventType)
         .put("occurredAt", recordedAt)
         .put("packageName", packageName ?: "")
@@ -875,6 +900,8 @@ class DeviceTimelineService : Service() {
     // outright while the screen is off (see the screen-state receiver) since
     // there is nothing meaningful to attribute foreground time to then.
     private const val POLL_INTERVAL_MS = 4_000L
+    private const val HEARTBEAT_INTERVAL_MS = 60_000L
+    private const val EVENT_LOOKBACK_MS = 5 * 60_000L
     private const val MAX_UPLOAD_EVENTS = 200
     private const val NETWORK_TIMEOUT_MS = 15_000
     private const val PREFS_NAME = "daily_todo_device_timeline"

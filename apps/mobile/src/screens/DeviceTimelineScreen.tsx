@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -30,12 +30,37 @@ const MARKER_META: Record<
   shutdown: { icon: "power-outline", label: "关机" },
   boot: { icon: "power-outline", label: "开机" },
 };
+const EMPTY_TIMELINE: DeviceTimelineItem[] = [];
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function durationSeconds(item: DeviceTimelineItem) {
+  if (!item.startTime || !item.endTime) {
+    return Math.max(0, (item.durationMinutes ?? 0) * 60);
+  }
+  const start = new Date(item.startTime).getTime();
+  const end = new Date(item.endTime).getTime();
+  return Number.isFinite(start) && Number.isFinite(end)
+    ? Math.max(0, Math.round((end - start) / 1_000))
+    : 0;
+}
+
+function formatDuration(seconds: number) {
+  if (seconds < 60) {
+    return seconds > 0 ? "不到 1 分钟" : "0 分钟";
+  }
+  const minutes = Math.round(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (!hours) {
+    return `${minutes} 分钟`;
+  }
+  return remainder ? `${hours} 小时 ${remainder} 分钟` : `${hours} 小时`;
 }
 
 export function DeviceTimelineScreen({
@@ -103,10 +128,44 @@ export function DeviceTimelineScreen({
     );
   }
 
-  const timeline = dayQuery.data?.timeline ?? [];
+  const timeline = dayQuery.data?.timeline ?? EMPTY_TIMELINE;
+  const appUsage = useMemo(() => {
+    const byPackage = new Map<
+      string,
+      {
+        appLabel: string;
+        packageName: string;
+        sessionCount: number;
+        totalSeconds: number;
+      }
+    >();
+    for (const item of timeline) {
+      if (item.type !== "app") {
+        continue;
+      }
+      const packageName = item.packageName || item.appLabel || "unknown";
+      const current = byPackage.get(packageName) ?? {
+        appLabel: item.appLabel || packageName,
+        packageName,
+        sessionCount: 0,
+        totalSeconds: 0,
+      };
+      current.sessionCount += 1;
+      current.totalSeconds += durationSeconds(item);
+      byPackage.set(packageName, current);
+    }
+    return [...byPackage.values()]
+      .filter((item) => item.totalSeconds > 0)
+      .sort((left, right) => right.totalSeconds - left.totalSeconds);
+  }, [timeline]);
+  const totalAppUsageSeconds = useMemo(
+    () => appUsage.reduce((total, item) => total + item.totalSeconds, 0),
+    [appUsage],
+  );
+  const longestAppUsageSeconds = appUsage[0]?.totalSeconds ?? 1;
 
   return (
-    <ScreenEnter style={{ flex: 1 }}>
+    <ScreenEnter style={{ backgroundColor: colors.surface, flex: 1 }}>
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}>
@@ -203,6 +262,48 @@ export function DeviceTimelineScreen({
           </View>
         ) : null}
 
+        {appUsage.length ? (
+          <View style={styles.usageSummary}>
+            <Text style={styles.sectionTitle}>应用使用总时长</Text>
+            <Text style={styles.totalUsage}>
+              {formatDuration(totalAppUsageSeconds)}
+            </Text>
+            <View style={styles.usageList}>
+              {appUsage.map((item) => (
+                <View key={item.packageName} style={styles.usageRow}>
+                  <View style={styles.appIcon}>
+                    <AppIcon name="apps-outline" color={colors.accent} size={18} />
+                  </View>
+                  <View style={styles.usageCopy}>
+                    <View style={styles.usageHeading}>
+                      <Text numberOfLines={1} style={styles.usageLabel}>
+                        {item.appLabel}
+                      </Text>
+                      <Text style={styles.usageDuration}>
+                        {formatDuration(item.totalSeconds)}
+                      </Text>
+                    </View>
+                    <View style={styles.usageTrack}>
+                      <View
+                        style={[
+                          styles.usageFill,
+                          {
+                            width: `${Math.max(
+                              4,
+                              (item.totalSeconds / longestAppUsageSeconds) * 100,
+                            )}%`,
+                          },
+                        ]}
+                      />
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        <Text style={styles.sectionTitle}>时间线</Text>
         <View style={styles.timelineSection}>
           {dayQuery.isPending ? (
             <ActivityIndicator color={colors.accent} style={styles.loading} />
@@ -264,9 +365,7 @@ function TimelineRow({
             {item.endTime && item.endTime !== item.startTime
               ? ` - ${formatTime(item.endTime)}`
               : ""}
-            {item.durationMinutes != null
-              ? ` · ${item.durationMinutes} 分钟`
-              : ""}
+            {` · ${formatDuration(durationSeconds(item))}`}
           </Text>
         </View>
       </View>
@@ -308,11 +407,10 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   authorizationCard: {
-    ...shadows.floating,
     alignItems: "center",
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.xl,
+    borderRadius: radius.md,
     borderWidth: 1,
     flexDirection: "row",
     gap: spacing.md,
@@ -398,11 +496,75 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   timelineSection: {
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.xs,
+  },
+  sectionTitle: {
+    ...typography.section,
+    color: colors.text,
+  },
+  usageSummary: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+    paddingVertical: spacing.lg,
+  },
+  totalUsage: {
+    color: colors.text,
+    fontSize: 30,
+    fontVariant: ["tabular-nums"],
+    fontWeight: "700",
+    lineHeight: 38,
+  },
+  usageList: {
+    gap: spacing.md,
+    marginTop: spacing.xs,
+  },
+  usageRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+  appIcon: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+    height: 36,
+    justifyContent: "center",
+    width: 36,
+  },
+  usageCopy: {
+    flex: 1,
+    gap: 5,
+    minWidth: 0,
+  },
+  usageHeading: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  usageLabel: {
+    ...typography.body,
+    color: colors.text,
+    flex: 1,
+  },
+  usageDuration: {
+    ...typography.label,
+    color: colors.text,
+    fontVariant: ["tabular-nums"],
+  },
+  usageTrack: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    height: 5,
+    overflow: "hidden",
+  },
+  usageFill: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    height: "100%",
   },
   loading: {
     paddingVertical: spacing.lg,

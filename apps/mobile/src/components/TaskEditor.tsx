@@ -2,6 +2,7 @@ import { useState } from "react";
 import * as Location from "expo-location";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -18,8 +19,13 @@ import dayjs from "dayjs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
+import { AndroidReminderSettings } from "./AndroidReminderSettings";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { ScreenEnter } from "./ScreenEnter";
+import {
+  hasExactAlarmAccess,
+  openExactAlarmSettings,
+} from "@/lib/android-reminder-settings";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
 import {
   hasLocationReminderPermission,
@@ -245,18 +251,22 @@ export function TaskEditor({
     task?.location ?? null,
   );
   const [isLocating, setIsLocating] = useState(false);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
   const [locationError, setLocationError] = useState("");
   const [isRequestingLocationReminder, setIsRequestingLocationReminder] =
     useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [reminderPermissionWarning, setReminderPermissionWarning] = useState("");
 
-  async function toggleLocationReminder() {
-    if (!taskLocation) {
+  async function toggleLocationReminder(enabled: boolean) {
+    if (!enabled) {
+      if (taskLocation) {
+        setTaskLocation({ ...taskLocation, reminderEnabled: false });
+      }
       return;
     }
-    if (taskLocation.reminderEnabled) {
-      setTaskLocation({ ...taskLocation, reminderEnabled: false });
+    if (!taskLocation) {
+      setLocationError("请先输入地点或使用当前位置。");
       return;
     }
     setIsRequestingLocationReminder(true);
@@ -266,9 +276,26 @@ export function TaskEditor({
         throw new Error("到达地点提醒目前仅支持 Android。");
       }
       if (!(await hasLocationReminderPermission())) {
-        if (!(await requestLocationReminderPermission())) {
+        const shouldContinue = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "允许后台位置",
+            "地点提醒需要在应用未打开时判断你是否进入提醒范围。下一步请在系统设置中将位置权限设为“始终允许”。",
+            [
+              { text: "暂不开启", style: "cancel", onPress: () => resolve(false) },
+              { text: "继续", onPress: () => resolve(true) },
+            ],
+            {
+              cancelable: true,
+              onDismiss: () => resolve(false),
+            },
+          );
+        });
+        if (!shouldContinue || !(await requestLocationReminderPermission())) {
           throw new Error("需要选择“始终允许”位置权限才能在到达时提醒。");
         }
+      }
+      if (!(await ensureNotificationPermission())) {
+        throw new Error("需要开启通知权限，到达地点后才能弹出提醒。");
       }
       setTaskLocation({ ...taskLocation, reminderEnabled: true });
     } catch (error) {
@@ -280,7 +307,46 @@ export function TaskEditor({
     }
   }
 
-  async function useCurrentLocation() {
+  async function searchLocation(address: string) {
+    const query = address.trim();
+    if (!query) {
+      setLocationError("请输入地点或地址。");
+      return;
+    }
+    setIsSearchingLocation(true);
+    setLocationError("");
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) {
+        throw new Error("需要位置权限才能查找地点。");
+      }
+      const results = await withTimeout(
+        Location.geocodeAsync(query),
+        10_000,
+        "地点查找超时，请稍后重试。",
+      );
+      const result = results[0];
+      if (!result) {
+        throw new Error("没有找到这个地点，请输入更完整的地址。");
+      }
+      setTaskLocation({
+        name: query,
+        latitude: result.latitude,
+        longitude: result.longitude,
+        recordedAt: new Date().toISOString(),
+        reminderEnabled: taskLocation?.reminderEnabled ?? false,
+        radiusMeters: Math.max(100, taskLocation?.radiusMeters ?? 150),
+      });
+    } catch (error) {
+      setLocationError(
+        error instanceof Error ? error.message : "无法查找这个地点",
+      );
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  }
+
+  async function captureCurrentLocation() {
     setIsLocating(true);
     setLocationError("");
     try {
@@ -330,8 +396,18 @@ export function TaskEditor({
     }
   }
 
-  function save() {
+  async function save() {
     if (!task || !text.trim()) {
+      return;
+    }
+    if (
+      Platform.OS === "android" &&
+      reminderTime &&
+      !(await hasExactAlarmAccess())
+    ) {
+      setReminderPermissionWarning(
+        "请允许“闹钟和提醒”权限，确保时间提醒按时触发。",
+      );
       return;
     }
     onSave(task, {
@@ -453,7 +529,80 @@ export function TaskEditor({
             />
           </View>
 
-          <View style={styles.detailsSurface}>
+          <View
+            style={[
+              styles.detailsSurface,
+              Platform.OS === "android" && styles.androidDetailsSurface,
+            ]}>
+            {Platform.OS === "android" ? (
+              <>
+                <AndroidReminderSettings
+                  isLocationBusy={isLocating || isSearchingLocation}
+                  isRequestingLocationReminder={isRequestingLocationReminder}
+                  location={taskLocation}
+                  locationError={locationError}
+                  onChangeLocationName={(name) =>
+                    setTaskLocation((current) =>
+                      current ? { ...current, name } : current,
+                    )
+                  }
+                  onChangeRadius={(radiusMeters) =>
+                    setTaskLocation((current) =>
+                      current ? { ...current, radiusMeters } : current,
+                    )
+                  }
+                  onClearLocation={() => setTaskLocation(null)}
+                  onClearTime={() => {
+                    setReminderTime("");
+                    setReminderPermissionWarning("");
+                  }}
+                  onOpenExactAlarmSettings={() => {
+                    void openExactAlarmSettings().catch(() => {
+                      setReminderPermissionWarning(
+                        "无法打开系统设置，请在“特殊应用权限”中允许闹钟和提醒。",
+                      );
+                    });
+                  }}
+                  onOpenTimePicker={() => setTimePickerOpen(true)}
+                  onSearchLocation={searchLocation}
+                  onToggleLocationReminder={(enabled) =>
+                    void toggleLocationReminder(enabled)
+                  }
+                  onUseCurrentLocation={() => void captureCurrentLocation()}
+                  reminderPermissionWarning={reminderPermissionWarning}
+                  reminderTime={reminderTime}
+                />
+                {timePickerOpen ? (
+                  <DateTimePicker
+                    is24Hour
+                    mode="time"
+                    onChange={(event, date) => {
+                      setTimePickerOpen(false);
+                      if (event.type === "set" && date) {
+                        setReminderTime(dayjs(date).format("HH:mm"));
+                        setReminderPermissionWarning("");
+                        void Promise.all([
+                          ensureNotificationPermission(),
+                          hasExactAlarmAccess(),
+                        ]).then(([notificationsGranted, exactAlarmGranted]) => {
+                          if (!notificationsGranted) {
+                            setReminderPermissionWarning(
+                              "请开启通知权限，时间提醒才能弹出。",
+                            );
+                          } else if (!exactAlarmGranted) {
+                            setReminderPermissionWarning(
+                              "请允许“闹钟和提醒”权限，确保按时触发。",
+                            );
+                          }
+                        });
+                      }
+                    }}
+                    value={reminderTimeAsDate(reminderTime)}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <>
             <View style={styles.detailRow}>
               <AppIcon name="notifications-outline" color={colors.text} size={21} />
               <Text style={styles.detailLabel}>提醒</Text>
@@ -554,7 +703,7 @@ export function TaskEditor({
                 ) : (
                   <Pressable
                     accessibilityRole="button"
-                    onPress={useCurrentLocation}
+                    onPress={captureCurrentLocation}
                     style={({ pressed }) => [
                       styles.locationButton,
                       pressed && styles.pressed,
@@ -588,7 +737,9 @@ export function TaskEditor({
                     ) : (
                       <Switch
                         accessibilityLabel="到达时提醒"
-                        onValueChange={toggleLocationReminder}
+                        onValueChange={(enabled) =>
+                          void toggleLocationReminder(enabled)
+                        }
                         trackColor={{
                           false: colors.borderStrong,
                           true: colors.accent,
@@ -634,6 +785,8 @@ export function TaskEditor({
                 <Text style={styles.locationError}>{locationError}</Text>
               ) : null}
             </View>
+              </>
+            )}
             <View style={[styles.detailRow, styles.noteRow]}>
               <AppIcon name="document-text-outline" color={colors.text} size={21} />
               <View style={styles.noteContent}>
@@ -846,6 +999,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     overflow: "hidden",
+  },
+  androidDetailsSurface: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    gap: spacing.md,
+    overflow: "visible",
   },
   detailRow: {
     alignItems: "center",

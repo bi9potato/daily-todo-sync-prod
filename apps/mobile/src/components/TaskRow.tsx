@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppIcon } from "./AppIcon";
 import { AuthenticatedImage } from "./AuthenticatedImage";
@@ -98,11 +98,20 @@ export const TaskRow = memo(function TaskRow({
           <View style={styles.locationMetadata}>
             <AppIcon name="location-outline" color={colors.accent} size={14} />
             <Text numberOfLines={1} style={styles.metadataText}>
-              {task.location.name || "已记录位置"} ·{" "}
-              {new Date(task.location.recordedAt).toLocaleTimeString("zh-CN", {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {Platform.OS === "android" && task.location.reminderEnabled
+                ? `到达 · ${task.location.name || "已选地点"} · ${
+                    task.location.radiusMeters >= 1_000
+                      ? `${Number(
+                          (task.location.radiusMeters / 1_000).toFixed(1),
+                        )}公里`
+                      : `${task.location.radiusMeters}米`
+                  }`
+                : `${task.location.name || "已记录位置"} · ${new Date(
+                    task.location.recordedAt,
+                  ).toLocaleTimeString("zh-CN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}`}
             </Text>
           </View>
         ) : null}

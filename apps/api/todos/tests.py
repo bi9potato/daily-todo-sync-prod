@@ -713,7 +713,7 @@ class TodoApiTests(TestCase):
             HTTP_AUTHORIZATION=self.auth_header,
         )
 
-        self.assertEqual(response.json()["location"]["radiusMeters"], 50)
+        self.assertEqual(response.json()["location"]["radiusMeters"], 100)
 
     def test_clearing_location_also_clears_arrival_reminder(self):
         occurrence = create_task_for_day(self.user, date(2026, 6, 20), "Buy milk")

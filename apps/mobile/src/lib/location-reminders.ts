@@ -14,6 +14,7 @@ import type { TodoOccurrence } from "@/types";
 // replaces the entire monitored region set on each startGeofencingAsync
 // call, so there is exactly one task to define, not one per task.
 export const LOCATION_REMINDER_TASK = "daily-todo-location-reminders";
+const MAX_ANDROID_GEOFENCES = 100;
 
 type GeofencingTaskBody = {
   eventType?: Location.LocationGeofencingEventType;
@@ -91,7 +92,17 @@ export async function reconcileLocationReminders(occurrences: TodoOccurrence[]) 
   if (!(await isLocationRemindersAvailable())) {
     return;
   }
-  const withReminders = occurrences.filter(occurrenceHasLocationReminder);
+  const allWithReminders = occurrences.filter(occurrenceHasLocationReminder);
+  const withReminders = allWithReminders.slice(0, MAX_ANDROID_GEOFENCES);
+  if (allWithReminders.length > MAX_ANDROID_GEOFENCES) {
+    recordClientLog("warn", "Location reminder geofence limit reached", {
+      source: "reminders",
+      context: {
+        configuredCount: allWithReminders.length,
+        registeredCount: MAX_ANDROID_GEOFENCES,
+      },
+    });
+  }
 
   if (!withReminders.length) {
     if (await TaskManager.isTaskRegisteredAsync(LOCATION_REMINDER_TASK)) {

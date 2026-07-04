@@ -51,7 +51,7 @@ class BuildDayTimelineTests(TestCase):
             timeline[0]["startTime"].isoformat(), "2026-06-20T08:00:00+08:00"
         )
         self.assertEqual(
-            timeline[0]["endTime"].isoformat(), "2026-06-20T08:02:00+08:00"
+            timeline[0]["endTime"].isoformat(), "2026-06-20T08:05:00+08:00"
         )
         self.assertEqual(timeline[1]["packageName"], "com.chrome")
 
@@ -99,6 +99,26 @@ class BuildDayTimelineTests(TestCase):
         )
         self.assertEqual(
             timeline[1]["startTime"].isoformat(), "2026-06-20T09:00:00+08:00"
+        )
+
+    def test_nearby_app_transition_closes_previous_app_at_transition_time(self):
+        events = [
+            make_event(
+                DeviceTimelineEvent.EventType.APP_FOREGROUND,
+                "2026-06-20T08:00:00+08:00",
+                package_name="com.wechat",
+            ),
+            make_event(
+                DeviceTimelineEvent.EventType.APP_FOREGROUND,
+                "2026-06-20T08:00:20+08:00",
+                package_name="com.chrome",
+            ),
+        ]
+
+        timeline = build_day_timeline(events)
+
+        self.assertEqual(
+            timeline[0]["endTime"].isoformat(), "2026-06-20T08:00:20+08:00"
         )
 
     def test_shutdown_closes_open_segment_and_appears_as_marker(self):

@@ -48,15 +48,24 @@ def build_day_timeline(events: list[DeviceTimelineEvent]) -> list[dict]:
                 if current_app
                 else None
             )
-            if (
-                current_app
-                and current_app["packageName"] == event.package_name
-                and gap_seconds is not None
-                and gap_seconds <= MAX_SEGMENT_GAP_SECONDS
-            ):
-                current_app["endTime"] = event.occurred_at
-                continue
-            flush_app_segment()
+            if current_app and gap_seconds is not None:
+                if (
+                    current_app["packageName"] == event.package_name
+                    and gap_seconds <= MAX_SEGMENT_GAP_SECONDS
+                ):
+                    current_app["endTime"] = event.occurred_at
+                    continue
+                if (
+                    current_app["packageName"] != event.package_name
+                    and gap_seconds <= MAX_SEGMENT_GAP_SECONDS
+                ):
+                    # A foreground transition is an authoritative boundary:
+                    # the previous app stopped being foreground when this one
+                    # resumed. Close at the transition rather than at the
+                    # previous heartbeat so short sessions retain their time.
+                    close_app_segment_at(event.occurred_at)
+                else:
+                    flush_app_segment()
             current_app = {
                 "type": "app",
                 "packageName": event.package_name,
