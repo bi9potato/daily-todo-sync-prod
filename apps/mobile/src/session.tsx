@@ -23,15 +23,28 @@ import {
   subscribeToTokenClear,
 } from "@/lib/auth-storage";
 import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
-import { authenticateWithGoogle } from "@/lib/google-auth";
+import { authenticateWithGoogle, completeGoogleCallback } from "@/lib/google-auth";
 import type { TokenPair } from "@/types";
 
 type SessionStatus = "loading" | "authenticated" | "unauthenticated";
+
+// Session restore normally resolves in a few milliseconds; this is only a
+// safety net for the rare case where it hangs outright (e.g. a corrupted
+// Android Keystore entry after an OS/app update) instead of rejecting. With
+// no timeout, a hang leaves `status` stuck on "loading" forever, which keeps
+// the native splash screen up indefinitely - the app never gets anywhere, not
+// even the login screen (recoverable today only by clearing all app data).
+const SESSION_RESTORE_TIMEOUT_MS = 6_000;
 
 type SessionContextValue = {
   status: SessionStatus;
   signIn: (identifier: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<boolean>;
+  completeGoogleSignIn: (params: {
+    googleAuth?: string | null;
+    code?: string | null;
+    message?: string | null;
+  }) => Promise<boolean>;
   requestRegistrationCode: (email: string) => Promise<number>;
   signUp: (
     username: string,
@@ -50,6 +63,15 @@ export function SessionProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let active = true;
+    const timeout = setTimeout(() => {
+      if (active) {
+        recordClientLog("warn", "Session restore timed out, forcing login", {
+          source: "session",
+        });
+        void flushClientLogs();
+        setStatus("unauthenticated");
+      }
+    }, SESSION_RESTORE_TIMEOUT_MS);
     loadTokens()
       .then((tokens) => {
         if (active) {
@@ -60,9 +82,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
         if (active) {
           setStatus("unauthenticated");
         }
-      });
+      })
+      .finally(() => clearTimeout(timeout));
     return () => {
       active = false;
+      clearTimeout(timeout);
     };
   }, []);
 
@@ -137,6 +161,29 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return true;
   }, [establishSession]);
 
+  // Completes a Google sign-in that arrived via the auth/google deep-link
+  // route rather than the in-process WebBrowser.openAuthSessionAsync promise
+  // - i.e. the app was cold-launched by the OAuth redirect after Android
+  // killed the process mid-flow.
+  const completeGoogleSignIn = useCallback(
+    async (params: {
+      googleAuth?: string | null;
+      code?: string | null;
+      message?: string | null;
+    }) => {
+      const tokens = await completeGoogleCallback(params);
+      if (!tokens) {
+        return false;
+      }
+      await establishSession(
+        tokens,
+        "User signed in with Google (resumed after app restart)",
+      );
+      return true;
+    },
+    [establishSession],
+  );
+
   const signOut = useCallback(async () => {
     recordClientLog("info", "User signed out", { source: "session" });
     await flushClientLogs();
@@ -151,10 +198,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
       requestRegistrationCode,
       signIn,
       signInWithGoogle,
+      completeGoogleSignIn,
       signOut,
       signUp,
     }),
     [
+      completeGoogleSignIn,
       requestRegistrationCode,
       signIn,
       signInWithGoogle,

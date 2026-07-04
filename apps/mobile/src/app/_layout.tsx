@@ -145,6 +145,16 @@ export default function RootLayout() {
 function AppNavigator() {
   const { status } = useSession();
 
+  // Centralized here (rather than in src/app/index.tsx alone) because a cold
+  // launch from the Google OAuth deep-link redirect (auth/google.tsx) can
+  // mount without index.tsx ever rendering, which previously left the native
+  // splash screen up forever in that case.
+  useEffect(() => {
+    if (status !== "loading") {
+      void SplashScreen.hideAsync();
+    }
+  }, [status]);
+
   if (Platform.OS !== "android") {
     return <Stack screenOptions={STACK_SCREEN_OPTIONS} />;
   }
@@ -153,6 +163,7 @@ function AppNavigator() {
     <Stack screenOptions={STACK_SCREEN_OPTIONS}>
       <Stack.Protected guard={status !== "authenticated"}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="auth/google" />
       </Stack.Protected>
       <Stack.Protected guard={status === "authenticated"}>
         <Stack.Screen name="(app)" />

@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
+import { recordClientLog } from "./client-logs";
 import type { TokenPair } from "@/types";
 
 const ACCESS_TOKEN_KEY = "daily-todo-sync.access-token";
@@ -13,7 +14,25 @@ async function getItem(key: string) {
   if (Platform.OS === "web") {
     return globalThis.localStorage?.getItem(key) ?? null;
   }
-  return SecureStore.getItemAsync(key);
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch (error) {
+    // The Android Keystore key backing SecureStore's encrypted prefs can be
+    // invalidated by an OS update or app reinstall, leaving a value that can
+    // never be decrypted again. Previously this rejection surfaced all the
+    // way up as a failed session restore with no recovery path short of the
+    // user manually clearing all app data. Treat it as "no value" and drop
+    // the unreadable entry so the next launch does not hit the same error.
+    recordClientLog("warn", "SecureStore read failed, dropping entry", {
+      source: "auth-storage",
+      context: {
+        key,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
+    await SecureStore.deleteItemAsync(key).catch(() => undefined);
+    return null;
+  }
 }
 
 async function setItem(key: string, value: string) {
