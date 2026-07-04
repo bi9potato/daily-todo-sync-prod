@@ -24,6 +24,7 @@ import {
   GeoJSONSource,
   Layer,
   Map,
+  Marker,
   type CameraRef,
   type LngLatBounds,
   type StyleSpecification,
@@ -43,6 +44,17 @@ export type RouteMapHandle = {
   // Recenter the camera on the live location and zoom in to a street-level
   // view, the way tapping Google Maps' locate button snaps to your position.
   centerOnLive: () => void;
+  // Pan (and gently zoom in on) an arbitrary coordinate, used to jump the
+  // camera to a visit marker when its timeline entry is tapped.
+  focusOn: (longitude: number, latitude: number) => void;
+};
+
+// A stay/visit location to mark on the map, distinct from the recorded route
+// and the live puck.
+export type RouteMapVisit = {
+  id: string;
+  longitude: number;
+  latitude: number;
 };
 
 type RouteMapProps = {
@@ -53,6 +65,12 @@ type RouteMapProps = {
   liveLocation?: LiveLocation | null;
   // While true the camera keeps the live puck centered as new fixes arrive.
   followLive?: boolean;
+  // Stay/visit locations from the day's timeline, marked on the map so they
+  // read the same way Google Timeline pins a stop.
+  visits?: RouteMapVisit[];
+  // Fired when a visit marker is tapped, so the screen can jump the timeline
+  // list and playback dot to that stop.
+  onVisitPress?: (id: string) => void;
   onFallback?: (fallback: boolean) => void;
   onPlaybackEnded?: () => void;
   onPlaybackProgress?: (ratio: number, timestampMs: number) => void;
@@ -62,6 +80,7 @@ type RouteMapProps = {
 };
 
 const EMPTY_POINTS: MobilityPoint[] = [];
+const EMPTY_VISITS: RouteMapVisit[] = [];
 
 // The style is defined inline instead of fetched from a style server: the
 // OpenFreeMap vector style this map first shipped with is served through
@@ -107,7 +126,14 @@ const LIVE_COLOR = "#1A73E8";
 // short linear tween turns those steps into continuous motion like a nav app
 // instead of a teleport every second.
 const LIVE_TWEEN_MS = 950;
-const LIVE_FOLLOW_ZOOM = 16;
+// Street-level, matching the zoom Google Maps snaps to on a locate-button
+// tap - close enough that the heading beam actually reads as a sector
+// instead of a barely-visible smudge.
+const LIVE_FOLLOW_ZOOM = 17;
+// Visit markers use a hue not already claimed by the route (green), live puck
+// (blue), or playback dot (orange) so a stop never reads as one of those.
+export const VISIT_MARKER_COLOR = "#7C5CBF";
+const VISIT_FOCUS_ZOOM = 17;
 // Throttle for the scrubber progress ping back to the consumer, matching the
 // old WebView cadence so the slider stays smooth without a 60fps flood.
 const PROGRESS_PING_MS = 120;
@@ -261,6 +287,8 @@ function RouteMapComponent(
     points = EMPTY_POINTS,
     liveLocation = null,
     followLive = false,
+    visits = EMPTY_VISITS,
+    onVisitPress,
     onFallback,
     onPlaybackEnded,
     onPlaybackProgress,
@@ -561,6 +589,11 @@ function RouteMapComponent(
     typeof MapLibreAnimated.Point
   > | null>(null);
   const hasCenteredLiveRef = useRef(false);
+  // Tracks whether the camera has already snapped to street-level zoom for
+  // the current follow session, so only the first fix after enabling follow
+  // zooms in - every fix after that just pans, leaving any zoom the follow-in
+  // already applied alone instead of re-snapping it every ~1s.
+  const followZoomedRef = useRef(false);
 
   const beamFeature = useMemo<GeoJSON.Feature<GeoJSON.Polygon> | null>(() => {
     if (!liveLocation || liveLocation.heading == null) {
@@ -581,11 +614,27 @@ function RouteMapComponent(
     }
     // v11 CameraRef: setStop takes a CameraStop ({ center, zoom, duration,
     // easing }); there is no setCamera/moveTo in this version.
+    followZoomedRef.current = true;
     void camera
       .setStop({
         center: [current.longitude, current.latitude],
         zoom: LIVE_FOLLOW_ZOOM,
         duration: 600,
+        easing: "ease",
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const focusOn = useCallback((longitude: number, latitude: number) => {
+    const camera = cameraRef.current;
+    if (!camera) {
+      return;
+    }
+    void camera
+      .setStop({
+        center: [longitude, latitude],
+        zoom: VISIT_FOCUS_ZOOM,
+        duration: 500,
         easing: "ease",
       })
       .catch(() => undefined);
@@ -611,16 +660,23 @@ function RouteMapComponent(
         .start();
     }
     if (followLive && cameraRef.current) {
-      // Linear easing (not "fly") so following glides straight to the new fix
-      // instead of arcing out and back; zoom is omitted to keep the user's
-      // current zoom level.
+      // The first fix after follow is enabled snaps to street-level zoom
+      // (tapping locate should always end up close enough to see the heading
+      // beam, the way Google Maps does); every fix after that only pans with
+      // a linear glide so it does not fight a zoom the user is free to nudge
+      // - though any manual pinch would itself drop follow mode.
+      const shouldZoomIn = !followZoomedRef.current;
+      followZoomedRef.current = true;
       void cameraRef.current
         .setStop({
           center: [liveLocation.longitude, liveLocation.latitude],
-          duration: LIVE_TWEEN_MS,
-          easing: "linear",
+          zoom: shouldZoomIn ? LIVE_FOLLOW_ZOOM : undefined,
+          duration: shouldZoomIn ? 600 : LIVE_TWEEN_MS,
+          easing: shouldZoomIn ? "ease" : "linear",
         })
         .catch(() => undefined);
+    } else if (!followLive) {
+      followZoomedRef.current = false;
     }
   }, [liveLocation, followLive]);
 
@@ -647,8 +703,9 @@ function RouteMapComponent(
       seek: seekPlayback,
       stop: stopPlayback,
       centerOnLive,
+      focusOn,
     }),
-    [centerOnLive, pausePlayback, seekPlayback, startPlayback, stopPlayback],
+    [centerOnLive, focusOn, pausePlayback, seekPlayback, startPlayback, stopPlayback],
   );
 
   // Tear down timers/animations if the component unmounts mid-playback.
@@ -776,6 +833,19 @@ function RouteMapComponent(
         />
       </GeoJSONSource>
 
+      {/* Stay/visit markers: a plain RN View pinned to the coordinate (via
+          the library's Marker annotation) rather than a GeoJSON layer, since
+          each one needs its own tap target. */}
+      {visits.map((visit) => (
+        <Marker
+          id={visit.id}
+          key={visit.id}
+          lngLat={[visit.longitude, visit.latitude]}
+          onPress={() => onVisitPress?.(visit.id)}>
+          <View style={styles.visitMarker} />
+        </Marker>
+      ))}
+
       {playbackVisible && playbackPoint ? (
         <MapLibreAnimated.GeoJSONSource id="playback-source" data={playbackPoint}>
           <Layer
@@ -890,6 +960,14 @@ const styles = StyleSheet.create({
   map: {
     backgroundColor: colors.background,
     flex: 1,
+  },
+  visitMarker: {
+    backgroundColor: VISIT_MARKER_COLOR,
+    borderColor: "#ffffff",
+    borderRadius: 8,
+    borderWidth: 2,
+    height: 16,
+    width: 16,
   },
   empty: {
     alignItems: "center",

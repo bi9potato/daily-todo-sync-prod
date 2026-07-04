@@ -21,7 +21,12 @@ import * as Sharing from "expo-sharing";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
-import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
+import {
+  RouteMap,
+  VISIT_MARKER_COLOR,
+  type RouteMapHandle,
+  type RouteMapVisit,
+} from "@/components/RouteMap";
 import { ScreenEnter } from "@/components/ScreenEnter";
 import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
 import {
@@ -45,6 +50,7 @@ import {
   VISIT_DWELL_MINUTE_OPTIONS,
 } from "@/lib/mobility-storage";
 import { flushMobilityPointQueue } from "@/lib/mobility-queue";
+import { reverseGeocode } from "@/lib/reverse-geocode";
 import {
   clearNativeMobilityQueue,
   getLatestNativeMobilityPoint,
@@ -68,6 +74,7 @@ import type {
 
 const PLAYBACK_SPEED_OPTIONS = [1, 2, 5, 10] as const;
 const EMPTY_MOBILITY_POINTS: MobilityPoint[] = [];
+const EMPTY_MOBILITY_SEGMENTS: MobilitySegment[] = [];
 
 function explainBackgroundPermission() {
   if (Platform.OS !== "android") {
@@ -190,41 +197,6 @@ async function requestTrackingPermissions({
     throw new Error("需要选择“始终允许”才能在锁屏后继续记录。");
   }
   await waitForAndroidActivityToResume();
-}
-
-// Android's on-device geocoder frequently has no point-of-interest name for
-// a spot and falls back to returning the bare house/street number as the
-// placemark "name" (e.g. "1500"), which is what showed up as a meaningless
-// string of digits for auto-detected visits. Treat a purely numeric (or
-// numeric-and-punctuation) name as "no name" and compose something readable
-// from the street/district instead.
-function isNumericOnlyLabel(value: string) {
-  return /^[\d\s.,\-/#号栋幢楼层]+$/.test(value.trim());
-}
-
-function addressLabel(address: Location.LocationGeocodedAddress | undefined) {
-  if (!address) {
-    return "";
-  }
-  if (address.name && !isNumericOnlyLabel(address.name)) {
-    return address.name;
-  }
-  const streetLabel = [address.street, address.streetNumber]
-    .filter((value): value is string => Boolean(value && value.trim()))
-    .join(" ");
-  const districtLabel = [address.district, address.city]
-    .filter((value): value is string => Boolean(value && value.trim()))
-    .join(" · ");
-  if (districtLabel && streetLabel) {
-    return `${districtLabel} · ${streetLabel}`;
-  }
-  if (
-    address.formattedAddress &&
-    !isNumericOnlyLabel(address.formattedAddress)
-  ) {
-    return address.formattedAddress;
-  }
-  return districtLabel || streetLabel;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
@@ -593,15 +565,121 @@ export function MobilityScreen({
       ),
     [dayQuery.data?.points, isToday, livePoints, recordingEnabled],
   );
-  const timelineSegments = dayQuery.data?.segments ?? [];
+  const timelineSegments = useMemo(
+    () => dayQuery.data?.segments ?? EMPTY_MOBILITY_SEGMENTS,
+    [dayQuery.data?.segments],
+  );
   const segmentPlaceNames = useSegmentPlaceNames(timelineSegments);
   const latestLivePoint = recordingEnabled ? (livePoints.at(-1) ?? null) : null;
+
+  // Visit stops marked on the map, keyed the same way as the timeline rows so
+  // a tap on either side can find its counterpart.
+  const visitMarkers = useMemo<RouteMapVisit[]>(
+    () =>
+      timelineSegments
+        .filter(
+          (segment) =>
+            segment.type === "visit" &&
+            segment.latitude != null &&
+            segment.longitude != null,
+        )
+        .map((segment) => ({
+          id: segmentKey(segment),
+          longitude: segment.longitude as number,
+          latitude: segment.latitude as number,
+        })),
+    [timelineSegments],
+  );
 
   const routeMapRef = useRef<RouteMapHandle>(null);
   const [mapAvailable, setMapAvailable] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRatio, setPlaybackRatio] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+
+  // Scroll-to-and-highlight bookkeeping for jumping between a map visit
+  // marker and its timeline row (and back).
+  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollOffsetRef = useRef(0);
+  const rowRefs = useRef<Record<string, View | null>>({});
+  const [highlightedSegmentKey, setHighlightedSegmentKey] = useState<
+    string | null
+  >(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  useEffect(
+    () => () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
+  const focusSegment = useCallback(
+    (segment: MobilitySegment) => {
+      const key = segmentKey(segment);
+
+      setHighlightedSegmentKey(key);
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+      highlightTimeoutRef.current = setTimeout(
+        () => setHighlightedSegmentKey(null),
+        2400,
+      );
+
+      const rowNode = rowRefs.current[key];
+      const scrollNode = scrollViewRef.current;
+      if (rowNode && scrollNode) {
+        // ScrollView's TS type omits the NativeMethods measure* methods that
+        // View has; getScrollableNode() exposes the same underlying native
+        // handle (typed `any`) so it can still be measured directly.
+        const scrollHandle = scrollNode.getScrollableNode();
+        rowNode.measureInWindow((_rowX: number, rowY: number) => {
+          scrollHandle.measureInWindow((_scrollX: number, scrollY: number) => {
+            const targetY = scrollOffsetRef.current + (rowY - scrollY) - 96;
+            scrollNode.scrollTo({ y: Math.max(0, targetY), animated: true });
+          });
+        });
+      }
+
+      if (routePoints.length > 1) {
+        const t0 = new Date(routePoints[0].recordedAt).getTime();
+        const tN = new Date(
+          routePoints[routePoints.length - 1].recordedAt,
+        ).getTime();
+        const segmentTime = new Date(segment.startTime).getTime();
+        const ratio =
+          tN > t0
+            ? Math.max(0, Math.min(1, (segmentTime - t0) / (tN - t0)))
+            : 0;
+        setIsPlaying(false);
+        setPlaybackRatio(ratio);
+        routeMapRef.current?.seek(ratio);
+      }
+
+      if (segment.latitude != null && segment.longitude != null) {
+        routeMapRef.current?.focusOn(segment.longitude, segment.latitude);
+      }
+    },
+    [routePoints],
+  );
+
+  const handleVisitMarkerPress = useCallback(
+    (id: string) => {
+      const segment = timelineSegments.find(
+        (candidate) =>
+          candidate.type === "visit" && segmentKey(candidate) === id,
+      );
+      if (segment) {
+        focusSegment(segment);
+      }
+    },
+    [timelineSegments, focusSegment],
+  );
 
   // Live "you are here" puck + heading. It only makes sense for today (a past
   // day has no "now"), and only runs once we hold foreground location
@@ -727,6 +805,11 @@ export function MobilityScreen({
     <ScreenEnter style={{ flex: 1 }}>
       <ScrollView
         contentContainerStyle={styles.content}
+        onScroll={(event) => {
+          scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+        }}
+        ref={scrollViewRef}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}>
       <View style={styles.heading}>
         <View>
@@ -812,8 +895,10 @@ export function MobilityScreen({
             onPlaybackEnded={handlePlaybackEnded}
             onPlaybackProgress={handlePlaybackProgress}
             onUserPan={handleUserPan}
+            onVisitPress={handleVisitMarkerPress}
             points={routePoints}
             ref={routeMapRef}
+            visits={visitMarkers}
           />
         )}
         {isToday && Platform.OS !== "web" && !dayQuery.isPending ? (
@@ -1026,12 +1111,30 @@ export function MobilityScreen({
           timelineSegments.map((segment, index) => {
             const isLast = index === timelineSegments.length - 1;
             if (segment.type === "visit") {
-              const label =
-                segmentPlaceNames[segmentKey(segment)] || `停留地点 ${index + 1}`;
+              const key = segmentKey(segment);
+              const label = segmentPlaceNames[key] || `停留地点 ${index + 1}`;
+              const highlighted = highlightedSegmentKey === key;
               return (
-                <View key={`${segment.startTime}-${index}`} style={styles.placeRow}>
+                <Pressable
+                  accessibilityLabel={`查看到访地点 ${label}`}
+                  accessibilityRole="button"
+                  key={`${segment.startTime}-${index}`}
+                  onPress={() => focusSegment(segment)}
+                  ref={(node) => {
+                    rowRefs.current[key] = node;
+                  }}
+                  style={({ pressed }) => [
+                    styles.placeRow,
+                    highlighted && styles.placeRowHighlighted,
+                    pressed && styles.pressed,
+                  ]}>
                   <View style={styles.timeline}>
-                    <View style={styles.placeDot} />
+                    <View
+                      style={[
+                        styles.placeDot,
+                        highlighted && styles.placeDotHighlighted,
+                      ]}
+                    />
                     {!isLast ? <View style={styles.placeLine} /> : null}
                   </View>
                   <View style={styles.placeCopy}>
@@ -1041,7 +1144,7 @@ export function MobilityScreen({
                       {segment.durationMinutes} 分钟
                     </Text>
                   </View>
-                </View>
+                </Pressable>
               );
             }
             const modeLabel = segment.mode ? TRIP_MODE_LABEL[segment.mode] : null;
@@ -1324,24 +1427,8 @@ function useSegmentPlaceNames(segments: MobilitySegment[]) {
         if (segment.latitude == null || segment.longitude == null) {
           return [segmentKey(segment), `停留地点 ${index + 1}`] as const;
         }
-        try {
-          const addresses = await Location.reverseGeocodeAsync({
-            latitude: segment.latitude,
-            longitude: segment.longitude,
-          });
-          return [
-            segmentKey(segment),
-            addressLabel(addresses[0]) || `停留地点 ${index + 1}`,
-          ] as const;
-        } catch (error) {
-          recordClientLog("warn", "Mobility reverse geocode failed", {
-            source: "mobility",
-            context: {
-              message: error instanceof Error ? error.message : String(error),
-            },
-          });
-          return [segmentKey(segment), `停留地点 ${index + 1}`] as const;
-        }
+        const label = await reverseGeocode(segment.latitude, segment.longitude);
+        return [segmentKey(segment), label || `停留地点 ${index + 1}`] as const;
       }),
     ).then((entries) => {
       if (!cancelled) {
@@ -1763,21 +1850,32 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
   placeRow: {
+    borderRadius: radius.md,
     flexDirection: "row",
     minHeight: 58,
+  },
+  placeRowHighlighted: {
+    backgroundColor: colors.accentSoft,
   },
   timeline: {
     alignItems: "center",
     width: 24,
   },
   placeDot: {
-    backgroundColor: colors.accent,
+    // Matches VISIT_MARKER_COLOR in RouteMap.tsx so a stop's map pin and its
+    // timeline row read as the same thing.
+    backgroundColor: VISIT_MARKER_COLOR,
     borderColor: colors.white,
     borderRadius: radius.full,
     borderWidth: 2,
     height: 13,
     marginTop: 3,
     width: 13,
+  },
+  placeDotHighlighted: {
+    height: 16,
+    marginTop: 1,
+    width: 16,
   },
   placeLine: {
     backgroundColor: colors.borderStrong,
