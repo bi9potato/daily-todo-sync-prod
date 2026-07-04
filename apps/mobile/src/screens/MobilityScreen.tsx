@@ -634,12 +634,21 @@ export function MobilityScreen({
       const rowNode = rowRefs.current[key];
       const scrollNode = scrollViewRef.current;
       if (rowNode && scrollNode) {
-        // ScrollView's TS type omits the NativeMethods measure* methods that
-        // View has; getScrollableNode() exposes the same underlying native
-        // handle (typed `any`) so it can still be measured directly.
-        const scrollHandle = scrollNode.getScrollableNode();
+        // ScrollView's TS type omits the NativeMethods measure* methods, but
+        // at runtime the ref IS the native host view with those methods
+        // attached (react-native's ScrollView.js Object.assign()s
+        // getScrollableNode/scrollTo/etc onto the native instance), so it can
+        // be measured directly. getScrollableNode() looked like the
+        // sanctioned way to reach a measurable handle, but it actually
+        // returns a plain numeric node handle with no measureInWindow method
+        // at all - calling it here previously threw an uncaught TypeError
+        // from this native callback and crashed the app on every visit-point
+        // tap.
+        const measurableScrollNode = scrollNode as unknown as {
+          measureInWindow: typeof rowNode.measureInWindow;
+        };
         rowNode.measureInWindow((_rowX: number, rowY: number) => {
-          scrollHandle.measureInWindow((_scrollX: number, scrollY: number) => {
+          measurableScrollNode.measureInWindow((_scrollX: number, scrollY: number) => {
             const targetY = scrollOffsetRef.current + (rowY - scrollY) - 96;
             scrollNode.scrollTo({ y: Math.max(0, targetY), animated: true });
           });
