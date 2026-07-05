@@ -1,14 +1,18 @@
 # iOS 安装说明（无开发者账号，侧载给朋友）
 
+> **注意：iOS CI 构建已停用**（macOS runner 太贵，`210分钟 ≈ $13`），不再自动出包。
+> 如需 iOS 安装包，需要本地手动执行 `pnpm exec expo prebuild --platform ios` + `xcodebuild` 打包（见下方工作流历史 `.github/workflows/ios-ipa.yml` 的 git 记录作为参考），或恢复该 workflow。
+
 我们没有 Apple 开发者账号（$99/年），所以 iOS 版**不能**像安卓那样点个链接直接装。
-CI 产出的是一个**免签名 IPA**，朋友需要用 **SideStore**（或 AltStore）用**自己的免费 Apple ID**
+即便手动构建，产出的也只是一个**免签名 IPA**，朋友需要用 **SideStore**（或 AltStore）用**自己的免费 Apple ID**
 在自己手机上重新签名安装。下面是一次性设置 + 日常更新的步骤。
 
-## 你会拿到什么
+## 你会拿到什么（历史说明，CI 已停用）
 
-- 每次 `main` 上 `apps/mobile/**` 变动，GitHub Actions 的 **iOS IPA** 工作流会在 macOS runner 上构建，
+- 曾经每次 `main` 上 `apps/mobile/**` 变动，GitHub Actions 的 **iOS IPA** 工作流会在 macOS runner 上构建，
   并把免签名安装包发布到 GitHub Release `ios-latest`：
   - 直链：`https://github.com/<owner>/<repo>/releases/download/ios-latest/daily-todo.ipa`
+  - 该 Release 中的包不再更新，可能已过期。
 
 ## 免费 Apple ID 的硬限制（务必先告诉朋友）
 
@@ -32,8 +36,7 @@ CI 产出的是一个**免签名 IPA**，朋友需要用 **SideStore**（或 Alt
 
 ## 更新到新版本
 
-- CI 每次构建都会覆盖 `ios-latest` 这个 Release。朋友重新下载最新 `daily-todo.ipa`，
-  在 SideStore 里对着 App 再装一次即可（保留数据）。
+- CI 已停用，`ios-latest` Release 不会再自动更新。如需新版本，需手动构建并上传新 IPA。
 - 只是证书到期、代码没变时，用 SideStore 的**刷新**即可，不必重装。
 
 ## 备注
