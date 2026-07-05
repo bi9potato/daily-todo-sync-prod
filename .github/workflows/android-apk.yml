@@ -340,34 +340,6 @@ jobs:
             artifacts/daily-todo-android-update.json \
             --clobber
 
-      - name: Copy update manifest to server
-        if: github.event_name != 'pull_request'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          port: ${{ secrets.DROPLET_PORT || 22 }}
-          source: "artifacts/daily-todo-android-update.json"
-          target: "/opt/daily-todo-sync"
-
-      - name: Publish update manifest
-        if: github.event_name != 'pull_request'
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          port: ${{ secrets.DROPLET_PORT || 22 }}
-          command_timeout: 5m
-          script: |
-            set -euo pipefail
-            cd /opt/daily-todo-sync
-            docker compose -f compose.yml exec -T api mkdir -p /app/media/mobile
-            docker compose -f compose.yml cp \
-              artifacts/daily-todo-android-update.json \
-              api:/app/media/mobile/android-latest.json
-
       - name: Add download instructions
         if: github.event_name != 'pull_request'
         run: |
