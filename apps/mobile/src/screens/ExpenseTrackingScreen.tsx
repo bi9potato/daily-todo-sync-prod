@@ -17,6 +17,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
+import { useBackPressKeyboardGuard } from "@/lib/keyboard";
 import {
   categoryLabel,
   expenseCategoryLabels,
@@ -817,6 +818,7 @@ function ManualTransactionModal({
   const [category, setCategory] = useState<TransactionCategory>("food_dining");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const handleKeyboardGuard = useBackPressKeyboardGuard(onClose);
 
   const categoryEntries = useMemo(
     () =>
@@ -868,7 +870,7 @@ function ManualTransactionModal({
   return (
     <Modal
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={handleKeyboardGuard}
       transparent
       visible={open}>
       <KeyboardAvoidingView
