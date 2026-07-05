@@ -54,7 +54,12 @@
           }
         }
       ],
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false
+        }
+      ],
       [
         "expo-location",
         {
@@ -75,6 +80,7 @@
       "./plugins/with-native-mobility-service",
       "./plugins/with-device-timeline-service",
       "./plugins/with-reminder-settings",
+      "./plugins/with-expense-tracking",
       "./plugins/with-health-connect",
       "@maplibre/maplibre-react-native",
       [
