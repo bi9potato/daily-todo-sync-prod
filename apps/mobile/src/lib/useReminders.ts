@@ -1,8 +1,10 @@
-import { useEffect } from "react";
-import { Platform } from "react-native";
+import { useEffect, useState } from "react";
+import { AppState, Platform } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 
+import { hasExactAlarmAccess } from "./android-reminder-settings";
 import { getRange } from "./api";
+import { recordClientLog } from "./client-logs";
 import { addDays } from "./date";
 import { reconcileLocationReminders } from "./location-reminders";
 import {
@@ -37,6 +39,12 @@ async function reconcileTimeReminders(occurrences: TodoOccurrence[]) {
     // reminder, not here in a background reconciler.
     return;
   }
+  if (Platform.OS === "android" && !(await hasExactAlarmAccess())) {
+    // Android removes exact alarms when this special access is revoked.
+    // Do not silently replace a user-visible reminder with an inexact alarm;
+    // the task editor explains how to restore access.
+    return;
+  }
   const desired = occurrences.filter(
     (occurrence) => occurrence.status === "pending" && occurrence.reminderAt,
   );
@@ -58,6 +66,7 @@ async function reconcileTimeReminders(occurrences: TodoOccurrence[]) {
 // on resume, and whenever any todo mutation invalidates the shared "range"
 // query key this reuses.
 export function useReminders(today: string) {
+  const [androidResumeRevision, setAndroidResumeRevision] = useState(0);
   const end = addDays(today, REMINDER_LOOKAHEAD_DAYS);
   const rangeQuery = useQuery({
     queryKey: ["range", today, end],
@@ -74,11 +83,46 @@ export function useReminders(today: string) {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        // Returning from notification or exact-alarm settings must rerun the
+        // scheduler even when the cached range data itself did not change.
+        setAndroidResumeRevision((current) => current + 1);
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
     if (!days) {
       return;
     }
     const occurrences = flattenOccurrences(days);
-    void reconcileTimeReminders(occurrences);
-    void reconcileLocationReminders(occurrences);
-  }, [days]);
+    if (Platform.OS !== "android") {
+      // Preserve the existing iOS behavior; the ordered channel setup and
+      // permission-resume repair path below are Android-only.
+      void reconcileTimeReminders(occurrences);
+      void reconcileLocationReminders(occurrences);
+      return;
+    }
+    void (async () => {
+      try {
+        await ensureReminderNotificationChannel();
+        await Promise.all([
+          reconcileTimeReminders(occurrences),
+          reconcileLocationReminders(occurrences),
+        ]);
+      } catch (error) {
+        recordClientLog("warn", "Failed to reconcile task reminders", {
+          source: "reminders",
+          context: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    })();
+  }, [androidResumeRevision, days]);
 }

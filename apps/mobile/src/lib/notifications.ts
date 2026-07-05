@@ -1,12 +1,15 @@
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
+import {
+  ensureNativeReminderNotificationChannel,
+  REMINDER_CHANNEL_ID,
+} from "./android-reminder-settings";
 import { recordClientLog } from "./client-logs";
 
 // One dedicated channel for task reminders, distinct from any channel a
 // future feature might add, so its importance/sound settings never get
 // diluted by an unrelated notification type sharing the channel.
-export const REMINDER_CHANNEL_ID = "task-reminders";
 const REMINDER_ID_PREFIX = "task-reminder-";
 
 // expo-notifications defaults to suppressing alerts while the app is in the
@@ -35,6 +38,22 @@ export async function ensureReminderNotificationChannel() {
     return;
   }
   try {
+    // The Android module creates the channel with the device's selected alarm
+    // ringtone. Expo's "default" resolves to the shorter notification tone,
+    // so keep the Expo channel creation below only as a development-client
+    // fallback when the native module is unavailable or fails.
+    if (await ensureNativeReminderNotificationChannel()) {
+      return;
+    }
+  } catch (error) {
+    recordClientLog("warn", "Native reminder channel setup failed", {
+      source: "reminders",
+      context: {
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+  try {
     await Notifications.setNotificationChannelAsync(REMINDER_CHANNEL_ID, {
       name: "任务提醒",
       description: "到时间和到达地点的任务提醒",
@@ -44,7 +63,6 @@ export async function ensureReminderNotificationChannel() {
         usage: Notifications.AndroidAudioUsage.ALARM,
         contentType: Notifications.AndroidAudioContentType.SONIFICATION,
       },
-      bypassDnd: true,
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       vibrationPattern: [0, 250, 250, 250],
       enableVibrate: true,
@@ -57,6 +75,7 @@ export async function ensureReminderNotificationChannel() {
         message: error instanceof Error ? error.message : String(error),
       },
     });
+    throw error;
   }
 }
 
@@ -66,6 +85,9 @@ export async function hasNotificationPermission() {
 }
 
 export async function ensureNotificationPermission(): Promise<boolean> {
+  // Android 13 does not show the notification permission prompt until the app
+  // has created at least one channel.
+  await ensureReminderNotificationChannel();
   const current = await Notifications.getPermissionsAsync();
   if (current.granted) {
     return true;
@@ -75,6 +97,21 @@ export async function ensureNotificationPermission(): Promise<boolean> {
   }
   const requested = await Notifications.requestPermissionsAsync();
   return requested.granted;
+}
+
+export async function hasUsableReminderNotificationChannel() {
+  if (Platform.OS !== "android") {
+    return true;
+  }
+  await ensureReminderNotificationChannel();
+  const channel = await Notifications.getNotificationChannelAsync(
+    REMINDER_CHANNEL_ID,
+  );
+  return Boolean(
+    channel &&
+      channel.importance >= Notifications.AndroidImportance.HIGH &&
+      channel.sound,
+  );
 }
 
 function reminderIdentifier(occurrenceId: string) {
@@ -108,10 +145,12 @@ export async function scheduleTaskReminder(occurrence: {
   id: string;
   text: string;
   reminderAt: string | null;
+  status?: "pending" | "done";
 }) {
+  await ensureReminderNotificationChannel();
   const identifier = reminderIdentifier(occurrence.id);
   await Notifications.cancelScheduledNotificationAsync(identifier).catch(() => undefined);
-  if (!occurrence.reminderAt) {
+  if (!occurrence.reminderAt || occurrence.status === "done") {
     return;
   }
   const date = new Date(occurrence.reminderAt);
@@ -124,6 +163,9 @@ export async function scheduleTaskReminder(occurrence: {
       title: "任务提醒",
       body: occurrence.text,
       data: { occurrenceId: occurrence.id },
+      ...(Platform.OS === "android"
+        ? { priority: Notifications.AndroidNotificationPriority.MAX }
+        : {}),
       sound: "default",
     },
     trigger: {
@@ -144,11 +186,15 @@ export async function cancelTaskReminder(occurrenceId: string) {
 // location-reminders.ts - which has no future date to schedule against). A
 // channel-only trigger (no "type") presents right away on that channel.
 export async function presentImmediateReminder(occurrenceId: string, title: string, body: string) {
+  await ensureReminderNotificationChannel();
   await Notifications.scheduleNotificationAsync({
     content: {
       title,
       body,
       data: { occurrenceId },
+      ...(Platform.OS === "android"
+        ? { priority: Notifications.AndroidNotificationPriority.MAX }
+        : {}),
       sound: "default",
     },
     trigger: { channelId: REMINDER_CHANNEL_ID },

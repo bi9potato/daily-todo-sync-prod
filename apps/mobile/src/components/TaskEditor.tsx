@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as Location from "expo-location";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -25,6 +27,7 @@ import { ScreenEnter } from "./ScreenEnter";
 import {
   hasExactAlarmAccess,
   openExactAlarmSettings,
+  openReminderNotificationSettings,
 } from "@/lib/android-reminder-settings";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
 import {
@@ -34,7 +37,12 @@ import {
   hasLocationReminderPermission,
   requestLocationReminderPermission,
 } from "@/lib/location-reminders";
-import { ensureNotificationPermission } from "@/lib/notifications";
+import {
+  ensureNotificationPermission,
+  ensureReminderNotificationChannel,
+  hasNotificationPermission,
+  hasUsableReminderNotificationChannel,
+} from "@/lib/notifications";
 import { reverseGeocode } from "@/lib/reverse-geocode";
 import { colors, radius, spacing, typography } from "@/theme";
 import type {
@@ -67,6 +75,12 @@ const repeatUnitOptions: { value: Exclude<RepeatKind, "none" | "weekdays">; labe
 // than ~100m risks never firing (consumer GPS error alone is often 10-50m,
 // worse indoors), wider than ~500m stops reading as "arrival".
 const LOCATION_REMINDER_RADIUS_OPTIONS = [100, 150, 300, 500] as const;
+
+type ReminderSettingsTarget =
+  | "app-notifications"
+  | "exact-alarm"
+  | "notification-channel"
+  | null;
 
 function reminderTimeAsDate(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
@@ -261,6 +275,63 @@ export function TaskEditor({
     useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [reminderPermissionWarning, setReminderPermissionWarning] = useState("");
+  const [reminderSettingsTarget, setReminderSettingsTarget] =
+    useState<ReminderSettingsTarget>(null);
+
+  const checkAndroidTimeReminderAccess = useCallback(
+    async (requestNotificationAccess: boolean) => {
+      if (Platform.OS !== "android") {
+        return true;
+      }
+      try {
+        await ensureReminderNotificationChannel();
+        const notificationsGranted = requestNotificationAccess
+          ? await ensureNotificationPermission()
+          : await hasNotificationPermission();
+        if (!notificationsGranted) {
+          setReminderPermissionWarning("请开启通知权限，时间提醒才能弹出并响铃。");
+          setReminderSettingsTarget("app-notifications");
+          return false;
+        }
+        if (!(await hasExactAlarmAccess())) {
+          setReminderPermissionWarning(
+            "请允许“闹钟和提醒”权限，确保时间提醒按时触发。",
+          );
+          setReminderSettingsTarget("exact-alarm");
+          return false;
+        }
+        if (!(await hasUsableReminderNotificationChannel())) {
+          setReminderPermissionWarning(
+            "任务提醒类别已被静音或关闭，请在系统设置中允许弹出和响铃。",
+          );
+          setReminderSettingsTarget("notification-channel");
+          return false;
+        }
+        setReminderPermissionWarning("");
+        setReminderSettingsTarget(null);
+        return true;
+      } catch {
+        setReminderPermissionWarning(
+          "无法初始化任务提醒，请在系统通知设置中检查提醒类别。",
+        );
+        setReminderSettingsTarget("notification-channel");
+        return false;
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== "android" || !reminderTime) {
+      return;
+    }
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void checkAndroidTimeReminderAccess(false);
+      }
+    });
+    return () => subscription.remove();
+  }, [checkAndroidTimeReminderAccess, reminderTime]);
 
   async function toggleLocationReminder(enabled: boolean) {
     if (!enabled) {
@@ -401,15 +472,20 @@ export function TaskEditor({
     if (!task || !text.trim()) {
       return;
     }
-    if (
-      Platform.OS === "android" &&
-      reminderTime &&
-      !(await hasExactAlarmAccess())
-    ) {
-      setReminderPermissionWarning(
-        "请允许“闹钟和提醒”权限，确保时间提醒按时触发。",
+    if (Platform.OS === "android" && reminderTime) {
+      const reminderDate = new Date(
+        `${task.taskDate}T${reminderTime.slice(0, 5)}:00`,
       );
-      return;
+      if (
+        Number.isNaN(reminderDate.getTime()) ||
+        reminderDate.getTime() <= Date.now()
+      ) {
+        Alert.alert("提醒时间已过", "请选择任务日期内尚未到达的时间。");
+        return;
+      }
+      if (!(await checkAndroidTimeReminderAccess(true))) {
+        return;
+      }
     }
     onSave(task, {
       text: text.trim(),
@@ -556,11 +632,19 @@ export function TaskEditor({
                   onClearTime={() => {
                     setReminderTime("");
                     setReminderPermissionWarning("");
+                    setReminderSettingsTarget(null);
                   }}
-                  onOpenExactAlarmSettings={() => {
-                    void openExactAlarmSettings().catch(() => {
-                      setReminderPermissionWarning(
-                        "无法打开系统设置，请在“特殊应用权限”中允许闹钟和提醒。",
+                  onOpenReminderSettings={() => {
+                    const openSettings =
+                      reminderSettingsTarget === "exact-alarm"
+                        ? openExactAlarmSettings
+                        : reminderSettingsTarget === "notification-channel"
+                          ? openReminderNotificationSettings
+                          : Linking.openSettings;
+                    void openSettings().catch(() => {
+                      Alert.alert(
+                        "无法打开系统设置",
+                        "请手动进入系统设置，检查 Daily Todo 的通知及“闹钟和提醒”权限。",
                       );
                     });
                   }}
@@ -583,20 +667,8 @@ export function TaskEditor({
                       if (event.type === "set" && date) {
                         setReminderTime(dayjs(date).format("HH:mm"));
                         setReminderPermissionWarning("");
-                        void Promise.all([
-                          ensureNotificationPermission(),
-                          hasExactAlarmAccess(),
-                        ]).then(([notificationsGranted, exactAlarmGranted]) => {
-                          if (!notificationsGranted) {
-                            setReminderPermissionWarning(
-                              "请开启通知权限，时间提醒才能弹出。",
-                            );
-                          } else if (!exactAlarmGranted) {
-                            setReminderPermissionWarning(
-                              "请允许“闹钟和提醒”权限，确保按时触发。",
-                            );
-                          }
-                        });
+                        setReminderSettingsTarget(null);
+                        void checkAndroidTimeReminderAccess(true);
                       }
                     }}
                     value={reminderTimeAsDate(reminderTime)}

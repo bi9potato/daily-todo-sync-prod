@@ -120,8 +120,13 @@ class ReminderSettingsPackage : ReactPackage {
 const reminderSettingsModuleSource = `package ${PACKAGE_NAME}.reminders
 
 import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -134,6 +139,43 @@ class ReminderSettingsModule(
   reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
   override fun getName(): String = "ReminderSettings"
+
+  override fun getConstants(): Map<String, Any> = mapOf(
+    "reminderChannelId" to REMINDER_CHANNEL_ID,
+  )
+
+  @ReactMethod
+  fun ensureReminderNotificationChannel(promise: Promise) {
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val manager =
+          reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val alarmSound =
+          RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val audioAttributes = AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_ALARM)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+          .build()
+        val channel = NotificationChannel(
+          REMINDER_CHANNEL_ID,
+          "任务提醒",
+          NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+          description = "到时间和到达地点的任务提醒"
+          enableLights(true)
+          enableVibration(true)
+          vibrationPattern = longArrayOf(0, 250, 250, 250)
+          lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+          setSound(alarmSound, audioAttributes)
+        }
+        manager.createNotificationChannel(channel)
+      }
+      promise.resolve(null)
+    } catch (error: Throwable) {
+      promise.reject("reminder_channel_setup_failed", error)
+    }
+  }
 
   @ReactMethod
   fun canScheduleExactAlarms(promise: Promise) {
@@ -166,11 +208,29 @@ class ReminderSettingsModule(
       promise.reject("exact_alarm_settings_failed", error)
     }
   }
+
+  @ReactMethod
+  fun openReminderNotificationSettings(promise: Promise) {
+    try {
+      val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, reactApplicationContext.packageName)
+        .putExtra(Settings.EXTRA_CHANNEL_ID, REMINDER_CHANNEL_ID)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      reactApplicationContext.startActivity(intent)
+      promise.resolve(null)
+    } catch (error: Throwable) {
+      promise.reject("reminder_notification_settings_failed", error)
+    }
+  }
+
+  companion object {
+    private const val REMINDER_CHANNEL_ID = "task-reminders-v2"
+  }
 }
 `;
 
 module.exports = createRunOncePlugin(
   withReminderSettings,
   "daily-todo-reminder-settings",
-  "1.0.0",
+  "1.1.0",
 );

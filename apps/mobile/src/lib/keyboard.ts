@@ -18,7 +18,12 @@ import { KeyboardEvents } from "react-native-keyboard-controller";
 // The library's KeyboardEvents tell us exactly when the keyboard is moving,
 // so we can track state more reliably than checking Keyboard.isVisible().
 export function useBackPressKeyboardGuard(onClose: () => void) {
-  const isKeyboardMovingRef = useRef(false);
+  const keyboardWasVisibleRef = useRef(
+    Platform.OS === "android" && Boolean(Keyboard.isVisible?.()),
+  );
+  const isKeyboardHidingRef = useRef(false);
+  const suppressCloseUntilRef = useRef(0);
+  const suppressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     // On Android only (iOS doesn't have this race condition)
@@ -26,43 +31,82 @@ export function useBackPressKeyboardGuard(onClose: () => void) {
       return;
     }
 
-    const showSubscription = KeyboardEvents.addListener("keyboardDidShow", () => {
-      isKeyboardMovingRef.current = false;
+    const clearSuppressionTimer = () => {
+      if (suppressTimerRef.current) {
+        clearTimeout(suppressTimerRef.current);
+        suppressTimerRef.current = null;
+      }
+    };
+    const armCloseSuppression = (duration = 600) => {
+      clearSuppressionTimer();
+      suppressCloseUntilRef.current = Date.now() + duration;
+      suppressTimerRef.current = setTimeout(() => {
+        suppressCloseUntilRef.current = 0;
+        suppressTimerRef.current = null;
+      }, duration);
+    };
+
+    const willShowSubscription = KeyboardEvents.addListener("keyboardWillShow", () => {
+      clearSuppressionTimer();
+      keyboardWasVisibleRef.current = true;
+      isKeyboardHidingRef.current = false;
+      suppressCloseUntilRef.current = 0;
+    });
+    const didShowSubscription = KeyboardEvents.addListener("keyboardDidShow", () => {
+      keyboardWasVisibleRef.current = true;
+      isKeyboardHidingRef.current = false;
     });
 
-    const hideSubscription = KeyboardEvents.addListener("keyboardDidHide", () => {
-      // Mark that the keyboard just hid; the next back gesture is probably
-      // the IME's response to that gesture, not a separate request to close.
-      isKeyboardMovingRef.current = true;
-      // Clear the flag after a short delay so a subsequent back (after pause)
-      // is treated as a separate gesture.
-      const timer = setTimeout(() => {
-        isKeyboardMovingRef.current = false;
-      }, 100);
-      return () => clearTimeout(timer);
+    const willHideSubscription = KeyboardEvents.addListener("keyboardWillHide", (event) => {
+      // Android can dispatch Modal.onRequestClose at either edge of the IME
+      // animation. Keep the last known visible state until keyboardDidHide,
+      // and cover the tail of predictive-back animations as well.
+      isKeyboardHidingRef.current = true;
+      armCloseSuppression(Math.max(600, event.duration + 250));
+    });
+    const didHideSubscription = KeyboardEvents.addListener("keyboardDidHide", (event) => {
+      keyboardWasVisibleRef.current = false;
+      isKeyboardHidingRef.current = false;
+      armCloseSuppression(Math.max(600, event.duration + 250));
     });
 
     return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
+      clearSuppressionTimer();
+      willShowSubscription.remove();
+      didShowSubscription.remove();
+      willHideSubscription.remove();
+      didHideSubscription.remove();
     };
   }, []);
 
   return useCallback(() => {
-    if (isKeyboardMovingRef.current) {
-      // Keyboard just hid; don't close the modal, let this back be consumed
-      // by the IME dismiss (if it happens to race the back gesture).
-      isKeyboardMovingRef.current = false;
-      return;
+    if (Platform.OS === "android") {
+      const keyboardIsVisible =
+        keyboardWasVisibleRef.current || Boolean(Keyboard.isVisible?.());
+      if (keyboardIsVisible) {
+        Keyboard.dismiss();
+        return;
+      }
+      if (
+        isKeyboardHidingRef.current ||
+        Date.now() <= suppressCloseUntilRef.current
+      ) {
+        // This request belongs to the same Android back gesture that just
+        // hid the IME. Consume it without dismissing the task editor.
+        isKeyboardHidingRef.current = false;
+        suppressCloseUntilRef.current = 0;
+        if (suppressTimerRef.current) {
+          clearTimeout(suppressTimerRef.current);
+          suppressTimerRef.current = null;
+        }
+        return;
+      }
     }
 
     if (Platform.OS === "android" && Keyboard.isVisible?.()) {
-      // Fallback for older/edge cases: if keyboard is visible, dismiss it
       Keyboard.dismiss();
       return;
     }
-
-    // Keyboard is not visible or moving; close the modal
     onClose();
   }, [onClose]);
 }

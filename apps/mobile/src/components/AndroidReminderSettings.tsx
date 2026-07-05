@@ -37,7 +37,7 @@ type AndroidReminderSettingsProps = {
   onChangeRadius: (radiusMeters: number) => void;
   onClearLocation: () => void;
   onClearTime: () => void;
-  onOpenExactAlarmSettings: () => void;
+  onOpenReminderSettings: () => void;
   onOpenTimePicker: () => void;
   onSearchLocation: (address: string) => Promise<PlaceSearchResult[]>;
   onSelectSearchResult: (result: PlaceSearchResult) => void;
@@ -56,7 +56,7 @@ export function AndroidReminderSettings({
   onChangeRadius,
   onClearLocation,
   onClearTime,
-  onOpenExactAlarmSettings,
+  onOpenReminderSettings,
   onOpenTimePicker,
   onSearchLocation,
   onSelectSearchResult,
@@ -134,7 +134,7 @@ export function AndroidReminderSettings({
         {reminderPermissionWarning ? (
           <Pressable
             accessibilityRole="button"
-            onPress={onOpenExactAlarmSettings}
+            onPress={onOpenReminderSettings}
             style={styles.warningRow}>
             <AppIcon name="warning-outline" color={colors.danger} size={17} />
             <Text style={styles.warningText}>{reminderPermissionWarning}</Text>

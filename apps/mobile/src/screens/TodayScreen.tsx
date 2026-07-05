@@ -41,6 +41,7 @@ import {
   uploadTaskAttachment,
 } from "@/lib/api";
 import { formatLongDate } from "@/lib/date";
+import { scheduleTaskReminder } from "@/lib/notifications";
 import {
   createTodoClientId,
   enqueueTodoCreate,
@@ -154,6 +155,17 @@ function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
     pending: tasks.filter((item) => item.status === "pending"),
     done: tasks.filter((item) => item.status === "done"),
   };
+}
+
+function reminderAtForLocalTaskDate(
+  taskDate: string,
+  reminderTime: string | null,
+) {
+  if (!reminderTime) {
+    return null;
+  }
+  const value = new Date(`${taskDate}T${reminderTime.slice(0, 5)}:00`);
+  return Number.isNaN(value.getTime()) ? null : value.toISOString();
 }
 
 function updateTaskAttachments(
@@ -274,7 +286,16 @@ export function TodayScreen({
             ? { isLowPriority: payload.isLowPriority }
             : {}),
           ...(payload.reminderTime !== undefined
-            ? { reminderTime: payload.reminderTime }
+            ? {
+                reminderTime: payload.reminderTime,
+                reminderAt:
+                  Platform.OS === "android"
+                    ? reminderAtForLocalTaskDate(
+                        original.taskDate,
+                        payload.reminderTime,
+                      )
+                    : original.reminderAt,
+              }
             : {}),
           ...(payload.repeat !== undefined ? { repeat: payload.repeat } : {}),
           ...(payload.location !== undefined ? { location: payload.location } : {}),
@@ -290,10 +311,26 @@ export function TodayScreen({
         queryClient.setQueryData(["day", selectedDate], context.previous);
       }
     },
-    onSuccess: (task) => {
+    onSuccess: async (task) => {
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
         replaceTask(current, task),
       );
+      if (Platform.OS === "android") {
+        try {
+          // Confirm the exact occurrence is in Android's scheduler before
+          // dismissing the editor. The range reconciler remains the repair
+          // path for recurring/future occurrences and app restarts.
+          await scheduleTaskReminder(task);
+        } catch (error) {
+          Alert.alert(
+            "任务已保存，但提醒设置失败",
+            error instanceof Error
+              ? error.message
+              : "请检查通知及“闹钟和提醒”权限后重试。",
+          );
+          return;
+        }
+      }
       setSelectedTaskId(null);
     },
     onSettled: () => {
