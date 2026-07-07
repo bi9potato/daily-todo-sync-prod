@@ -33,10 +33,13 @@ export const TaskRow = memo(function TaskRow({
   onToggle,
 }: TaskRowProps) {
   const done = task.status === "done";
+  // Show the note itself (first line) instead of an opaque "有备注" tag --
+  // a carried-over task's note being invisible in the list is
+  // indistinguishable from the note having been lost.
+  const notePreview = task.note.trim().split(/\r?\n/)[0] ?? "";
   const metadata = [
     task.reminderTime,
     task.repeat.kind !== "none" ? "重复" : null,
-    task.note ? "有备注" : null,
   ].filter(Boolean);
 
   return (
@@ -84,6 +87,11 @@ export const TaskRow = memo(function TaskRow({
         <Text numberOfLines={2} style={[styles.text, done && styles.textDone]}>
           {task.text}
         </Text>
+        {notePreview ? (
+          <Text numberOfLines={1} style={styles.notePreview}>
+            {notePreview}
+          </Text>
+        ) : null}
         {metadata.length ? (
           <View style={styles.metadata}>
             {task.reminderTime ? (
@@ -244,6 +252,10 @@ const styles = StyleSheet.create({
   textDone: {
     color: colors.textMuted,
     textDecorationLine: "line-through",
+  },
+  notePreview: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   metadata: {
     alignItems: "center",

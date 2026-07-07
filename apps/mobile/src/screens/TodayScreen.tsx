@@ -157,6 +157,22 @@ function replaceTask(data: DayTodos | undefined, task: TodoOccurrence) {
   };
 }
 
+// Appending a freshly created occurrence must tolerate the task already
+// being in the cache: a refetch (pull-to-refresh, range invalidation, day
+// rollover) can land between the create request resolving and onSuccess
+// running, and a blind append would then render the same id twice.
+function appendTask(data: DayTodos | undefined, task: TodoOccurrence) {
+  if (!data) {
+    return data;
+  }
+  const exists = [...data.pending, ...data.done].some(
+    (item) => item.id === task.id,
+  );
+  return exists
+    ? replaceTask(data, task)
+    : { ...data, pending: [...data.pending, task] };
+}
+
 function reminderAtForLocalTaskDate(
   taskDate: string,
   reminderTime: string | null,
@@ -227,7 +243,7 @@ export function TodayScreen({
     },
     onSuccess: (task) => {
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
-        current ? { ...current, pending: [...current.pending, task] } : current,
+        appendTask(current, task),
       );
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -378,7 +394,7 @@ export function TodayScreen({
     mutationFn: copyLongTermOccurrenceAsRegular,
     onSuccess: (task) => {
       queryClient.setQueryData<DayTodos>(["day", selectedDate], (current) =>
-        current ? { ...current, pending: [...current.pending, task] } : current,
+        appendTask(current, task),
       );
       setSelectedTaskId(task.id);
       void queryClient.invalidateQueries({ queryKey: ["range"] });
