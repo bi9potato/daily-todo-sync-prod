@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  InteractionManager,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -700,6 +701,20 @@ export function MobilityScreen({
   const liveEnabled = isToday && (recordingEnabled || userEnabledLive);
   const liveLocation = useLiveLocation(liveEnabled);
 
+  // Mounting the native MapLibre view is heavy (GL surface + style setup) and
+  // contends with ScreenEnter's entrance animation for frame budget, which is
+  // exactly what read as "laggy" opening this screen. Deferring construction
+  // until the transition (and any other queued interaction) finishes keeps
+  // the fade-in smooth; the loading spinner already shown for a pending
+  // dayQuery covers this brief extra window too.
+  const [mapMountReady, setMapMountReady] = useState(false);
+  useEffect(() => {
+    const handle = InteractionManager.runAfterInteractions(() => {
+      setMapMountReady(true);
+    });
+    return () => handle.cancel();
+  }, []);
+
   const handleUserPan = useCallback(() => {
     setFollowLive(false);
   }, []);
@@ -891,7 +906,7 @@ export function MobilityScreen({
       </View>
 
       <View style={styles.mapFrame}>
-        {dayQuery.isPending ? (
+        {dayQuery.isPending || !mapMountReady ? (
           <View style={styles.mapLoading}>
             <ActivityIndicator color={colors.accent} />
           </View>
