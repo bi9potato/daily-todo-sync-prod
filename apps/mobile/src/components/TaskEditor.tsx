@@ -30,6 +30,7 @@ import {
   openReminderNotificationSettings,
 } from "@/lib/android-reminder-settings";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
+import { useKeyboardControllerShim } from "@/lib/useKeyboardControllerShim";
 import {
   searchNominatimPlaces,
 } from "@/lib/place-search";
@@ -252,6 +253,13 @@ export function TaskEditor({
 }: TaskEditorProps) {
   const insets = useSafeAreaInsets();
   const handleKeyboardGuard = useBackPressKeyboardGuard(onClose);
+  // KeyboardAvoidingView's "padding" behavior below is iOS-only (see its
+  // `behavior` prop): Android got nothing, so the IME simply overlaid the
+  // sheet and covered whatever field -- almost always the note, since it
+  // sits lowest in the scroll content -- was actually focused. Pad the
+  // ScrollView's content by the keyboard's height instead, the same
+  // approach Composer.tsx already uses for this exact Android gap.
+  const { keyboardInset } = useKeyboardControllerShim(insets.bottom);
   const [text, setText] = useState(task?.text ?? "");
   const [note, setNote] = useState(task?.note ?? "");
   const [reminderTime, setReminderTime] = useState(task?.reminderTime ?? "");
@@ -551,7 +559,10 @@ export function TaskEditor({
         </View>
 
         <ScrollView
-          contentContainerStyle={styles.content}
+          contentContainerStyle={[
+            styles.content,
+            Platform.OS === "android" && { paddingBottom: spacing.xxl + keyboardInset },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
           <TextInput
