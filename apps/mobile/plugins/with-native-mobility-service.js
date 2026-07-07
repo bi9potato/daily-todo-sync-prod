@@ -633,7 +633,13 @@ class NativeMobilityService : Service(), SensorEventListener {
     val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
       .setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
       .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
-      .setMaxUpdateDelayMillis(0)
+      // Let the OS/hardware batch fixes and deliver them together instead of
+      // waking the app for every single one - same fix rate and accuracy,
+      // far fewer process wake-ups. Bounded to a minute (not tied to the
+      // 5-minute upload interval) so at most ~1 minute of fixes are only in
+      // the OS's batch buffer - not yet in our own locally-persisted queue -
+      // if the service were killed before delivery.
+      .setMaxUpdateDelayMillis(LOCATION_BATCH_DELAY_MS)
       .setWaitForAccurateLocation(false)
       .build()
     fusedLocationClient.removeLocationUpdates(locationCallback)
@@ -1158,7 +1164,14 @@ class NativeMobilityService : Service(), SensorEventListener {
     // treating it as movement, and reject wildly inaccurate fixes outright.
     private const val LOCATION_INTERVAL_MS = 5_000L
     private const val LOCATION_FASTEST_INTERVAL_MS = 3_000L
-    private const val LOCATION_UPLOAD_INTERVAL_MS = 5_000L
+    private const val LOCATION_BATCH_DELAY_MS = 60_000L
+    // Local-first: appendPoints() already durably queues every accepted fix
+    // to SharedPreferences the moment it is delivered, independent of this.
+    // Widening the network sync from every 5s to every 5min just cuts
+    // upload request count (and the radio wake-ups that go with them)
+    // roughly 60x; nothing recorded changes, only how soon it reaches the
+    // server.
+    private const val LOCATION_UPLOAD_INTERVAL_MS = 300_000L
     private const val MIN_DISTANCE_METERS = 8f
     // Fixes past ~50m of reported error are wifi/cell positions, not GPS -
     // in urban canyons they scatter hundreds of meters and are what drew
@@ -1174,8 +1187,12 @@ class NativeMobilityService : Service(), SensorEventListener {
     private const val STATIONARY_HEARTBEAT_MS = 60_000L
     private const val MAX_UPLOAD_POINTS = 250
     private const val MAX_QUEUED_POINTS = 250_000
-    private const val STEP_UPLOAD_COUNT_INTERVAL = 10
-    private const val STEP_UPLOAD_TIME_INTERVAL_MS = 15_000L
+    // Was 10 steps / 15s - at a normal walking cadence that reopened a
+    // network connection roughly every 5-6 seconds on its own, independent
+    // of (and far more often than) the location upload schedule above.
+    // Aligned to the same cadence so walking doesn't defeat the batching.
+    private const val STEP_UPLOAD_COUNT_INTERVAL = 200
+    private const val STEP_UPLOAD_TIME_INTERVAL_MS = 300_000L
     private const val NETWORK_TIMEOUT_MS = 15_000
     private const val PREFS_NAME = "daily_todo_native_mobility"
     private const val QUEUE_FILE_NAME = "native-mobility-points.json"
