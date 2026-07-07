@@ -176,6 +176,37 @@ def _copy_occurrence_attachments_to_task(user, occurrence: TodoOccurrence, task:
         next_sort_order += 1000
 
 
+def _copy_attachments_between_occurrences(
+    user,
+    source: TodoOccurrence,
+    target: TodoOccurrence,
+) -> None:
+    # Rows share the underlying file (same storage name); the post_delete
+    # receiver only removes the blob once no attachment row references it.
+    existing_files = set(
+        TaskAttachment.objects.filter(
+            user=user,
+            occurrence=target,
+        ).values_list("file", flat=True)
+    )
+    for attachment in TaskAttachment.objects.filter(
+        user=user,
+        occurrence=source,
+    ).order_by("sort_order", "created_at"):
+        if attachment.file.name in existing_files:
+            continue
+        TaskAttachment.objects.create(
+            user=user,
+            task=target.task,
+            occurrence=target,
+            file=attachment.file.name,
+            original_filename=attachment.original_filename,
+            content_type=attachment.content_type,
+            size_bytes=attachment.size_bytes,
+            sort_order=attachment.sort_order,
+        )
+
+
 def _copy_task_attachments_to_occurrence(user, task: Task, occurrence: TodoOccurrence) -> None:
     existing_files = set(
         TaskAttachment.objects.filter(
@@ -594,19 +625,32 @@ def ensure_range(
                 continue
 
             try:
-                TodoOccurrence.objects.create(
+                # Carryover moves the SAME task instance forward a day, so
+                # occurrence-level content must follow: note (long-term tasks
+                # keep theirs on Task, but regular/low-priority notes live
+                # here), attachments, and the location tag + arrival reminder.
+                carried = TodoOccurrence.objects.create(
                     user=user,
                     task=occurrence.task,
                     root_id=occurrence.root_id,
                     task_date=current,
                     source=TodoOccurrence.Source.CARRYOVER,
+                    note=occurrence.note,
                     is_pinned=occurrence.is_pinned,
                     is_low_priority=occurrence.is_low_priority,
                     sort_order=occurrence.sort_order,
+                    location_name=occurrence.location_name,
+                    location_latitude=occurrence.location_latitude,
+                    location_longitude=occurrence.location_longitude,
+                    location_recorded_at=occurrence.location_recorded_at,
+                    location_reminder_enabled=occurrence.location_reminder_enabled,
+                    location_radius_meters=occurrence.location_radius_meters,
                     carryover_from_occurrence=occurrence,
                 )
             except IntegrityError:
                 pass
+            else:
+                _copy_attachments_between_occurrences(user, occurrence, carried)
 
         current += timedelta(days=1)
 
@@ -694,8 +738,21 @@ def update_occurrence(
         if use_future_content:
             occurrence.task.note = note.strip()
         else:
+            previous_note = occurrence.note
             occurrence.note = note.strip()
             occurrence_changed_fields.append("note")
+            # Editing a past day after its carryover copy already exists must
+            # reach that copy too, or the edit silently vanishes tomorrow.
+            # Only overwrite copies still carrying the pre-edit content (empty
+            # or identical) so a note typed directly on a later day survives.
+            TodoOccurrence.objects.filter(
+                user=user,
+                root_id=occurrence.root_id,
+                task_date__gt=occurrence.task_date,
+                source=TodoOccurrence.Source.CARRYOVER,
+                deleted_at__isnull=True,
+                note__in=["", previous_note],
+            ).update(note=occurrence.note, updated_at=timezone.now())
 
     if set_location:
         if location is None:

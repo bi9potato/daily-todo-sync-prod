@@ -225,6 +225,113 @@ class CarryoverTests(TestCase):
         )
         self.assertTrue(carried.is_low_priority)
 
+    def test_carryover_preserves_note(self):
+        source = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        update_occurrence(self.user, source.id, note="chapter 3, page 42")
+
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 21),
+            deleted_at__isnull=True,
+        )
+        self.assertEqual(carried.note, "chapter 3, page 42")
+
+    def test_carryover_preserves_note_on_low_priority_task(self):
+        source = create_task_for_day(
+            self.user,
+            date(2026, 6, 20),
+            "Someday",
+            is_low_priority=True,
+        )
+        update_occurrence(self.user, source.id, note="call the bank first")
+
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 21),
+            deleted_at__isnull=True,
+        )
+        self.assertTrue(carried.is_low_priority)
+        self.assertEqual(carried.note, "call the bank first")
+
+    def test_carryover_preserves_note_across_multiple_days(self):
+        source = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        update_occurrence(self.user, source.id, note="keep me")
+
+        ensure_day(self.user, date(2026, 6, 23), today=date(2026, 6, 23))
+
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 23),
+            deleted_at__isnull=True,
+        )
+        self.assertEqual(carried.note, "keep me")
+
+    def test_carryover_preserves_location_and_arrival_reminder(self):
+        source = create_task_for_day(self.user, date(2026, 6, 20), "Pick up parcel")
+        update_occurrence(
+            self.user,
+            source.id,
+            location={
+                "name": "Post office",
+                "latitude": "31.230400",
+                "longitude": "121.473700",
+                "recorded_at": None,
+                "reminder_enabled": True,
+                "radius_meters": 300,
+            },
+            set_location=True,
+        )
+
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 21),
+            deleted_at__isnull=True,
+        )
+        self.assertEqual(carried.location_name, "Post office")
+        self.assertTrue(carried.location_reminder_enabled)
+        self.assertEqual(carried.location_radius_meters, 300)
+
+    def test_note_edit_on_past_day_reaches_existing_carryover_copy(self):
+        source = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+
+        update_occurrence(self.user, source.id, note="added after carryover")
+
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 21),
+            deleted_at__isnull=True,
+        )
+        self.assertEqual(carried.note, "added after carryover")
+
+    def test_note_edit_on_past_day_keeps_diverged_carryover_note(self):
+        source = create_task_for_day(self.user, date(2026, 6, 20), "Read")
+        update_occurrence(self.user, source.id, note="original")
+        ensure_day(self.user, date(2026, 6, 21), today=date(2026, 6, 21))
+        carried = TodoOccurrence.objects.get(
+            user=self.user,
+            root_id=source.root_id,
+            task_date=date(2026, 6, 21),
+            deleted_at__isnull=True,
+        )
+        update_occurrence(self.user, carried.id, note="edited on the new day")
+
+        update_occurrence(self.user, source.id, note="rewritten history")
+
+        carried.refresh_from_db()
+        self.assertEqual(carried.note, "edited on the new day")
+
     def test_existing_future_carryover_tracks_pin_and_reorder_changes(self):
         first = create_task_for_day(self.user, date(2026, 6, 20), "First")
         second = create_task_for_day(self.user, date(2026, 6, 20), "Second")
