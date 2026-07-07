@@ -26,7 +26,9 @@ import { AttachmentGallery } from "./AttachmentGallery";
 import { ScreenEnter } from "./ScreenEnter";
 import {
   hasExactAlarmAccess,
+  hasReminderBatteryExemption,
   openExactAlarmSettings,
+  openReminderBatteryOptimizationSettings,
   openReminderNotificationSettings,
 } from "@/lib/android-reminder-settings";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
@@ -81,6 +83,7 @@ type ReminderSettingsTarget =
   | "app-notifications"
   | "exact-alarm"
   | "notification-channel"
+  | "battery-optimization"
   | null;
 
 function reminderTimeAsDate(value: string) {
@@ -314,6 +317,18 @@ export function TaskEditor({
           );
           setReminderSettingsTarget("notification-channel");
           return false;
+        }
+        if (!(await hasReminderBatteryExemption())) {
+          // Softer than the checks above: exact alarms already bypass Doze
+          // for firing time, so this isn't a hard failure, just a
+          // device-dependent reliability risk (some OEM battery managers,
+          // e.g. Samsung's "sleeping apps" bucket, can still throttle a
+          // backgrounded app). Warn, but don't block saving the reminder.
+          setReminderPermissionWarning(
+            "系统电池优化可能会延迟或压低提醒，建议允许该应用不受限制地后台运行。",
+          );
+          setReminderSettingsTarget("battery-optimization");
+          return true;
         }
         setReminderPermissionWarning("");
         setReminderSettingsTarget(null);
@@ -651,7 +666,9 @@ export function TaskEditor({
                         ? openExactAlarmSettings
                         : reminderSettingsTarget === "notification-channel"
                           ? openReminderNotificationSettings
-                          : Linking.openSettings;
+                          : reminderSettingsTarget === "battery-optimization"
+                            ? openReminderBatteryOptimizationSettings
+                            : Linking.openSettings;
                     void openSettings().catch(() => {
                       Alert.alert(
                         "无法打开系统设置",

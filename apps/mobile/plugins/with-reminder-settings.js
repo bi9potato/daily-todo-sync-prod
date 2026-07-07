@@ -129,6 +129,7 @@ import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -223,6 +224,46 @@ class ReminderSettingsModule(
     }
   }
 
+  // A scheduled reminder is an exact alarm, which Android fires regardless of
+  // Doze - but some OEM battery managers (and even stock "Deep sleeping
+  // apps" standby buckets) still throttle a backgrounded app's own follow-up
+  // work. Exempting from battery optimization is the one standard,
+  // OEM-agnostic lever for that, same API the footprint feature already
+  // requests for the exact same reason.
+  @ReactMethod
+  fun isBatteryOptimizationDisabled(promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      promise.resolve(true)
+      return
+    }
+    val powerManager = reactApplicationContext.getSystemService(PowerManager::class.java)
+    promise.resolve(
+      powerManager?.isIgnoringBatteryOptimizations(reactApplicationContext.packageName) == true,
+    )
+  }
+
+  @ReactMethod
+  fun openBatteryOptimizationSettings(promise: Promise) {
+    try {
+      val settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val fallbackIntent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:\${reactApplicationContext.packageName}"),
+      ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val intent =
+        if (settingsIntent.resolveActivity(reactApplicationContext.packageManager) != null) {
+          settingsIntent
+        } else {
+          fallbackIntent
+        }
+      reactApplicationContext.startActivity(intent)
+      promise.resolve(null)
+    } catch (error: Throwable) {
+      promise.reject("battery_optimization_settings_failed", error)
+    }
+  }
+
   companion object {
     private const val REMINDER_CHANNEL_ID = "task-reminders-v2"
   }
@@ -232,5 +273,5 @@ class ReminderSettingsModule(
 module.exports = createRunOncePlugin(
   withReminderSettings,
   "daily-todo-reminder-settings",
-  "1.1.0",
+  "1.2.0",
 );

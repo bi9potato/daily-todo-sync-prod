@@ -6,6 +6,8 @@ type ReminderSettingsNativeModule = {
   ensureReminderNotificationChannel(): Promise<void>;
   openExactAlarmSettings(): Promise<void>;
   openReminderNotificationSettings(): Promise<void>;
+  isBatteryOptimizationDisabled(): Promise<boolean>;
+  openBatteryOptimizationSettings(): Promise<void>;
 };
 
 const nativeModule = NativeModules.ReminderSettings as
@@ -45,4 +47,18 @@ export async function openReminderNotificationSettings() {
     return;
   }
   await nativeModule.openReminderNotificationSettings();
+}
+
+export async function hasReminderBatteryExemption() {
+  if (Platform.OS !== "android" || !nativeModule) {
+    return true;
+  }
+  return nativeModule.isBatteryOptimizationDisabled().catch(() => true);
+}
+
+export async function openReminderBatteryOptimizationSettings() {
+  if (Platform.OS !== "android" || !nativeModule) {
+    return;
+  }
+  await nativeModule.openBatteryOptimizationSettings();
 }
