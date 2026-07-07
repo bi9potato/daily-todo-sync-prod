@@ -8,6 +8,14 @@ import { AppIcon } from "@/components/AppIcon";
 import { AppShellProvider, useAppShell } from "@/lib/app-shell";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
+// Without this, expo-router falls back to the first route alphabetically --
+// which is `ai` -- whenever the (app) group mounts without an explicit path
+// (process restore, notification taps, back navigation collapsing the
+// stack). "My day" is the app's home.
+export const unstable_settings = {
+  initialRouteName: "today",
+};
+
 export default function AppGroupLayout() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -20,6 +28,8 @@ export default function AppGroupLayout() {
     <AppShellProvider>
       <Drawer
         drawerContent={(props) => <AppDrawerContent {...props} />}
+        initialRouteName="today"
+        backBehavior="initialRoute"
         screenOptions={{
           drawerStyle: {
             backgroundColor: colors.surface,
