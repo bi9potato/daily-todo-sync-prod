@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as Clipboard from "expo-clipboard";
 
 import { AppIcon } from "@/components/AppIcon";
 import { useBackPressKeyboardGuard } from "@/lib/keyboard";
@@ -28,6 +29,7 @@ import {
   moneyNatureLabels,
   type ExpenseCandidate,
   type ExpenseCategory,
+  type ExpenseDiagnosticSample,
   type ExpenseSource,
   type InstalledExpenseApp,
   type TransactionCategory,
@@ -39,6 +41,7 @@ type ManualMode = "purchase_expense" | "earned_income" | "refund";
 
 const EMPTY_SOURCES: ExpenseSource[] = [];
 const EMPTY_INSTALLED_APPS: InstalledExpenseApp[] = [];
+const EMPTY_DIAGNOSTIC_SAMPLES: ExpenseDiagnosticSample[] = [];
 const EXPENSE_CATEGORY_ENTRIES = Object.entries(expenseCategoryLabels) as [
   ExpenseCategory,
   string,
@@ -80,6 +83,15 @@ export function ExpenseTrackingScreen({ today }: { today: string }) {
     enabled: available && tab === "sources",
     staleTime: 60_000,
   });
+  // Diagnostic sampling captures real notification/accessibility excerpts,
+  // but until now there was no way to actually see them -- the only path to
+  // building a real parser for a payment app is reading what it really sent.
+  const diagnosticSamplesQuery = useQuery({
+    queryKey: ["expense-diagnostic-samples"],
+    queryFn: expenseTracking.getDiagnosticSamples,
+    enabled: available && tab === "sources",
+    refetchInterval: tab === "sources" ? 5_000 : false,
+  });
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
@@ -118,6 +130,17 @@ export function ExpenseTrackingScreen({ today }: { today: string }) {
       setActionError("");
       void queryClient.invalidateQueries({ queryKey: ["expense-sources"] });
       void queryClient.invalidateQueries({ queryKey: ["expense-health"] });
+    },
+    onError: setErrorFromUnknown,
+  });
+
+  const clearDiagnosticSamplesMutation = useMutation({
+    mutationFn: expenseTracking.clearDiagnosticSamples,
+    onSuccess: () => {
+      setActionError("");
+      void queryClient.invalidateQueries({
+        queryKey: ["expense-diagnostic-samples"],
+      });
     },
     onError: setErrorFromUnknown,
   });
@@ -264,6 +287,7 @@ export function ExpenseTrackingScreen({ today }: { today: string }) {
             isLoading={
               installedAppsQuery.isPending || sourcesQuery.isPending
             }
+            onClearSamples={() => clearDiagnosticSamplesMutation.mutate()}
             onSearch={setSourceSearch}
             onSetSource={(app, enabled, diagnostics) => {
               setActionError("");
@@ -273,6 +297,8 @@ export function ExpenseTrackingScreen({ today }: { today: string }) {
                 diagnosticCaptureEnabled: diagnostics,
               });
             }}
+            clearingSamples={clearDiagnosticSamplesMutation.isPending}
+            samples={diagnosticSamplesQuery.data ?? EMPTY_DIAGNOSTIC_SAMPLES}
             search={sourceSearch}
             sourceByPackage={sourceByPackage}
             updatePending={sourceMutation.isPending}
@@ -602,23 +628,29 @@ function ReviewTab({
 
 function SourcesTab({
   apps,
+  clearingSamples,
   health,
   isLoading,
+  onClearSamples,
   onSearch,
   onSetSource,
+  samples,
   search,
   sourceByPackage,
   updatePending,
 }: {
   apps: InstalledExpenseApp[];
+  clearingSamples: boolean;
   health: Awaited<ReturnType<typeof expenseTracking.getHealth>> | undefined;
   isLoading: boolean;
+  onClearSamples: () => void;
   onSearch: (value: string) => void;
   onSetSource: (
     app: InstalledExpenseApp,
     enabled: boolean,
     diagnostics: boolean,
   ) => void;
+  samples: ExpenseDiagnosticSample[];
   search: string;
   sourceByPackage: Map<string, ExpenseSource>;
   updatePending: boolean;
@@ -652,6 +684,14 @@ function SourcesTab({
           只选择你需要记录交易的应用。未验证版本只采集模板，不会自动记账；诊断采样必须单独开启，样本加密并在 7 天内删除。
         </Text>
       </View>
+
+      {samples.length ? (
+        <DiagnosticSamplesCard
+          clearing={clearingSamples}
+          onClear={onClearSamples}
+          samples={samples}
+        />
+      ) : null}
 
       {!health?.appNotificationsEnabled ? (
         <SettingsRow
@@ -773,6 +813,86 @@ function SourcesTab({
           title="无结果"
         />
       )}
+    </View>
+  );
+}
+
+// Surfaces what diagnostic sampling actually captured. Without this there was
+// no way to ever see a sample once saved -- the native module has always
+// been able to decrypt and return them, but nothing on the JS side called it,
+// so a real parser for any app could never be written or validated.
+function DiagnosticSamplesCard({
+  clearing,
+  onClear,
+  samples,
+}: {
+  clearing: boolean;
+  onClear: () => void;
+  samples: ExpenseDiagnosticSample[];
+}) {
+  const [copiedId, setCopiedId] = useState("");
+
+  async function copySample(sample: ExpenseDiagnosticSample) {
+    await Clipboard.setStringAsync(sample.excerpt);
+    setCopiedId(sample.id);
+    setTimeout(() => setCopiedId(""), 1500);
+  }
+
+  function confirmClear() {
+    Alert.alert(
+      "清除全部诊断样本？",
+      "已保存的加密样本会被立即删除，此操作无法撤销。",
+      [
+        { text: "取消", style: "cancel" },
+        { text: "清除", style: "destructive", onPress: onClear },
+      ],
+      { cancelable: true },
+    );
+  }
+
+  return (
+    <View style={styles.diagnosticSamplesCard}>
+      <View style={styles.diagnosticSamplesHeader}>
+        <Text style={styles.diagnosticSamplesTitle}>
+          诊断样本 · {samples.length}
+        </Text>
+        <Pressable disabled={clearing} onPress={confirmClear}>
+          <Text style={styles.diagnosticSamplesClear}>
+            {clearing ? "清除中…" : "清除全部"}
+          </Text>
+        </Pressable>
+      </View>
+      <Text style={styles.diagnosticSamplesHint}>
+        还没有可用的自动解析模板，这些是本机捕获到的原始片段。复制后发给开发者可用于开发对应的解析模板。
+      </Text>
+      {samples.map((sample) => (
+        <View key={sample.id} style={styles.diagnosticSample}>
+          <View style={styles.diagnosticSampleMeta}>
+            <Text numberOfLines={1} style={styles.diagnosticSamplePackage}>
+              {sample.sourcePackage} · {sample.sourceKind === "notification" ? "通知" : "页面识别"}
+            </Text>
+            <Text style={styles.diagnosticSampleTime}>
+              {formatTime(sample.capturedAt)}
+            </Text>
+          </View>
+          <Text style={styles.diagnosticSampleExcerpt}>{sample.excerpt}</Text>
+          <Pressable
+            onPress={() => void copySample(sample)}
+            style={({ pressed }) => [
+              styles.diagnosticSampleCopy,
+              pressed && styles.pressed,
+            ]}>
+            <AppIcon
+              name={copiedId === sample.id ? "checkmark" : "copy-outline"}
+              color={colors.accent}
+              size={16}
+            />
+            <Text style={styles.diagnosticSampleCopyText}>
+              {copiedId === sample.id ? "已复制" : "复制文本"}
+            </Text>
+          </Pressable>
+        </View>
+      ))}
     </View>
   );
 }
@@ -1445,6 +1565,71 @@ const styles = StyleSheet.create({
   unknownCount: {
     ...typography.caption,
     color: "#9A6500",
+  },
+  diagnosticSamplesCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  diagnosticSamplesHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  diagnosticSamplesTitle: {
+    ...typography.label,
+    color: colors.text,
+    fontWeight: "700",
+  },
+  diagnosticSamplesClear: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: "600",
+  },
+  diagnosticSamplesHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
+  diagnosticSample: {
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    gap: spacing.xs,
+    padding: spacing.sm,
+  },
+  diagnosticSampleMeta: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "space-between",
+  },
+  diagnosticSamplePackage: {
+    ...typography.caption,
+    color: colors.textMuted,
+    flex: 1,
+  },
+  diagnosticSampleTime: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  diagnosticSampleExcerpt: {
+    ...typography.body,
+    color: colors.text,
+  },
+  diagnosticSampleCopy: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  diagnosticSampleCopyText: {
+    ...typography.caption,
+    color: colors.accent,
+    fontWeight: "600",
   },
   emptyState: {
     alignItems: "center",

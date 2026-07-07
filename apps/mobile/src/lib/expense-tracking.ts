@@ -132,6 +132,20 @@ export type ExpenseSource = InstalledExpenseApp & {
   lastParsedAt: number | null;
 };
 
+// A captured-but-unparsed notification/accessibility snapshot, saved only
+// while diagnostic sampling is on for that source. Decrypted on the native
+// side before crossing the bridge; this is the only way to actually see what
+// was captured, since ExpenseParserRegistry has no real parsers yet and
+// never turns these into a candidate or transaction on its own.
+export type ExpenseDiagnosticSample = {
+  id: string;
+  sourcePackage: string;
+  sourceKind: "notification" | "accessibility";
+  capturedAt: number;
+  templateFingerprint: string;
+  excerpt: string;
+};
+
 type ExpenseTrackingNativeModule = {
   getHealth(): Promise<ExpenseHealth>;
   getTransactions(dayKey: string): Promise<ExpenseDayData>;
@@ -152,6 +166,8 @@ type ExpenseTrackingNativeModule = {
   deleteTransaction(transactionId: string): Promise<void>;
   getInstalledApps(): Promise<InstalledExpenseApp[]>;
   getSources(): Promise<ExpenseSource[]>;
+  getDiagnosticSamples(): Promise<ExpenseDiagnosticSample[]>;
+  clearDiagnosticSamples(): Promise<void>;
   setSourceConfig(
     packageName: string,
     enabled: boolean,
@@ -213,6 +229,8 @@ export const expenseTracking = {
     requireNativeModule().deleteTransaction(transactionId),
   getInstalledApps: () => requireNativeModule().getInstalledApps(),
   getSources: () => requireNativeModule().getSources(),
+  getDiagnosticSamples: () => requireNativeModule().getDiagnosticSamples(),
+  clearDiagnosticSamples: () => requireNativeModule().clearDiagnosticSamples(),
   setSourceConfig: (
     packageName: string,
     enabled: boolean,
