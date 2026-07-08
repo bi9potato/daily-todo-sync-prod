@@ -47,6 +47,10 @@ type AndroidReminderSettingsProps = {
   reminderTime: string;
 };
 
+// Compact reminder rows in the Microsoft To Do style: one slim line per
+// reminder kind, icon + value, accent color when armed, detail editors only
+// while actually editing. Replaces the old card with 40px icon circles,
+// two-line rows, and permanent helper copy.
 export function AndroidReminderSettings({
   isLocationBusy,
   isRequestingLocationReminder,
@@ -66,16 +70,14 @@ export function AndroidReminderSettings({
   reminderTime,
 }: AndroidReminderSettingsProps) {
   const [address, setAddress] = useState(location?.name ?? "");
-  const [isLocationExpanded, setIsLocationExpanded] = useState(
-    !location || Boolean(location.reminderEnabled),
-  );
+  // The location editor is heavy; keep it closed unless there is nothing
+  // configured yet (first-time setup) or the user opens it.
+  const [isLocationExpanded, setIsLocationExpanded] = useState(false);
   const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
 
   const locationReminderEnabled = Boolean(location?.reminderEnabled);
-  const locationSummary = location
-    ? `${location.name || "已选地点"} · ${formatRadius(location.radiusMeters)}`
-    : "输入地点后可开启";
+  const hasTime = Boolean(reminderTime);
 
   async function handleSearch() {
     if (!address.trim()) {
@@ -87,234 +89,190 @@ export function AndroidReminderSettings({
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>提醒方式</Text>
-
-      <View style={styles.reminderList}>
-        <View style={styles.reminderRow}>
-          <View style={styles.iconSurface}>
-            <AppIcon name="time-outline" color={colors.text} size={20} />
-          </View>
+    <View style={styles.card}>
+      <Pressable
+        accessibilityLabel={hasTime ? `时间提醒 ${reminderTime.slice(0, 5)}` : "添加时间提醒"}
+        accessibilityRole="button"
+        onPress={onOpenTimePicker}
+        style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+        <AppIcon
+          name={hasTime ? "alarm" : "alarm-outline"}
+          color={hasTime ? colors.accent : colors.textMuted}
+          size={20}
+        />
+        <Text style={[styles.rowLabel, hasTime && styles.rowLabelActive]}>
+          {hasTime ? reminderTime.slice(0, 5) : "时间提醒"}
+        </Text>
+        {hasTime ? (
           <Pressable
-            accessibilityLabel="选择时间提醒"
+            accessibilityLabel="清除时间提醒"
             accessibilityRole="button"
-            onPress={onOpenTimePicker}
-            style={({ pressed }) => [
-              styles.rowCopy,
-              pressed && styles.pressed,
-            ]}>
-            <Text style={styles.rowTitle}>时间提醒</Text>
-            <Text style={styles.rowDescription}>
-              {reminderTime ? "在任务日期的这个时间提醒" : "未设置"}
-            </Text>
+            hitSlop={10}
+            onPress={onClearTime}
+            style={styles.trailingButton}>
+            <AppIcon name="close-circle" color={colors.textMuted} size={19} />
           </Pressable>
-          {reminderTime ? (
-            <>
-              <Text style={styles.timeValue}>{reminderTime.slice(0, 5)}</Text>
+        ) : (
+          <AppIcon name="chevron-forward" color={colors.textMuted} size={16} />
+        )}
+      </Pressable>
+
+      {reminderPermissionWarning ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={onOpenReminderSettings}
+          style={styles.warningRow}>
+          <AppIcon name="warning-outline" color={colors.danger} size={16} />
+          <Text style={styles.warningText}>{reminderPermissionWarning}</Text>
+          <AppIcon name="chevron-forward" color={colors.danger} size={15} />
+        </Pressable>
+      ) : null}
+
+      <View style={styles.divider} />
+
+      <View style={styles.row}>
+        <Pressable
+          accessibilityHint={isLocationExpanded ? "收起地点设置" : "展开地点设置"}
+          accessibilityRole="button"
+          onPress={() => setIsLocationExpanded((current) => !current)}
+          style={({ pressed }) => [styles.rowMain, pressed && styles.pressed]}>
+          <AppIcon
+            name={locationReminderEnabled ? "location" : "location-outline"}
+            color={locationReminderEnabled ? colors.accent : colors.textMuted}
+            size={20}
+          />
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.rowLabel,
+              locationReminderEnabled && styles.rowLabelActive,
+            ]}>
+            {location
+              ? `${location.name || "已选地点"} · ${formatRadius(location.radiusMeters)}`
+              : "到达提醒"}
+          </Text>
+          <AppIcon
+            name={isLocationExpanded ? "chevron-up" : "chevron-down"}
+            color={colors.textMuted}
+            size={16}
+          />
+        </Pressable>
+        {isRequestingLocationReminder ? (
+          <ActivityIndicator color={colors.accent} size="small" />
+        ) : (
+          <Switch
+            accessibilityLabel="到达提醒"
+            onValueChange={(enabled) => {
+              if (enabled && !location) {
+                setIsLocationExpanded(true);
+              }
+              onToggleLocationReminder(enabled);
+            }}
+            thumbColor={colors.white}
+            trackColor={{
+              false: colors.borderStrong,
+              true: colors.accent,
+            }}
+            value={locationReminderEnabled}
+          />
+        )}
+      </View>
+
+      {isLocationExpanded ? (
+        <View style={styles.locationEditor}>
+          <View style={styles.searchRow}>
+            <AppIcon name="search-outline" color={colors.textMuted} size={18} />
+            <TextInput
+              accessibilityLabel="输入地点或地址"
+              autoCorrect={false}
+              onChangeText={setAddress}
+              onSubmitEditing={() => void handleSearch()}
+              placeholder="搜索地点"
+              placeholderTextColor={colors.textMuted}
+              returnKeyType="search"
+              style={styles.searchInput}
+              value={address}
+            />
+            {isLocationBusy ? (
+              <ActivityIndicator color={colors.accent} size="small" />
+            ) : (
               <Pressable
-                accessibilityLabel="清除时间提醒"
+                accessibilityLabel="使用当前位置"
                 accessibilityRole="button"
+                disabled={isLocationBusy}
                 hitSlop={8}
-                onPress={onClearTime}
-                style={styles.compactButton}>
-                <AppIcon name="close-circle" color={colors.textMuted} size={20} />
+                onPress={onUseCurrentLocation}
+                style={({ pressed }) => [
+                  styles.trailingButton,
+                  pressed && styles.pressed,
+                ]}>
+                <AppIcon name="locate-outline" color={colors.accent} size={20} />
               </Pressable>
-            </>
-          ) : (
-            <Pressable
-              accessibilityLabel="添加时间提醒"
-              accessibilityRole="button"
-              onPress={onOpenTimePicker}
-              style={styles.addButton}>
-              <Text style={styles.addButtonText}>添加</Text>
-            </Pressable>
-          )}
-        </View>
+            )}
+          </View>
 
-        {reminderPermissionWarning ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={onOpenReminderSettings}
-            style={styles.warningRow}>
-            <AppIcon name="warning-outline" color={colors.danger} size={17} />
-            <Text style={styles.warningText}>{reminderPermissionWarning}</Text>
-            <Text style={styles.warningAction}>去设置</Text>
-          </Pressable>
-        ) : null}
-
-        <View style={styles.locationHeader}>
-          <Pressable
-            accessibilityHint={isLocationExpanded ? "收起地点设置" : "展开地点设置"}
-            accessibilityRole="button"
-            onPress={() => setIsLocationExpanded((current) => !current)}
-            style={({ pressed }) => [
-              styles.locationHeaderCopy,
-              pressed && styles.pressed,
-            ]}>
-            <View style={[styles.iconSurface, styles.locationIconSurface]}>
-              <AppIcon name="location-outline" color={colors.accent} size={21} />
-            </View>
-            <View style={styles.rowCopy}>
-              <Text style={styles.rowTitle}>地点提醒</Text>
-              <Text numberOfLines={1} style={styles.rowDescription}>
-                {locationReminderEnabled ? locationSummary : "进入范围时提醒"}
-              </Text>
-            </View>
-            <AppIcon
-              name={isLocationExpanded ? "chevron-up" : "chevron-down"}
-              color={colors.textMuted}
-              size={18}
-            />
-          </Pressable>
-          {isRequestingLocationReminder ? (
-            <ActivityIndicator color={colors.accent} size="small" />
-          ) : (
-            <Switch
-              accessibilityLabel="地点提醒"
-              onValueChange={(enabled) => {
-                if (enabled && !location) {
-                  setIsLocationExpanded(true);
-                }
-                onToggleLocationReminder(enabled);
-              }}
-              thumbColor={colors.white}
-              trackColor={{
-                false: colors.borderStrong,
-                true: colors.accent,
-              }}
-              value={locationReminderEnabled}
-            />
-          )}
-        </View>
-
-        {isLocationExpanded ? (
-          <View style={styles.locationEditor}>
-            <View style={styles.searchRow}>
-              <AppIcon name="search-outline" color={colors.textMuted} size={19} />
-              <TextInput
-                accessibilityLabel="输入地点或地址"
-                autoCorrect={false}
-                onChangeText={setAddress}
-                onSubmitEditing={() => void handleSearch()}
-                placeholder="输入地点或地址"
-                placeholderTextColor={colors.textMuted}
-                returnKeyType="search"
-                style={styles.searchInput}
-                value={address}
-              />
-              {isLocationBusy ? (
-                <ActivityIndicator color={colors.accent} size="small" />
-              ) : (
+          {searchResults.length ? (
+            <View style={styles.searchResults}>
+              {searchResults.map((result) => (
                 <Pressable
                   accessibilityRole="button"
-                  disabled={!address.trim()}
-                  onPress={() => void handleSearch()}
+                  key={result.id}
+                  onPress={() => {
+                    setAddress(result.name);
+                    setSearchResults([]);
+                    setHasSearched(false);
+                    onSelectSearchResult(result);
+                  }}
                   style={({ pressed }) => [
-                    styles.searchButton,
-                    !address.trim() && styles.buttonDisabled,
+                    styles.searchResult,
                     pressed && styles.pressed,
                   ]}>
-                  <Text style={styles.searchButtonText}>查找</Text>
-                </Pressable>
-              )}
-            </View>
-
-            {searchResults.length ? (
-              <View style={styles.searchResults}>
-                {searchResults.map((result) => (
-                  <Pressable
-                    accessibilityRole="button"
-                    key={result.id}
-                    onPress={() => {
-                      setAddress(result.name);
-                      setSearchResults([]);
-                      setHasSearched(false);
-                      onSelectSearchResult(result);
-                    }}
-                    style={({ pressed }) => [
-                      styles.searchResult,
-                      pressed && styles.pressed,
-                    ]}>
-                    <AppIcon
-                      name="location-outline"
-                      color={colors.accent}
-                      size={19}
-                    />
-                    <View style={styles.searchResultCopy}>
-                      <Text numberOfLines={1} style={styles.searchResultName}>
-                        {result.name}
-                      </Text>
-                      <Text numberOfLines={2} style={styles.searchResultAddress}>
-                        {result.address}
-                      </Text>
-                    </View>
-                    <AppIcon
-                      name="chevron-forward"
-                      color={colors.textMuted}
-                      size={17}
-                    />
-                  </Pressable>
-                ))}
-              </View>
-            ) : hasSearched && !isLocationBusy ? (
-              <Text style={styles.noSearchResults}>
-                没有找到结果，请补充城市、区县或道路名称
-              </Text>
-            ) : null}
-
-            <Pressable
-              accessibilityRole="button"
-              disabled={isLocationBusy}
-              onPress={onUseCurrentLocation}
-              style={({ pressed }) => [
-                styles.currentLocationButton,
-                pressed && styles.pressed,
-              ]}>
-              <AppIcon name="locate-outline" color={colors.accent} size={19} />
-              <Text style={styles.currentLocationText}>使用当前位置</Text>
-            </Pressable>
-
-            {location ? (
-              <>
-                <View style={styles.selectedLocation}>
-                  <AppIcon name="location" color={colors.accent} size={20} />
-                  <View style={styles.selectedLocationCopy}>
-                    <TextInput
-                      accessibilityLabel="地点名称"
-                      onChangeText={(name) => {
-                        setAddress(name);
-                        onChangeLocationName(name);
-                      }}
-                      style={styles.selectedLocationName}
-                      value={location.name}
-                    />
-                    <Text style={styles.coordinates}>
-                      {location.latitude.toFixed(5)}, {location.longitude.toFixed(5)}
+                  <AppIcon
+                    name="location-outline"
+                    color={colors.accent}
+                    size={17}
+                  />
+                  <View style={styles.searchResultCopy}>
+                    <Text numberOfLines={1} style={styles.searchResultName}>
+                      {result.name}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.searchResultAddress}>
+                      {result.address}
                     </Text>
                   </View>
-                  <Pressable
-                    accessibilityLabel="清除地点"
-                    accessibilityRole="button"
-                    hitSlop={8}
-                    onPress={() => {
-                      setAddress("");
-                      onClearLocation();
-                    }}
-                    style={styles.compactButton}>
-                    <AppIcon
-                      name="close-circle"
-                      color={colors.textMuted}
-                      size={20}
-                    />
-                  </Pressable>
-                </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : hasSearched && !isLocationBusy ? (
+            <Text style={styles.hint}>没有找到结果，试试补充城市或道路</Text>
+          ) : null}
 
-                <View style={styles.radiusHeader}>
-                  <Text style={styles.radiusLabel}>到达半径</Text>
-                  <Text style={styles.radiusValue}>
-                    {formatRadius(location.radiusMeters)}
-                  </Text>
-                </View>
+          {location ? (
+            <>
+              <View style={styles.selectedLocation}>
+                <TextInput
+                  accessibilityLabel="地点名称"
+                  onChangeText={(name) => {
+                    setAddress(name);
+                    onChangeLocationName(name);
+                  }}
+                  style={styles.selectedLocationName}
+                  value={location.name}
+                />
+                <Pressable
+                  accessibilityLabel="清除地点"
+                  accessibilityRole="button"
+                  hitSlop={10}
+                  onPress={() => {
+                    setAddress("");
+                    onClearLocation();
+                  }}
+                  style={styles.trailingButton}>
+                  <AppIcon name="close-circle" color={colors.textMuted} size={19} />
+                </Pressable>
+              </View>
+              <View style={styles.radiusHeader}>
+                <AppIcon name="radio-outline" color={colors.textMuted} size={17} />
                 <Slider
                   accessibilityLabel="到达提醒半径"
                   accessibilityValue={{
@@ -335,156 +293,96 @@ export function AndroidReminderSettings({
                   thumbTintColor={colors.accent}
                   value={clampRadius(location.radiusMeters)}
                 />
-                <View style={styles.radiusScale}>
-                  <Text style={styles.scaleText}>100 米</Text>
-                  <Text style={styles.scaleText}>2 公里</Text>
-                </View>
-                <Text style={styles.locationHint}>
-                  Android 建议至少 100 米；到达提醒可能有几分钟延迟
+                <Text style={styles.radiusValue}>
+                  {formatRadius(location.radiusMeters)}
                 </Text>
-              </>
-            ) : (
-              <Text style={styles.locationHint}>
-                先查找地址或使用当前位置，再开启地点提醒
-              </Text>
-            )}
+              </View>
+            </>
+          ) : null}
 
-            {locationError ? (
-              <Text accessibilityRole="alert" style={styles.locationError}>
-                {locationError}
-              </Text>
-            ) : null}
-            <Pressable
-              accessibilityRole="link"
-              onPress={() =>
-                void Linking.openURL("https://www.openstreetmap.org/copyright")
-              }
-              style={styles.attribution}>
-              <Text style={styles.attributionText}>
-                地点数据 © OpenStreetMap contributors
-              </Text>
-            </Pressable>
-          </View>
-        ) : null}
-      </View>
+          {locationError ? (
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {locationError}
+            </Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="link"
+            onPress={() =>
+              void Linking.openURL("https://www.openstreetmap.org/copyright")
+            }
+            style={styles.attribution}>
+            <Text style={styles.attributionText}>© OpenStreetMap</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  section: {
-    gap: spacing.sm,
-  },
-  sectionTitle: {
-    ...typography.section,
-    color: colors.text,
-    paddingHorizontal: spacing.xs,
-  },
-  reminderList: {
+  card: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
     overflow: "hidden",
   },
-  reminderRow: {
+  row: {
     alignItems: "center",
     flexDirection: "row",
     gap: spacing.sm,
-    minHeight: 70,
+    minHeight: 50,
     paddingHorizontal: spacing.md,
   },
-  iconSurface: {
+  rowMain: {
     alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.full,
-    height: 40,
-    justifyContent: "center",
-    width: 40,
-  },
-  locationIconSurface: {
-    backgroundColor: colors.accentSoft,
-  },
-  rowCopy: {
     flex: 1,
-    gap: 1,
-    justifyContent: "center",
-    minHeight: 48,
+    flexDirection: "row",
+    gap: spacing.sm,
+    minWidth: 0,
+    // Keep the whole slim row tappable without growing its visual height.
+    minHeight: 50,
+  },
+  rowLabel: {
+    ...typography.body,
+    color: colors.textMuted,
+    flex: 1,
     minWidth: 0,
   },
-  rowTitle: {
-    ...typography.body,
-    color: colors.text,
+  rowLabelActive: {
+    color: colors.accent,
     fontWeight: "600",
   },
-  rowDescription: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  timeValue: {
-    ...typography.body,
-    color: colors.text,
-    fontVariant: ["tabular-nums"],
-  },
-  compactButton: {
+  trailingButton: {
     alignItems: "center",
-    height: 44,
+    height: 40,
     justifyContent: "center",
-    width: 36,
+    width: 32,
   },
-  addButton: {
-    alignItems: "center",
-    backgroundColor: colors.accentSoft,
-    borderRadius: radius.sm,
-    justifyContent: "center",
-    minHeight: 36,
-    paddingHorizontal: spacing.md,
-  },
-  addButtonText: {
-    ...typography.label,
-    color: colors.accent,
+  divider: {
+    backgroundColor: colors.border,
+    height: StyleSheet.hairlineWidth,
+    marginLeft: spacing.md + 20 + spacing.sm,
   },
   warningRow: {
     alignItems: "center",
     backgroundColor: colors.dangerSoft,
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: spacing.xs,
     paddingHorizontal: spacing.md,
-    paddingVertical: 10,
+    paddingVertical: spacing.xs,
   },
   warningText: {
     ...typography.caption,
     color: colors.danger,
     flex: 1,
   },
-  warningAction: {
-    ...typography.label,
-    color: colors.danger,
-  },
-  locationHeader: {
-    alignItems: "center",
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 76,
-    paddingHorizontal: spacing.md,
-  },
-  locationHeaderCopy: {
-    alignItems: "center",
-    flex: 1,
-    flexDirection: "row",
-    gap: spacing.sm,
-    minWidth: 0,
-  },
   locationEditor: {
     backgroundColor: colors.surfaceMuted,
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
-    gap: spacing.md,
-    padding: spacing.md,
+    gap: spacing.sm,
+    padding: spacing.sm,
   },
   searchRow: {
     alignItems: "center",
@@ -493,37 +391,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     borderWidth: 1,
     flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
+    gap: spacing.xs,
+    minHeight: 42,
+    paddingLeft: spacing.sm,
+    paddingRight: spacing.xs,
   },
   searchInput: {
     color: colors.text,
     flex: 1,
     fontSize: 15,
     minWidth: 0,
-    paddingVertical: spacing.sm,
-  },
-  searchButton: {
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 44,
-    paddingHorizontal: spacing.xs,
-  },
-  searchButtonText: {
-    ...typography.label,
-    color: colors.accent,
-    fontSize: 14,
-  },
-  buttonDisabled: {
-    opacity: 0.4,
-  },
-  currentLocationButton: {
-    alignItems: "center",
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 44,
+    paddingVertical: spacing.xs,
   },
   searchResults: {
     backgroundColor: colors.surface,
@@ -538,13 +416,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     gap: spacing.sm,
-    minHeight: 64,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   searchResultCopy: {
     flex: 1,
-    gap: 2,
     minWidth: 0,
   },
   searchResultName: {
@@ -556,84 +433,52 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
   },
-  noSearchResults: {
-    ...typography.caption,
-    color: colors.textMuted,
-    paddingHorizontal: spacing.xs,
-  },
-  currentLocationText: {
-    ...typography.label,
-    color: colors.accent,
-    fontSize: 14,
-  },
   selectedLocation: {
     alignItems: "center",
     flexDirection: "row",
-    gap: spacing.sm,
-  },
-  selectedLocationCopy: {
-    flex: 1,
-    gap: 2,
-    minWidth: 0,
+    gap: spacing.xs,
   },
   selectedLocationName: {
     ...typography.body,
     color: colors.text,
+    flex: 1,
     fontWeight: "600",
     margin: 0,
     minHeight: 28,
+    minWidth: 0,
     padding: 0,
-  },
-  coordinates: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontVariant: ["tabular-nums"],
   },
   radiusHeader: {
     alignItems: "center",
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: spacing.xs,
-  },
-  radiusLabel: {
-    ...typography.body,
-    color: colors.text,
-  },
-  radiusValue: {
-    ...typography.body,
-    color: colors.text,
-    fontVariant: ["tabular-nums"],
+    gap: spacing.xs,
   },
   slider: {
+    flex: 1,
     height: 32,
-    marginHorizontal: -4,
   },
-  radiusScale: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: -spacing.sm,
+  radiusValue: {
+    ...typography.caption,
+    color: colors.text,
+    fontVariant: ["tabular-nums"],
+    minWidth: 52,
+    textAlign: "right",
   },
-  scaleText: {
+  hint: {
     ...typography.caption,
     color: colors.textMuted,
   },
-  locationHint: {
-    ...typography.caption,
-    color: colors.textMuted,
-    lineHeight: 18,
-  },
-  locationError: {
+  errorText: {
     ...typography.caption,
     color: colors.danger,
   },
   attribution: {
     alignSelf: "flex-start",
-    minHeight: 32,
-    justifyContent: "center",
   },
   attributionText: {
     ...typography.caption,
     color: colors.textMuted,
+    fontSize: 10,
     textDecorationLine: "underline",
   },
   pressed: {

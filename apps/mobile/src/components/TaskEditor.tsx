@@ -997,7 +997,7 @@ function ToggleAction({
         <AppIcon
           name={selected && icon === "bookmark-outline" ? "bookmark" : icon}
           color={selected ? colors.accent : colors.textMuted}
-          size={23}
+          size={21}
         />
       </View>
       <Text numberOfLines={1} style={[styles.toggleActionText, selected && styles.toggleActionTextSelected]}>
@@ -1047,16 +1047,16 @@ const styles = StyleSheet.create({
     opacity: 0.64,
   },
   content: {
-    gap: spacing.md,
-    padding: spacing.lg,
+    gap: spacing.sm,
+    padding: spacing.md,
     paddingBottom: spacing.xxl,
   },
   heroInput: {
     color: colors.text,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: "700",
-    lineHeight: 32,
-    minHeight: 72,
+    lineHeight: 30,
+    minHeight: 56,
     padding: 0,
     textAlignVertical: "top",
   },
@@ -1071,17 +1071,17 @@ const styles = StyleSheet.create({
   toggleAction: {
     alignItems: "center",
     flex: 1,
-    gap: spacing.xs,
+    gap: 2,
     justifyContent: "center",
-    minHeight: 62,
+    minHeight: 52,
     minWidth: 0,
   },
   toggleIcon: {
     alignItems: "center",
     borderRadius: radius.md,
-    height: 36,
+    height: 30,
     justifyContent: "center",
-    width: 44,
+    width: 40,
   },
   toggleIconSelected: {
     backgroundColor: colors.accentSoft,
