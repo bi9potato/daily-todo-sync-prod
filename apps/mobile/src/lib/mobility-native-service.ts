@@ -11,6 +11,7 @@ type NativeMobilityModule = {
     accessToken: string,
   ) => Promise<boolean>;
   updateAuth: (accessToken: string) => Promise<boolean>;
+  flushQueueNow: () => Promise<boolean>;
   stop: () => Promise<boolean>;
   isRunning: () => Promise<boolean>;
   isStepTrackingActive: () => Promise<boolean>;
@@ -152,4 +153,15 @@ export async function clearNativeMobilityQueue() {
     return false;
   }
   return NativeMobility.clearLocalQueue();
+}
+
+// Asks the running service to sync its local queue immediately instead of at
+// the next lazy background interval - used when the map screen opens so the
+// day's track is current. No-op when the service isn't running or the
+// installed APK predates the method.
+export async function flushNativeMobilityQueueNow() {
+  if (!isNativeMobilityServiceAvailable() || !NativeMobility?.flushQueueNow) {
+    return false;
+  }
+  return NativeMobility.flushQueueNow().catch(() => false);
 }

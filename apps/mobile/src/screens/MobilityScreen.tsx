@@ -54,6 +54,7 @@ import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import { reverseGeocode } from "@/lib/reverse-geocode";
 import {
   clearNativeMobilityQueue,
+  flushNativeMobilityQueueNow,
   getLatestNativeMobilityPoint,
   isBatteryOptimizationDisabled,
   openBatteryOptimizationSettings,
@@ -500,8 +501,21 @@ export function MobilityScreen({
     if (activeRecording?.id) {
       void setActiveMobilityRecordingId(activeRecording.id);
       void flushMobilityPointQueue();
+      // Background sync is deliberately lazy (30-minute batches); the user
+      // looking at the map is the "must be current now" moment, so also ask
+      // the native service to flush, then refresh today's track once the
+      // upload has had a moment to land.
+      void flushNativeMobilityQueueNow().then((flushed) => {
+        if (flushed) {
+          setTimeout(() => {
+            void queryClient.invalidateQueries({
+              queryKey: ["mobility-day", today],
+            });
+          }, 4_000);
+        }
+      });
     }
-  }, [activeRecording?.id]);
+  }, [activeRecording?.id, queryClient, today]);
 
   useEffect(() => {
     const recordingId = activeRecording?.id;

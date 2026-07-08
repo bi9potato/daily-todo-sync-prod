@@ -292,6 +292,22 @@ class NativeMobilityModule(
   }
 
   @ReactMethod
+  fun flushQueueNow(promise: Promise) {
+    try {
+      if (NativeMobilityService.isRunning()) {
+        reactContext.startService(
+          Intent(reactContext, NativeMobilityService::class.java).apply {
+            action = NativeMobilityService.ACTION_FLUSH
+          },
+        )
+      }
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("native_mobility_flush_failed", error)
+    }
+  }
+
+  @ReactMethod
   fun isRunning(promise: Promise) {
     promise.resolve(NativeMobilityService.isRunning())
   }
@@ -431,18 +447,45 @@ class NativeMobilityService : Service(), SensorEventListener {
   private var lastAcceptedLocation: Location? = null
   private var lastAcceptedAt = 0L
 
+  // Adaptive power: with the GPS chip pinned at PRIORITY_HIGH_ACCURACY every
+  // 5s around the clock, location is by far the app's dominant battery cost
+  // even though a phone typically sits still most of the day. Like Google
+  // Timeline, downshift to balanced power (wifi/cell fixes, GPS idle) after a
+  // few minutes without real movement, and upshift the moment movement is
+  // detected again - via the (hardware-batched, near-free) step counter or a
+  // coarse fix that clearly left the parked position.
+  private var highPowerTracking = true
+  private var lastMovementAt = 0L
+  private var stepCountAtDownshift = 0
+
   private val locationCallback = object : LocationCallback() {
     override fun onLocationResult(result: LocationResult) {
       if (!running || recordingId.isBlank()) return
       try {
+        val now = System.currentTimeMillis()
+        if (!highPowerTracking) {
+          // Coarse fixes in low-power mode are for the wake-up decision only
+          // (they may exceed the recording accuracy gate). Upshift when one
+          // lands clearly outside the parked position's error margin.
+          val anchor = lastAcceptedLocation
+          val moved = result.locations.any { fix ->
+            anchor != null &&
+              anchor.distanceTo(fix) >= maxOf(UPSHIFT_DISTANCE_METERS, fix.accuracy)
+          }
+          if (moved) {
+            switchTrackingMode(highPower = true)
+          }
+        }
         val points = result.locations
           .filter { it.accuracy <= MAX_ACCURACY_METERS }
           .mapNotNull(::acceptedLocationOrNull)
           .map { it.toJsonPoint() }
+        if (highPowerTracking && now - lastMovementAt >= STATIONARY_DOWNSHIFT_MS) {
+          switchTrackingMode(highPower = false)
+        }
         if (points.isEmpty()) return
         setLatestPoint(points.last().toString())
         appendPoints(points)
-        val now = System.currentTimeMillis()
         if (now - lastLocationUploadScheduledAt >= LOCATION_UPLOAD_INTERVAL_MS) {
           lastLocationUploadScheduledAt = now
           scheduleUpload()
@@ -479,6 +522,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     if (previous == null) {
       lastAcceptedLocation = location
       lastAcceptedAt = location.time
+      lastMovementAt = System.currentTimeMillis()
       return location
     }
     val distance = previous.distanceTo(location)
@@ -490,6 +534,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     if (distance >= noiseFloor) {
       lastAcceptedLocation = location
       lastAcceptedAt = location.time
+      lastMovementAt = System.currentTimeMillis()
       return location
     }
     if (location.time - lastAcceptedAt >= STATIONARY_HEARTBEAT_MS) {
@@ -528,6 +573,14 @@ class NativeMobilityService : Service(), SensorEventListener {
           startTracking()
         }
         ACTION_STOP -> stopTracking()
+        ACTION_FLUSH -> {
+          // On-demand sync (the app opening the map wants fresh data now
+          // rather than at the next lazy 30-minute interval).
+          if (running) {
+            lastLocationUploadScheduledAt = System.currentTimeMillis()
+            scheduleUpload()
+          }
+        }
         ACTION_UPDATE_AUTH -> {
           // Refreshes the upload credential of an already-running service
           // (the app pushes a fresh scoped token on launch); without this,
@@ -577,6 +630,10 @@ class NativeMobilityService : Service(), SensorEventListener {
     running = true
     lastAcceptedLocation = null
     lastAcceptedAt = 0L
+    // Always (re)start in high-accuracy mode: the service may be starting
+    // because the user just began moving (reboot, app relaunch mid-trip).
+    highPowerTracking = true
+    lastMovementAt = System.currentTimeMillis()
     requestLocationUpdates()
     startStepTracking()
     setLastError("")
@@ -630,18 +687,32 @@ class NativeMobilityService : Service(), SensorEventListener {
     ) {
       throw SecurityException("没有前台位置权限，无法启动足迹服务。")
     }
-    val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
-      .setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
-      .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
-      // Let the OS/hardware batch fixes and deliver them together instead of
-      // waking the app for every single one - same fix rate and accuracy,
-      // far fewer process wake-ups. Bounded to a minute (not tied to the
-      // 5-minute upload interval) so at most ~1 minute of fixes are only in
-      // the OS's batch buffer - not yet in our own locally-persisted queue -
-      // if the service were killed before delivery.
-      .setMaxUpdateDelayMillis(LOCATION_BATCH_DELAY_MS)
-      .setWaitForAccurateLocation(false)
-      .build()
+    val request = if (highPowerTracking) {
+      LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
+        .setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
+        .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
+        // Let the OS/hardware batch fixes and deliver them together instead
+        // of waking the app for every single one - same fix rate and
+        // accuracy, far fewer process wake-ups. Bounded to a minute (not
+        // tied to the upload interval) so at most ~1 minute of fixes are
+        // only in the OS's batch buffer - not yet in our own locally-
+        // persisted queue - if the service were killed before delivery.
+        .setMaxUpdateDelayMillis(LOCATION_BATCH_DELAY_MS)
+        .setWaitForAccurateLocation(false)
+        .build()
+    } else {
+      // Stationary: wifi/cell positioning only, GPS chip idle. These coarse
+      // fixes exist to (a) notice we've left the parked spot and (b) keep
+      // the stationary heartbeat fed for dwell detection.
+      LocationRequest.Builder(
+        Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+        LOW_POWER_INTERVAL_MS,
+      )
+        .setMinUpdateIntervalMillis(LOW_POWER_FASTEST_INTERVAL_MS)
+        .setMaxUpdateDelayMillis(LOW_POWER_BATCH_DELAY_MS)
+        .setWaitForAccurateLocation(false)
+        .build()
+    }
     fusedLocationClient.removeLocationUpdates(locationCallback)
     fusedLocationClient
       .requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
@@ -653,6 +724,24 @@ class NativeMobilityService : Service(), SensorEventListener {
   private fun stopLocationUpdates() {
     if (::fusedLocationClient.isInitialized) {
       fusedLocationClient.removeLocationUpdates(locationCallback)
+    }
+  }
+
+  private fun switchTrackingMode(highPower: Boolean) {
+    if (highPowerTracking == highPower) return
+    highPowerTracking = highPower
+    if (highPower) {
+      lastMovementAt = System.currentTimeMillis()
+    } else {
+      stepCountAtDownshift = stepCount
+    }
+    try {
+      requestLocationUpdates()
+    } catch (error: Throwable) {
+      // Never let a mode switch kill tracking; fall back to the mode we were
+      // in and try again on the next trigger.
+      highPowerTracking = !highPower
+      setLastError("切换定位功耗模式失败：\${error.message ?: error.javaClass.simpleName}")
     }
   }
 
@@ -673,6 +762,16 @@ class NativeMobilityService : Service(), SensorEventListener {
         }
       }
       persistStepState()
+      // Walking is the cheapest possible movement signal (the step sensor is
+      // hardware-batched); a burst of steps while parked in low-power mode
+      // means we're moving again and GPS should wake up - including indoor
+      // walks the coarse wifi fixes would miss entirely.
+      if (
+        !highPowerTracking &&
+        stepCount - stepCountAtDownshift >= UPSHIFT_STEP_THRESHOLD
+      ) {
+        switchTrackingMode(highPower = true)
+      }
       val now = System.currentTimeMillis()
       if (
         stepCount > syncedStepCount &&
@@ -1153,6 +1252,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     const val ACTION_START = "${PACKAGE_NAME}.mobility.START"
     const val ACTION_STOP = "${PACKAGE_NAME}.mobility.STOP"
     const val ACTION_UPDATE_AUTH = "${PACKAGE_NAME}.mobility.UPDATE_AUTH"
+    const val ACTION_FLUSH = "${PACKAGE_NAME}.mobility.FLUSH"
     const val EXTRA_RECORDING_ID = "recordingId"
     const val EXTRA_API_BASE_URL = "apiBaseUrl"
     const val EXTRA_ACCESS_TOKEN = "accessToken"
@@ -1167,11 +1267,19 @@ class NativeMobilityService : Service(), SensorEventListener {
     private const val LOCATION_BATCH_DELAY_MS = 60_000L
     // Local-first: appendPoints() already durably queues every accepted fix
     // to SharedPreferences the moment it is delivered, independent of this.
-    // Widening the network sync from every 5s to every 5min just cuts
-    // upload request count (and the radio wake-ups that go with them)
-    // roughly 60x; nothing recorded changes, only how soon it reaches the
-    // server.
-    private const val LOCATION_UPLOAD_INTERVAL_MS = 300_000L
+    // The queue holds 250k points (weeks of data), so syncing every 30min
+    // loses nothing; app launch, day rotation, and stop all force a flush.
+    private const val LOCATION_UPLOAD_INTERVAL_MS = 1_800_000L
+    // Adaptive power thresholds. Downshift after 3 minutes without a fix
+    // that cleared the movement noise floor; upshift on ~15 steps (a real
+    // walk, not a stretch at the desk) or a coarse fix that clearly left
+    // the parked position.
+    private const val STATIONARY_DOWNSHIFT_MS = 180_000L
+    private const val LOW_POWER_INTERVAL_MS = 60_000L
+    private const val LOW_POWER_FASTEST_INTERVAL_MS = 30_000L
+    private const val LOW_POWER_BATCH_DELAY_MS = 120_000L
+    private const val UPSHIFT_STEP_THRESHOLD = 15
+    private const val UPSHIFT_DISTANCE_METERS = 80f
     private const val MIN_DISTANCE_METERS = 8f
     // Fixes past ~50m of reported error are wifi/cell positions, not GPS -
     // in urban canyons they scatter hundreds of meters and are what drew
@@ -1187,12 +1295,12 @@ class NativeMobilityService : Service(), SensorEventListener {
     private const val STATIONARY_HEARTBEAT_MS = 60_000L
     private const val MAX_UPLOAD_POINTS = 250
     private const val MAX_QUEUED_POINTS = 250_000
-    // Was 10 steps / 15s - at a normal walking cadence that reopened a
-    // network connection roughly every 5-6 seconds on its own, independent
-    // of (and far more often than) the location upload schedule above.
-    // Aligned to the same cadence so walking doesn't defeat the batching.
-    private const val STEP_UPLOAD_COUNT_INTERVAL = 200
-    private const val STEP_UPLOAD_TIME_INTERVAL_MS = 300_000L
+    // Effectively time-driven at the same cadence as location sync (steps
+    // also piggyback on every location flush via flushQueue -> uploadSteps),
+    // so walking never opens its own extra connections. The count threshold
+    // only exists as a backstop against an unbounded unsynced counter.
+    private const val STEP_UPLOAD_COUNT_INTERVAL = 2_000
+    private const val STEP_UPLOAD_TIME_INTERVAL_MS = 1_800_000L
     private const val NETWORK_TIMEOUT_MS = 15_000
     private const val PREFS_NAME = "daily_todo_native_mobility"
     private const val QUEUE_FILE_NAME = "native-mobility-points.json"

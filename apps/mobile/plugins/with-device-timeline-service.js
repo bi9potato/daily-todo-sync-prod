@@ -529,6 +529,7 @@ class DeviceTimelineService : Service() {
   private var lastEventQueryTime = 0L
   private var lastForegroundPackage: String? = null
   private var lastHeartbeatAt = 0L
+  private var lastUploadScheduledAt = 0L
   private var screenReceiverRegistered = false
 
   private val screenStateReceiver = object : BroadcastReceiver() {
@@ -537,7 +538,9 @@ class DeviceTimelineService : Service() {
         Intent.ACTION_SCREEN_OFF -> {
           enqueue(EVENT_SCREEN_OFF, null, null)
           stopPolling()
-          scheduleUpload()
+          // Screen-off closes a usage session: flush it now so the radio can
+          // sleep for the whole idle stretch instead of waking mid-idle.
+          scheduleUpload(forceUpload = true)
         }
         Intent.ACTION_SCREEN_ON -> {
           enqueue(EVENT_SCREEN_ON, null, null)
@@ -570,7 +573,7 @@ class DeviceTimelineService : Service() {
           if (running && nextToken.isNotBlank()) {
             accessToken = nextToken
             persistConfig()
-            scheduleUpload()
+            scheduleUpload(forceUpload = true)
           } else if (!running) {
             stopSelf()
           }
@@ -643,7 +646,7 @@ class DeviceTimelineService : Service() {
     // an app-triggered restart), so pick polling back up immediately rather
     // than waiting for the next ACTION_SCREEN_ON.
     startPolling()
-    scheduleUpload()
+    scheduleUpload(forceUpload = true)
   }
 
   private fun stopTracking() {
@@ -651,7 +654,7 @@ class DeviceTimelineService : Service() {
     serviceRunning = false
     stopPolling()
     unregisterScreenReceiver()
-    scheduleUpload()
+    scheduleUpload(forceUpload = true)
     clearConfig()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
       stopForeground(STOP_FOREGROUND_REMOVE)
@@ -784,8 +787,18 @@ class DeviceTimelineService : Service() {
     }
   }
 
-  private fun scheduleUpload() {
+  // Events are already durably queued locally the moment they happen (see
+  // enqueue); syncing them to the server is deliberately lazy. Without this
+  // gate every app switch plus the 60s heartbeat opened a network connection
+  // -- roughly one request per minute of screen-on time. Local-first: batch
+  // for the interval, then flush everything at once. forceUpload exists for
+  // service stop, where whatever is queued must go out now or wait until the
+  // next launch.
+  private fun scheduleUpload(forceUpload: Boolean = false) {
+    val now = System.currentTimeMillis()
+    if (!forceUpload && now - lastUploadScheduledAt < UPLOAD_INTERVAL_MS) return
     if (uploadThread?.isAlive == true) return
+    lastUploadScheduledAt = now
     uploadThread = thread(name = "DeviceTimelineUpload") { flushQueue() }
   }
 
@@ -937,6 +950,10 @@ class DeviceTimelineService : Service() {
     // there is nothing meaningful to attribute foreground time to then.
     private const val POLL_INTERVAL_MS = 4_000L
     private const val HEARTBEAT_INTERVAL_MS = 60_000L
+    // Mid-session sync cadence. Screen-off already force-flushes each usage
+    // session, so this only bounds how stale the server can get during one
+    // long continuous screen-on stretch.
+    private const val UPLOAD_INTERVAL_MS = 600_000L
     private const val EVENT_LOOKBACK_MS = 5 * 60_000L
     private const val MAX_UPLOAD_EVENTS = 200
     private const val NETWORK_TIMEOUT_MS = 15_000

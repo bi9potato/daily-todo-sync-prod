@@ -94,6 +94,10 @@ function withExpenseManifest(config) {
       "@xml/expense_backup_rules";
     application.$["android:dataExtractionRules"] =
       "@xml/expense_data_extraction_rules";
+    // Uninstalling then shows a "keep app data" checkbox (the standard
+    // Android mechanism for this), so locally-recorded data - the expense
+    // ledger Room DB lives only on this device - can survive a reinstall.
+    application.$["android:hasFragileUserData"] = "true";
 
     if (
       !services.some(
