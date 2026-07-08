@@ -809,6 +809,9 @@ function SourcesTab({
                   {source?.unknownTemplateCount ? (
                     <Text style={styles.unknownCount}>
                       已发现 {source.unknownTemplateCount} 个待验证交易事件
+                      {!diagnostics
+                        ? "，但未开启诊断采样，无法查看具体内容。开启上面的开关后，下一次触发才会留存样本。"
+                        : "。如果上面没有出现「诊断样本」卡片，说明开启诊断采样之后还没有新的交易触发——过去已计数的事件不会补录样本。"}
                     </Text>
                   ) : null}
                 </View>
