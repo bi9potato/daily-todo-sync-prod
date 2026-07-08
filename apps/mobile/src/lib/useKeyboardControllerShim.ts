@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Keyboard } from "react-native";
 
-// Wrapper that provides the same interface as the old useAndroidKeyboardInset,
-// now powered by react-native-keyboard-controller events under the hood.
-// The library handles OS differences; we just provide the same API surface.
+// Tracks the IME's current height/visibility from React Native core Keyboard
+// events (which fire unconditionally on Android - no provider setup needed,
+// unlike react-native-keyboard-controller, which this app used to depend on).
 //
 // Returns { keyboardInset, keyboardVisible } compatible with Composer, etc.
 export function useKeyboardControllerShim(bottomSafeAreaInset: number) {

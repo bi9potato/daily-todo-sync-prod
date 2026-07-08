@@ -1,29 +1,36 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Keyboard, Platform } from "react-native";
-import { KeyboardEvents } from "react-native-keyboard-controller";
 
 // Guard for Modal onRequestClose that survives the Android IME + back gesture
-// race condition. Uses react-native-keyboard-controller to track when the
-// keyboard hides, replacing the old hand-rolled Keyboard API + timestamp
-// tracking that would break on Android version changes.
+// race condition.
 //
-// Usage: bind this to Modal.onRequestClose like before.
+// History: this originally listened to react-native-keyboard-controller's
+// KeyboardEvents, but that library only emits after its KeyboardProvider is
+// mounted at the app root — which this app never does (mounting it takes over
+// window inset animation app-wide and risks layout regressions). Every
+// listener was silently dead, the guard never armed, and dismissing the IME
+// with the back gesture closed the whole editor. React Native core's Keyboard
+// events fire unconditionally on Android, so the guard is built on those.
+//
+// Usage: bind this to Modal.onRequestClose.
 //   const guard = useBackPressKeyboardGuard(onClose);
 //   <Modal onRequestClose={guard} />
 //
-// Logic: when the back gesture arrives:
-// - If keyboard just hid or is hiding, consume this back (don't close Modal)
+// Logic when the back gesture arrives:
+// - If the keyboard is (or just was) visible, this back press belongs to the
+//   IME: dismiss it if still up and consume the event (don't close the Modal)
 // - Otherwise, close the Modal
 //
-// The library's KeyboardEvents tell us exactly when the keyboard is moving,
-// so we can track state more reliably than checking Keyboard.isVisible().
+// Android core has no keyboardWillHide (iOS-only), so the post-hide grace
+// window uses a fixed duration generous enough to cover the IME hide
+// animation plus the predictive-back tail on slow devices.
+const CLOSE_SUPPRESSION_MS = 800;
+
 export function useBackPressKeyboardGuard(onClose: () => void) {
-  const keyboardWasVisibleRef = useRef(
+  const keyboardVisibleRef = useRef(
     Platform.OS === "android" && Boolean(Keyboard.isVisible?.()),
   );
-  const isKeyboardHidingRef = useRef(false);
   const suppressCloseUntilRef = useRef(0);
-  const suppressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     // On Android only (iOS doesn't have this race condition)
@@ -31,81 +38,35 @@ export function useBackPressKeyboardGuard(onClose: () => void) {
       return;
     }
 
-    const clearSuppressionTimer = () => {
-      if (suppressTimerRef.current) {
-        clearTimeout(suppressTimerRef.current);
-        suppressTimerRef.current = null;
-      }
-    };
-    const armCloseSuppression = (duration = 600) => {
-      clearSuppressionTimer();
-      suppressCloseUntilRef.current = Date.now() + duration;
-      suppressTimerRef.current = setTimeout(() => {
-        suppressCloseUntilRef.current = 0;
-        suppressTimerRef.current = null;
-      }, duration);
-    };
-
-    const willShowSubscription = KeyboardEvents.addListener("keyboardWillShow", () => {
-      clearSuppressionTimer();
-      keyboardWasVisibleRef.current = true;
-      isKeyboardHidingRef.current = false;
+    const showSubscription = Keyboard.addListener("keyboardDidShow", () => {
+      keyboardVisibleRef.current = true;
       suppressCloseUntilRef.current = 0;
     });
-    const didShowSubscription = KeyboardEvents.addListener("keyboardDidShow", () => {
-      keyboardWasVisibleRef.current = true;
-      isKeyboardHidingRef.current = false;
-    });
-
-    const willHideSubscription = KeyboardEvents.addListener("keyboardWillHide", (event) => {
-      // Android can dispatch Modal.onRequestClose at either edge of the IME
-      // animation. Keep the last known visible state until keyboardDidHide,
-      // and cover the tail of predictive-back animations as well.
-      isKeyboardHidingRef.current = true;
-      armCloseSuppression(Math.max(600, event.duration + 250));
-    });
-    const didHideSubscription = KeyboardEvents.addListener("keyboardDidHide", (event) => {
-      keyboardWasVisibleRef.current = false;
-      isKeyboardHidingRef.current = false;
-      armCloseSuppression(Math.max(600, event.duration + 250));
+    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      keyboardVisibleRef.current = false;
+      // The back press that hid the IME can dispatch Modal.onRequestClose
+      // either before or after this event lands; cover the "after" side.
+      suppressCloseUntilRef.current = Date.now() + CLOSE_SUPPRESSION_MS;
     });
 
     return () => {
-      clearSuppressionTimer();
-      willShowSubscription.remove();
-      didShowSubscription.remove();
-      willHideSubscription.remove();
-      didHideSubscription.remove();
+      showSubscription.remove();
+      hideSubscription.remove();
     };
   }, []);
 
   return useCallback(() => {
     if (Platform.OS === "android") {
-      const keyboardIsVisible =
-        keyboardWasVisibleRef.current || Boolean(Keyboard.isVisible?.());
-      if (keyboardIsVisible) {
+      if (keyboardVisibleRef.current || Boolean(Keyboard.isVisible?.())) {
         Keyboard.dismiss();
         return;
       }
-      if (
-        isKeyboardHidingRef.current ||
-        Date.now() <= suppressCloseUntilRef.current
-      ) {
-        // This request belongs to the same Android back gesture that just
-        // hid the IME. Consume it without dismissing the task editor.
-        isKeyboardHidingRef.current = false;
+      if (Date.now() <= suppressCloseUntilRef.current) {
+        // Same back gesture that just hid the IME - consume it without
+        // closing the editor.
         suppressCloseUntilRef.current = 0;
-        if (suppressTimerRef.current) {
-          clearTimeout(suppressTimerRef.current);
-          suppressTimerRef.current = null;
-        }
         return;
       }
-    }
-
-    if (Platform.OS === "android" && Keyboard.isVisible?.()) {
-      Keyboard.dismiss();
-      return;
     }
     onClose();
   }, [onClose]);
