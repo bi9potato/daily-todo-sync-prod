@@ -244,7 +244,10 @@ const PERIODIC_FLUSH_INTERVAL_MS = 60_000;
 
 function installPeriodicFlush() {
   setInterval(() => {
-    if (queue.length) {
+    // The foreground services keep this process (and its timers) alive with
+    // the app backgrounded; queued logs can wait for the next foreground
+    // instead of waking the radio every minute all night.
+    if (queue.length && AppState.currentState === "active") {
       void flushClientLogs();
     }
   }, PERIODIC_FLUSH_INTERVAL_MS);

@@ -12,6 +12,8 @@ import {
   ensureReminderNotificationChannel,
   getScheduledReminderOccurrenceIds,
   hasNotificationPermission,
+  rememberedReminderSignature,
+  reminderSignature,
   scheduleTaskReminder,
 } from "./notifications";
 import type { DayTodos, TodoOccurrence } from "@/types";
@@ -56,7 +58,16 @@ async function reconcileTimeReminders(occurrences: TodoOccurrence[]) {
       .filter((id) => !desiredIds.has(id))
       .map((id) => cancelTaskReminder(id)),
   );
-  await Promise.all(desired.map((occurrence) => scheduleTaskReminder(occurrence)));
+  // Only touch reminders whose inputs actually changed. This runs after
+  // every todo mutation (each one invalidates the range this hook watches);
+  // rescheduling all ~30 days of reminders each time meant dozens of
+  // synchronous native calls right after every checkbox tap.
+  const stale = desired.filter(
+    (occurrence) =>
+      !currentlyScheduled.has(occurrence.id) ||
+      rememberedReminderSignature(occurrence.id) !== reminderSignature(occurrence),
+  );
+  await Promise.all(stale.map((occurrence) => scheduleTaskReminder(occurrence)));
 }
 
 // Owns turning the backend's occurrence data into actual OS-level reminders:

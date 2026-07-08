@@ -114,6 +114,26 @@ export async function hasUsableReminderNotificationChannel() {
   );
 }
 
+// What a scheduled reminder was scheduled WITH. The range reconciler used to
+// cancel + reschedule every reminder in its 30-day window on every todo
+// mutation (each one two native calls); comparing signatures lets it skip
+// the ones whose inputs didn't change, which in steady state is all of them.
+// In-memory only: after a process restart the map is empty, so the first
+// reconcile reschedules everything once and repopulates it.
+const scheduledReminderSignatures = new Map<string, string>();
+
+export function reminderSignature(occurrence: {
+  text: string;
+  reminderAt: string | null;
+  status?: "pending" | "done";
+}) {
+  return `${occurrence.reminderAt ?? ""}|${occurrence.status ?? "pending"}|${occurrence.text}`;
+}
+
+export function rememberedReminderSignature(occurrenceId: string) {
+  return scheduledReminderSignatures.get(occurrenceId);
+}
+
 function reminderIdentifier(occurrenceId: string) {
   return `${REMINDER_ID_PREFIX}${occurrenceId}`;
 }
@@ -150,6 +170,7 @@ export async function scheduleTaskReminder(occurrence: {
   await ensureReminderNotificationChannel();
   const identifier = reminderIdentifier(occurrence.id);
   await Notifications.cancelScheduledNotificationAsync(identifier).catch(() => undefined);
+  scheduledReminderSignatures.delete(occurrence.id);
   if (!occurrence.reminderAt || occurrence.status === "done") {
     return;
   }
@@ -174,12 +195,14 @@ export async function scheduleTaskReminder(occurrence: {
       channelId: REMINDER_CHANNEL_ID,
     },
   });
+  scheduledReminderSignatures.set(occurrence.id, reminderSignature(occurrence));
 }
 
 export async function cancelTaskReminder(occurrenceId: string) {
   await Notifications.cancelScheduledNotificationAsync(
     reminderIdentifier(occurrenceId),
   ).catch(() => undefined);
+  scheduledReminderSignatures.delete(occurrenceId);
 }
 
 // Presents immediately (used by the location-arrival geofencing task - see

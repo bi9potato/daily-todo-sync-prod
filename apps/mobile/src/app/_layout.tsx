@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { InteractionManager, Platform } from "react-native";
+import { AppState, InteractionManager, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   defaultShouldDehydrateQuery,
+  focusManager,
   QueryClient,
 } from "@tanstack/react-query";
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
@@ -35,6 +36,20 @@ import { flushTodoMutationQueue } from "@/lib/todo-mutation-queue";
 
 installClientLogCapture();
 initNetworkMonitoring();
+// React Query doesn't know about AppState on its own - without this, every
+// refetchInterval in the app keeps firing while the app is backgrounded,
+// and the mobility foreground service keeps the process (and JS timers)
+// alive around the clock, so "backgrounded" could mean all night. This is
+// the TanStack-documented React Native wiring; with it, intervals pause on
+// background and resume-time refetches fire on foreground.
+if (Platform.OS !== "web") {
+  focusManager.setEventListener((handleFocus) => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      handleFocus(state === "active");
+    });
+    return () => subscription.remove();
+  });
+}
 // Held until src/app/index.tsx knows whether to show the auth screen or the
 // main app, so there is exactly one native-splash -> real-content transition
 // instead of native splash -> blank/spinner frame -> content.

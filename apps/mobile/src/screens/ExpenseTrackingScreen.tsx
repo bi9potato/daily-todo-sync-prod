@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
@@ -55,12 +56,21 @@ export function ExpenseTrackingScreen({ today }: { today: string }) {
   const [manualOpen, setManualOpen] = useState(false);
   const [sourceSearch, setSourceSearch] = useState("");
   const [actionError, setActionError] = useState("");
+  // Drawer screens stay mounted once visited; without a focus gate the
+  // 5s health/samples polling would keep running from every other screen.
+  const [isFocused, setIsFocused] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setIsFocused(true);
+      return () => setIsFocused(false);
+    }, []),
+  );
 
   const healthQuery = useQuery({
     queryKey: ["expense-health"],
     queryFn: expenseTracking.getHealth,
     enabled: available,
-    refetchInterval: tab === "sources" ? 5_000 : false,
+    refetchInterval: isFocused && tab === "sources" ? 5_000 : false,
   });
   const dayQuery = useQuery({
     queryKey: ["expense-day", today],
@@ -90,7 +100,7 @@ export function ExpenseTrackingScreen({ today }: { today: string }) {
     queryKey: ["expense-diagnostic-samples"],
     queryFn: expenseTracking.getDiagnosticSamples,
     enabled: available && tab === "sources",
-    refetchInterval: tab === "sources" ? 5_000 : false,
+    refetchInterval: isFocused && tab === "sources" ? 5_000 : false,
   });
 
   useEffect(() => {

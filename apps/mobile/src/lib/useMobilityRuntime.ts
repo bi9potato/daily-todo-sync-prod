@@ -265,6 +265,12 @@ export function useMobilityRuntime(today: string, enabled = true) {
       return;
     }
     const timer = setInterval(() => {
+      // The mobility foreground service keeps this JS process alive around
+      // the clock, so without this gate the periodic native probes would
+      // run all night with the app backgrounded.
+      if (AppState.currentState !== "active") {
+        return;
+      }
       void reconcile(activeRecordingRef.current, true);
     }, 30_000);
     return () => clearInterval(timer);

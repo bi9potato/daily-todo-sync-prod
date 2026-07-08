@@ -88,12 +88,32 @@ export async function requestLocationReminderPermission() {
 // caller currently knows about (see useReminders.ts, which fetches a
 // forward-looking range of days). Called on every reconcile, so an edited
 // or completed task's region drops out the next time this runs.
+// Geofence registration set from the last successful reconcile, so the
+// (post-every-mutation) reconciler can skip the native stop/start round-trip
+// when nothing location-related changed. In-memory only: first reconcile
+// after a process restart registers once and repopulates.
+let lastRegisteredGeofenceSignature: string | null = null;
+
 export async function reconcileLocationReminders(occurrences: TodoOccurrence[]) {
   if (!(await isLocationRemindersAvailable())) {
     return;
   }
-  const allWithReminders = occurrences.filter(occurrenceHasLocationReminder);
+  const allWithReminders = occurrences
+    .filter(occurrenceHasLocationReminder)
+    .sort((left, right) => left.id.localeCompare(right.id));
   const withReminders = allWithReminders.slice(0, MAX_ANDROID_GEOFENCES);
+  const signature = JSON.stringify(
+    withReminders.map((occurrence) => [
+      occurrence.id,
+      occurrence.text,
+      occurrence.location!.latitude,
+      occurrence.location!.longitude,
+      occurrence.location!.radiusMeters,
+    ]),
+  );
+  if (signature === lastRegisteredGeofenceSignature) {
+    return;
+  }
   if (allWithReminders.length > MAX_ANDROID_GEOFENCES) {
     recordClientLog("warn", "Location reminder geofence limit reached", {
       source: "reminders",
@@ -109,6 +129,7 @@ export async function reconcileLocationReminders(occurrences: TodoOccurrence[]) 
       await Location.stopGeofencingAsync(LOCATION_REMINDER_TASK).catch(() => undefined);
     }
     await writeLocationReminderLabels({});
+    lastRegisteredGeofenceSignature = signature;
     return;
   }
 
@@ -133,13 +154,17 @@ export async function reconcileLocationReminders(occurrences: TodoOccurrence[]) 
   });
 
   await writeLocationReminderLabels(labels);
-  await Location.startGeofencingAsync(LOCATION_REMINDER_TASK, regions).catch((error) => {
-    recordClientLog("warn", "Failed to start location reminder geofencing", {
-      source: "reminders",
-      context: {
-        message: error instanceof Error ? error.message : String(error),
-        regionCount: regions.length,
-      },
+  await Location.startGeofencingAsync(LOCATION_REMINDER_TASK, regions)
+    .then(() => {
+      lastRegisteredGeofenceSignature = signature;
+    })
+    .catch((error) => {
+      recordClientLog("warn", "Failed to start location reminder geofencing", {
+        source: "reminders",
+        context: {
+          message: error instanceof Error ? error.message : String(error),
+          regionCount: regions.length,
+        },
+      });
     });
-  });
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
@@ -266,6 +267,16 @@ export function MobilityScreen({
     DEFAULT_VISIT_DWELL_MINUTES,
   );
   const latestLivePointRef = useRef("");
+  // Drawer screens stay mounted after their first visit, so anything
+  // periodic in here would otherwise keep running forever from every other
+  // screen. Gate all polling on actual focus.
+  const [isFocused, setIsFocused] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setIsFocused(true);
+      return () => setIsFocused(false);
+    }, []),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -296,7 +307,7 @@ export function MobilityScreen({
     queryKey: ["mobility-day", today, visitDwellMinutes],
     queryFn: () => getMobilityDay(today, visitDwellMinutes),
     refetchInterval: (query) =>
-      query.state.data?.activeRecording ? 5_000 : false,
+      isFocused && query.state.data?.activeRecording ? 5_000 : false,
   });
   const activeRecording = todayQuery.data?.activeRecording ?? null;
   const isToday = selectedDate === today;
@@ -519,7 +530,7 @@ export function MobilityScreen({
 
   useEffect(() => {
     const recordingId = activeRecording?.id;
-    if (!recordingEnabled || !recordingId) {
+    if (!isFocused || !recordingEnabled || !recordingId) {
       latestLivePointRef.current = "";
       return;
     }
@@ -565,7 +576,7 @@ export function MobilityScreen({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [activeRecording?.id, recordingEnabled, today]);
+  }, [activeRecording?.id, isFocused, recordingEnabled, today]);
 
   const livePoints =
     liveTrack.date === today &&
