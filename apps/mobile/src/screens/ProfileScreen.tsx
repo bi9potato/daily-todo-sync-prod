@@ -2,6 +2,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +18,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import {
   authorizeGoogleCalendar,
@@ -520,12 +522,21 @@ function ArchivedLongTermPanel({
   items: TodoOccurrence[];
   onUnarchive: (id: string) => void;
 }) {
+  // Archived tasks used to be restore-or-nothing; their note and images were
+  // unreachable without unarchiving first. Tapping a row now opens a
+  // read-only viewer.
+  const [viewing, setViewing] = useState<TodoOccurrence | null>(null);
+
   return (
     <View style={styles.trashPanel}>
       {items.length ? (
         items.map((item) => (
           <View key={item.id} style={styles.trashRow}>
-            <View style={styles.trashCopy}>
+            <Pressable
+              accessibilityHint="查看归档任务详情"
+              accessibilityRole="button"
+              onPress={() => setViewing(item)}
+              style={({ pressed }) => [styles.trashCopy, pressed && styles.pressed]}>
               <Text numberOfLines={1} style={styles.trashTitle}>
                 {item.text}
               </Text>
@@ -534,7 +545,7 @@ function ArchivedLongTermPanel({
                   ? `归档于 ${item.archivedAt.slice(0, 10)}`
                   : item.taskDate}
               </Text>
-            </View>
+            </Pressable>
             <Pressable
               disabled={isBusy}
               onPress={() => onUnarchive(item.id)}
@@ -546,7 +557,103 @@ function ArchivedLongTermPanel({
       ) : (
         <Text style={styles.emptySetting}>暂无已归档的长期任务。</Text>
       )}
+      <ArchivedTaskViewer
+        isBusy={isBusy}
+        onClose={() => setViewing(null)}
+        onUnarchive={(id) => {
+          setViewing(null);
+          onUnarchive(id);
+        }}
+        task={viewing}
+      />
     </View>
+  );
+}
+
+function ArchivedTaskViewer({
+  isBusy,
+  onClose,
+  onUnarchive,
+  task,
+}: {
+  isBusy: boolean;
+  onClose: () => void;
+  onUnarchive: (id: string) => void;
+  task: TodoOccurrence | null;
+}) {
+  const [preview, setPreview] = useState<string | null>(null);
+  return (
+    <Modal
+      animationType="slide"
+      onRequestClose={onClose}
+      presentationStyle="pageSheet"
+      visible={Boolean(task)}>
+      {task ? (
+        <View style={styles.archiveViewerPage}>
+          <View style={styles.archiveViewerHeader}>
+            <Pressable
+              accessibilityLabel="关闭"
+              hitSlop={8}
+              onPress={onClose}
+              style={styles.archiveViewerClose}>
+              <AppIcon name="close" color={colors.text} size={22} />
+            </Pressable>
+            <Text numberOfLines={1} style={styles.archiveViewerTitle}>
+              归档任务
+            </Text>
+            <Pressable
+              disabled={isBusy}
+              onPress={() => onUnarchive(task.id)}
+              style={[styles.restoreButton, isBusy && styles.pressed]}>
+              <Text style={styles.restoreText}>取消归档</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={styles.archiveViewerBody}>
+            <Text style={styles.archiveViewerTaskText}>{task.text}</Text>
+            <Text style={styles.trashMeta}>
+              {task.archivedAt
+                ? `归档于 ${task.archivedAt.slice(0, 10)}`
+                : task.taskDate}
+            </Text>
+            {task.note.trim() ? (
+              <Text style={styles.archiveViewerNote}>{task.note}</Text>
+            ) : null}
+            {task.attachments.length ? (
+              <View style={styles.archiveViewerImages}>
+                {task.attachments.map((attachment) => (
+                  <Pressable
+                    key={attachment.id}
+                    onPress={() => setPreview(attachment.contentUrl)}
+                    style={styles.archiveViewerThumb}>
+                    <AuthenticatedImage
+                      contentUrl={attachment.contentUrl}
+                      style={styles.archiveViewerThumbImage}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </ScrollView>
+          <Modal
+            animationType="fade"
+            onRequestClose={() => setPreview(null)}
+            transparent
+            visible={Boolean(preview)}>
+            <Pressable
+              onPress={() => setPreview(null)}
+              style={styles.archiveViewerPreviewBackdrop}>
+              {preview ? (
+                <AuthenticatedImage
+                  contentUrl={preview}
+                  resizeMode="contain"
+                  style={styles.archiveViewerPreviewImage}
+                />
+              ) : null}
+            </Pressable>
+          </Modal>
+        </View>
+      ) : null}
+    </Modal>
   );
 }
 
@@ -953,6 +1060,71 @@ const styles = StyleSheet.create({
   restoreText: {
     ...typography.label,
     color: colors.accent,
+  },
+  archiveViewerPage: {
+    backgroundColor: colors.background,
+    flex: 1,
+  },
+  archiveViewerHeader: {
+    alignItems: "center",
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  archiveViewerClose: {
+    alignItems: "center",
+    height: 40,
+    justifyContent: "center",
+    width: 40,
+  },
+  archiveViewerTitle: {
+    ...typography.section,
+    color: colors.text,
+    flex: 1,
+  },
+  archiveViewerBody: {
+    gap: spacing.sm,
+    padding: spacing.lg,
+  },
+  archiveViewerTaskText: {
+    ...typography.title,
+    color: colors.text,
+  },
+  archiveViewerNote: {
+    ...typography.body,
+    color: colors.text,
+    lineHeight: 22,
+    marginTop: spacing.sm,
+  },
+  archiveViewerImages: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  archiveViewerThumb: {
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    height: 96,
+    overflow: "hidden",
+    width: 96,
+  },
+  archiveViewerThumbImage: {
+    height: "100%",
+    width: "100%",
+  },
+  archiveViewerPreviewBackdrop: {
+    alignItems: "center",
+    backgroundColor: "rgba(11, 14, 12, 0.92)",
+    flex: 1,
+    justifyContent: "center",
+  },
+  archiveViewerPreviewImage: {
+    height: "86%",
+    width: "94%",
   },
   clearTrashButton: {
     alignItems: "center",
