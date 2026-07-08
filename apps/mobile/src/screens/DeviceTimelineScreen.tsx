@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  InteractionManager,
   Platform,
   Pressable,
   ScrollView,
@@ -32,6 +33,20 @@ const MARKER_META: Record<
   boot: { icon: "power-outline", label: "开机" },
 };
 const EMPTY_TIMELINE: DeviceTimelineItem[] = [];
+
+// Reused from elsewhere in the app's palette (long-term gold, low-priority
+// blue-gray, the map's visit-marker purple) rather than inventing a new chart
+// palette, plus one new muted terracotta. Capped at 5 named segments; the
+// rest of the day folds into a neutral "其他" segment.
+const USAGE_SEGMENT_COLORS = [
+  colors.accent,
+  "#C4A45D",
+  "#7C5CBF",
+  "#8299A1",
+  "#B4846B",
+];
+const USAGE_OTHER_COLOR = colors.borderStrong;
+const MAX_USAGE_SEGMENTS = USAGE_SEGMENT_COLORS.length;
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString("zh-CN", {
@@ -78,6 +93,21 @@ export function DeviceTimelineScreen({
   const isToday = selectedDate === today;
   const [actionError, setActionError] = useState("");
   const [isTogglePending, setIsTogglePending] = useState(false);
+
+  // Every app-usage row and timeline entry resolves its icon through a
+  // native PackageManager call (drawable -> bitmap -> PNG -> base64). A busy
+  // day easily has a dozen distinct apps, and firing all of those the
+  // instant the screen mounts was competing with ScreenEnter's fade-in for
+  // frame budget - the same class of jank fixed for the footprint map.
+  // Deferring the icon-bearing content past the transition keeps entry
+  // smooth; the query itself still loads immediately.
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    const handle = InteractionManager.runAfterInteractions(() => {
+      setContentReady(true);
+    });
+    return () => handle.cancel();
+  }, []);
 
   const dayQuery = useQuery({
     queryKey: ["device-timeline-day", selectedDate],
@@ -163,7 +193,20 @@ export function DeviceTimelineScreen({
     () => appUsage.reduce((total, item) => total + item.totalSeconds, 0),
     [appUsage],
   );
-  const longestAppUsageSeconds = appUsage[0]?.totalSeconds ?? 1;
+  // Top apps get their own bar segment + color; the long tail folds into one
+  // neutral "其他" segment instead of a chart with 30 slivers.
+  const usageSegments = useMemo(() => {
+    const named = appUsage.slice(0, MAX_USAGE_SEGMENTS).map((item, index) => ({
+      ...item,
+      color: USAGE_SEGMENT_COLORS[index],
+    }));
+    const otherSeconds = appUsage
+      .slice(MAX_USAGE_SEGMENTS)
+      .reduce((total, item) => total + item.totalSeconds, 0);
+    return { named, otherSeconds };
+  }, [appUsage]);
+
+  const showContent = contentReady && !dayQuery.isPending;
 
   return (
     <ScreenEnter style={{ backgroundColor: colors.surface, flex: 1 }}>
@@ -266,18 +309,53 @@ export function DeviceTimelineScreen({
           </View>
         ) : null}
 
-        {appUsage.length ? (
-          <View style={styles.usageSummary}>
-            <Text style={styles.sectionTitle}>应用使用总时长</Text>
-            <Text style={styles.totalUsage}>
-              {formatDuration(totalAppUsageSeconds)}
-            </Text>
-            <View style={styles.usageList}>
-              {appUsage.map((item) => (
-                <View key={item.packageName} style={styles.usageRow}>
-                  <DeviceTimelineAppIcon packageName={item.packageName} />
-                  <View style={styles.usageCopy}>
-                    <View style={styles.usageHeading}>
+        {!showContent ? (
+          <ActivityIndicator color={colors.accent} style={styles.loading} />
+        ) : (
+          <>
+            {appUsage.length ? (
+              <View style={styles.usageSummary}>
+                <Text style={styles.sectionTitle}>应用使用总时长</Text>
+                <Text style={styles.totalUsage}>
+                  {formatDuration(totalAppUsageSeconds)}
+                </Text>
+
+                <View style={styles.usageBar}>
+                  {usageSegments.named.map((item) => (
+                    <View
+                      key={item.packageName}
+                      style={[
+                        styles.usageBarSegment,
+                        {
+                          backgroundColor: item.color,
+                          flexGrow: item.totalSeconds,
+                        },
+                      ]}
+                    />
+                  ))}
+                  {usageSegments.otherSeconds > 0 ? (
+                    <View
+                      style={[
+                        styles.usageBarSegment,
+                        {
+                          backgroundColor: USAGE_OTHER_COLOR,
+                          flexGrow: usageSegments.otherSeconds,
+                        },
+                      ]}
+                    />
+                  ) : null}
+                </View>
+
+                <View style={styles.usageList}>
+                  {usageSegments.named.map((item) => (
+                    <View key={item.packageName} style={styles.usageRow}>
+                      <View
+                        style={[styles.usageDot, { backgroundColor: item.color }]}
+                      />
+                      <DeviceTimelineAppIcon
+                        packageName={item.packageName}
+                        size={28}
+                      />
                       <Text numberOfLines={1} style={styles.usageLabel}>
                         {item.appLabel}
                       </Text>
@@ -285,44 +363,52 @@ export function DeviceTimelineScreen({
                         {formatDuration(item.totalSeconds)}
                       </Text>
                     </View>
-                    <View style={styles.usageTrack}>
+                  ))}
+                  {usageSegments.otherSeconds > 0 ? (
+                    <View style={styles.usageRow}>
                       <View
                         style={[
-                          styles.usageFill,
-                          {
-                            width: `${Math.max(
-                              4,
-                              (item.totalSeconds / longestAppUsageSeconds) * 100,
-                            )}%`,
-                          },
+                          styles.usageDot,
+                          { backgroundColor: USAGE_OTHER_COLOR },
                         ]}
                       />
+                      <View style={styles.usageOtherIcon}>
+                        <AppIcon
+                          name="apps-outline"
+                          color={colors.textMuted}
+                          size={15}
+                        />
+                      </View>
+                      <Text numberOfLines={1} style={styles.usageLabel}>
+                        其他
+                      </Text>
+                      <Text style={styles.usageDuration}>
+                        {formatDuration(usageSegments.otherSeconds)}
+                      </Text>
                     </View>
-                  </View>
+                  ) : null}
                 </View>
-              ))}
-            </View>
-          </View>
-        ) : null}
+              </View>
+            ) : null}
 
-        <Text style={styles.sectionTitle}>时间线</Text>
-        <View style={styles.timelineSection}>
-          {dayQuery.isPending ? (
-            <ActivityIndicator color={colors.accent} style={styles.loading} />
-          ) : timeline.length ? (
-            timeline.map((item, index) => (
-              <TimelineRow
-                item={item}
-                isLast={index === timeline.length - 1}
-                key={`${item.type}-${item.time ?? item.startTime}-${index}`}
-              />
-            ))
-          ) : (
-            <Text style={styles.emptyTimeline}>
-              这一天还没有记录，开启记录后会在这里显示时间线
-            </Text>
-          )}
-        </View>
+            <Text style={styles.sectionTitle}>时间线</Text>
+            <View style={styles.timelineSection}>
+              {timeline.length ? (
+                timeline.map((item, index) => (
+                  <TimelineRow
+                    item={item}
+                    isLast={index === timeline.length - 1}
+                    key={`${item.type}-${item.time ?? item.startTime}-${index}`}
+                  />
+                ))
+              ) : (
+                <Text style={styles.emptyTimeline}>
+                  这一天还没有记录，开启记录后会在这里显示时间线
+                </Text>
+              )}
+            </View>
+          </>
+        )}
 
         {runtime.runtime.queuedEventCount ? (
           <Text style={styles.queueHint}>
@@ -361,9 +447,11 @@ function TimelineRow({
           {!isLast ? <View style={styles.line} /> : null}
         </View>
         <View style={styles.appRowContent}>
-          <DeviceTimelineAppIcon packageName={item.packageName} size={34} />
+          <DeviceTimelineAppIcon packageName={item.packageName} size={30} />
           <View style={styles.rowCopy}>
-            <Text style={styles.rowTitle}>{item.appLabel || item.packageName}</Text>
+            <Text numberOfLines={1} style={styles.rowTitle}>
+              {item.appLabel || item.packageName}
+            </Text>
             <Text style={styles.rowMeta}>
               {item.startTime ? formatTime(item.startTime) : ""}
               {item.endTime && item.endTime !== item.startTime
@@ -382,13 +470,16 @@ function TimelineRow({
     <View style={styles.row}>
       <View style={styles.timeline}>
         <View style={styles.markerDot}>
-          <AppIcon color={colors.white} name={meta.icon} size={11} />
+          <AppIcon color={colors.white} name={meta.icon} size={10} />
         </View>
         {!isLast ? <View style={styles.line} /> : null}
       </View>
       <View style={styles.rowCopy}>
-        <Text style={styles.rowTitle}>{meta.label}</Text>
-        <Text style={styles.rowMeta}>{item.time ? formatTime(item.time) : ""}</Text>
+        <Text style={styles.rowMeta}>
+          {item.time ? formatTime(item.time) : ""}
+          {"  "}
+          {meta.label}
+        </Text>
       </View>
     </View>
   );
@@ -396,8 +487,8 @@ function TimelineRow({
 
 const styles = StyleSheet.create({
   content: {
-    gap: spacing.md,
-    padding: spacing.lg,
+    gap: spacing.sm,
+    padding: spacing.md,
     paddingBottom: spacing.xxl,
   },
   heading: {
@@ -437,7 +528,6 @@ const styles = StyleSheet.create({
   localIconDisclosure: {
     ...typography.caption,
     color: colors.textMuted,
-    marginTop: -spacing.sm,
     paddingHorizontal: spacing.xs,
   },
   permissionCard: {
@@ -506,6 +596,9 @@ const styles = StyleSheet.create({
     color: colors.danger,
     flex: 1,
   },
+  loading: {
+    paddingVertical: spacing.xxl,
+  },
   timelineSection: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.xs,
@@ -520,57 +613,59 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: spacing.sm,
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.md,
   },
   totalUsage: {
     color: colors.text,
-    fontSize: 30,
+    fontSize: 28,
     fontVariant: ["tabular-nums"],
     fontWeight: "700",
-    lineHeight: 38,
+    lineHeight: 34,
+  },
+  usageBar: {
+    borderRadius: radius.full,
+    flexDirection: "row",
+    gap: 2,
+    height: 10,
+    overflow: "hidden",
+  },
+  usageBarSegment: {
+    height: "100%",
+    minWidth: 3,
   },
   usageList: {
-    gap: spacing.md,
+    gap: spacing.xs,
     marginTop: spacing.xs,
   },
   usageRow: {
     alignItems: "center",
     flexDirection: "row",
-    gap: spacing.md,
-  },
-  usageCopy: {
-    flex: 1,
-    gap: 5,
-    minWidth: 0,
-  },
-  usageHeading: {
-    alignItems: "center",
-    flexDirection: "row",
     gap: spacing.sm,
+    minHeight: 36,
+  },
+  usageDot: {
+    borderRadius: radius.full,
+    height: 8,
+    width: 8,
+  },
+  usageOtherIcon: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.full,
+    height: 28,
+    justifyContent: "center",
+    width: 28,
   },
   usageLabel: {
     ...typography.body,
     color: colors.text,
     flex: 1,
+    minWidth: 0,
   },
   usageDuration: {
-    ...typography.label,
-    color: colors.text,
+    ...typography.caption,
+    color: colors.textMuted,
     fontVariant: ["tabular-nums"],
-  },
-  usageTrack: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.full,
-    height: 5,
-    overflow: "hidden",
-  },
-  usageFill: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.full,
-    height: "100%",
-  },
-  loading: {
-    paddingVertical: spacing.lg,
   },
   emptyTimeline: {
     ...typography.body,
@@ -578,7 +673,7 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: "row",
-    minHeight: 54,
+    minHeight: 44,
   },
   timeline: {
     alignItems: "center",
@@ -589,36 +684,38 @@ const styles = StyleSheet.create({
     borderColor: colors.white,
     borderRadius: radius.full,
     borderWidth: 2,
-    height: 13,
+    height: 11,
     marginTop: 3,
-    width: 13,
+    width: 11,
   },
   markerDot: {
     alignItems: "center",
     backgroundColor: colors.textMuted,
     borderRadius: radius.full,
-    height: 20,
+    height: 18,
     justifyContent: "center",
     marginTop: -2,
-    width: 20,
+    width: 18,
   },
   line: {
     backgroundColor: colors.borderStrong,
     flex: 1,
-    marginVertical: 3,
+    marginVertical: 2,
     width: 1,
   },
   rowCopy: {
     flex: 1,
-    gap: 2,
-    paddingBottom: spacing.md,
+    gap: 1,
+    justifyContent: "center",
+    paddingBottom: spacing.sm,
     paddingLeft: spacing.sm,
   },
   appRowContent: {
-    alignItems: "flex-start",
+    alignItems: "center",
     flex: 1,
     flexDirection: "row",
     minWidth: 0,
+    paddingBottom: spacing.sm,
   },
   rowTitle: {
     ...typography.body,
