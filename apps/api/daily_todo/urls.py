@@ -2,7 +2,7 @@ import json
 
 from django.conf import settings
 from django.contrib import admin
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.urls import path
 from ninja import NinjaAPI
 
@@ -33,6 +33,33 @@ def latest_mobile_release(request):
         )
 
     response = JsonResponse(payload)
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api.get("/mobile/releases/latest/apk")
+def latest_mobile_release_apk(request):
+    """Serve the latest Android APK from this server.
+
+    Distribution used to link straight to the GitHub release asset, but
+    62MB downloads from GitHub are unreliable on mainland-China networks -
+    truncated files failing with Android's generic "app not installed".
+    This server is already proven reachable from the user's network, so the
+    update manifest's apkUrl points here instead. The file sits next to the
+    manifest on the persistent media volume.
+    """
+    apk_path = settings.MOBILE_RELEASE_MANIFEST_PATH.parent / "daily-todo-arm64-v8a.apk"
+    if not apk_path.is_file():
+        return JsonResponse(
+            {"detail": "Android APK is not available yet."},
+            status=503,
+        )
+    response = FileResponse(
+        apk_path.open("rb"),
+        as_attachment=True,
+        filename="daily-todo-arm64-v8a.apk",
+        content_type="application/vnd.android.package-archive",
+    )
     response["Cache-Control"] = "no-store"
     return response
 

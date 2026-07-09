@@ -276,13 +276,19 @@ jobs:
           published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           version_name="$(node -p "require('./apps/mobile/package.json').version")"
           version_code="$(( ${{ github.run_number }} + 200 ))"
+          # apkUrl points at the app server, not the GitHub release asset:
+          # 62MB downloads from GitHub truncate routinely on mainland-China
+          # networks, failing install with Android's generic "app not
+          # installed". The server streams the same file from its media
+          # volume via /api/mobile/releases/latest/apk; deployment copies
+          # the APK there alongside this manifest.
           cat > artifacts/daily-todo-android-update.json <<EOF
           {
             "versionName": "${version_name}",
             "versionCode": ${version_code},
             "buildSha": "${GITHUB_SHA}",
             "architecture": "arm64-v8a",
-            "apkUrl": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/android-latest/daily-todo-arm64-v8a.apk",
+            "apkUrl": "${EXPO_PUBLIC_API_BASE_URL}/mobile/releases/latest/apk",
             "releaseUrl": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/android-latest",
             "publishedAt": "${published_at}"
           }
