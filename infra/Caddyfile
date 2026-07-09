@@ -1,6 +1,14 @@
 (app_routes) {
 	encode zstd gzip
 
+	# Large binaries (the Android APK) served straight from the shared media
+	# volume: file_server supports Range/resume, which mobile networks need
+	# for a 60MB download and which the Django API cannot provide.
+	handle_path /downloads/* {
+		root * /srv/media/mobile
+		file_server
+	}
+
 	handle /api/* {
 		reverse_proxy api:8000
 	}

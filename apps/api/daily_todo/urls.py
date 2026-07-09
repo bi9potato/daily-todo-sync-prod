@@ -2,7 +2,7 @@ import json
 
 from django.conf import settings
 from django.contrib import admin
-from django.http import FileResponse, JsonResponse
+from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import path
 from ninja import NinjaAPI
 
@@ -39,14 +39,15 @@ def latest_mobile_release(request):
 
 @api.get("/mobile/releases/latest/apk")
 def latest_mobile_release_apk(request):
-    """Serve the latest Android APK from this server.
+    """Redirect to the Caddy-served APK download.
 
-    Distribution used to link straight to the GitHub release asset, but
-    62MB downloads from GitHub are unreliable on mainland-China networks -
-    truncated files failing with Android's generic "app not installed".
-    This server is already proven reachable from the user's network, so the
-    update manifest's apkUrl points here instead. The file sits next to the
-    manifest on the persistent media volume.
+    Distribution used to link straight to the GitHub release asset, but 62MB
+    downloads from GitHub are unreliable on mainland-China networks. Serving
+    through this view was the first replacement, but FileResponse cannot
+    honor Range requests, so a download interrupted on mobile data corrupted
+    on resume and still failed to install. Caddy's file_server (which mounts
+    the same media volume read-only) does resumable downloads properly; this
+    endpoint stays only so older manifests pointing here keep working.
     """
     apk_path = settings.MOBILE_RELEASE_MANIFEST_PATH.parent / "daily-todo-arm64-v8a.apk"
     if not apk_path.is_file():
@@ -54,14 +55,7 @@ def latest_mobile_release_apk(request):
             {"detail": "Android APK is not available yet."},
             status=503,
         )
-    response = FileResponse(
-        apk_path.open("rb"),
-        as_attachment=True,
-        filename="daily-todo-arm64-v8a.apk",
-        content_type="application/vnd.android.package-archive",
-    )
-    response["Cache-Control"] = "no-store"
-    return response
+    return HttpResponseRedirect("/downloads/daily-todo-arm64-v8a.apk")
 
 
 api.add_router("/auth", auth_router)

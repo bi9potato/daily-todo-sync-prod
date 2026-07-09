@@ -37,6 +37,11 @@ services:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # Read-only view of the api's media volume so Caddy's file_server can
+      # serve the Android APK with proper Range/resume support (Django's
+      # FileResponse can't; interrupted mobile downloads then corrupt on
+      # resume and fail to install).
+      - media_data:/srv/media:ro
     depends_on:
       - api
       - web
