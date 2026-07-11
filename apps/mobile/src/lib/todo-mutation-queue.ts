@@ -10,63 +10,12 @@ import {
   updateOccurrence,
 } from "./api";
 import type { TaskCreatePayload, TaskUpdatePayload } from "@/types";
-
-type QueuedCreate = {
-  kind: "create";
-  clientId: string;
-  date: string;
-  payload: TaskCreatePayload;
-  queuedAt: string;
-};
-
-type QueuedUpdate = {
-  kind: "update";
-  occurrenceId: string;
-  payload: TaskUpdatePayload;
-  queuedAt: string;
-};
-
-type QueuedDelete = {
-  kind: "delete";
-  occurrenceId: string;
-  queuedAt: string;
-};
-
-type QueuedReorder = {
-  kind: "reorder";
-  date: string;
-  orderedIds: string[];
-  queuedAt: string;
-};
-
-type QueueEntry = QueuedCreate | QueuedUpdate | QueuedDelete | QueuedReorder;
-
-// Fields the create endpoint itself understands (see TaskCreateIn on the
-// backend). Anything outside this set (currently just `done`/`location`)
-// can't be folded into a still-pending create's payload - it has to travel
-// as its own follow-up update once the create has synced.
-const CREATE_SUPPORTED_FIELDS = new Set<keyof TaskUpdatePayload>([
-  "text",
-  "note",
-  "isLongTerm",
-  "isLowPriority",
-  "reminderTime",
-  "repeat",
-]);
-
-function splitUpdatePayload(payload: TaskUpdatePayload) {
-  const createFields: Partial<TaskCreatePayload> = {};
-  const updateOnlyFields: TaskUpdatePayload = {};
-  for (const key of Object.keys(payload) as (keyof TaskUpdatePayload)[]) {
-    const value = payload[key];
-    if (CREATE_SUPPORTED_FIELDS.has(key)) {
-      (createFields as Record<string, unknown>)[key] = value;
-    } else {
-      (updateOnlyFields as Record<string, unknown>)[key] = value;
-    }
-  }
-  return { createFields, updateOnlyFields };
-}
+import {
+  coalesceTodoDelete,
+  coalesceTodoReorder,
+  coalesceTodoUpdate,
+  type TodoQueueEntry as QueueEntry,
+} from "./todo-queue-merge";
 
 const QUEUE_KEY = "daily-todo-sync.todo-mutation-queue";
 const QUEUE_FILE = FileSystem.documentDirectory
@@ -150,80 +99,22 @@ export async function enqueueTodoUpdate(
   await runQueueMutation(async () => {
     const entries = await readQueue();
 
-    const pendingCreateIndex = entries.findIndex(
-      (entry): entry is QueuedCreate =>
-        entry.kind === "create" && entry.clientId === occurrenceId,
-    );
-    if (pendingCreateIndex !== -1) {
-      const pendingCreate = entries[pendingCreateIndex] as QueuedCreate;
-      const { createFields, updateOnlyFields } = splitUpdatePayload(payload);
-      entries[pendingCreateIndex] = {
-        ...pendingCreate,
-        payload: { ...pendingCreate.payload, ...createFields },
-      };
-      if (Object.keys(updateOnlyFields).length) {
-        mergeOrAppendUpdate(entries, occurrenceId, updateOnlyFields);
-      }
-      await writeQueue(entries);
-      return;
-    }
-
-    mergeOrAppendUpdate(entries, occurrenceId, payload);
-    await writeQueue(entries);
+    await writeQueue(coalesceTodoUpdate(entries, occurrenceId, payload, now()));
   });
-}
-
-function mergeOrAppendUpdate(
-  entries: QueueEntry[],
-  occurrenceId: string,
-  payload: TaskUpdatePayload,
-) {
-  const existingIndex = entries.findIndex(
-    (entry): entry is QueuedUpdate =>
-      entry.kind === "update" && entry.occurrenceId === occurrenceId,
-  );
-  if (existingIndex !== -1) {
-    const existing = entries[existingIndex] as QueuedUpdate;
-    entries[existingIndex] = {
-      ...existing,
-      payload: { ...existing.payload, ...payload },
-      queuedAt: now(),
-    };
-    return;
-  }
-  entries.push({ kind: "update", occurrenceId, payload, queuedAt: now() });
 }
 
 export async function enqueueTodoDelete(occurrenceId: string) {
   await runQueueMutation(async () => {
     const entries = await readQueue();
-    const hadPendingCreate = entries.some(
-      (entry) => entry.kind === "create" && entry.clientId === occurrenceId,
-    );
-    const remaining = entries.filter((entry) => {
-      if (entry.kind === "create") {
-        return entry.clientId !== occurrenceId;
-      }
-      if (entry.kind === "update") {
-        return entry.occurrenceId !== occurrenceId;
-      }
-      return true;
-    });
-    // Never synced in the first place - nothing to tell the server about.
-    if (!hadPendingCreate) {
-      remaining.push({ kind: "delete", occurrenceId, queuedAt: now() });
-    }
-    await writeQueue(remaining);
+    await writeQueue(coalesceTodoDelete(entries, occurrenceId, now()));
   });
 }
 
 export async function enqueueTodoReorder(date: string, orderedIds: string[]) {
   await runQueueMutation(async () => {
-    const entries = (await readQueue()).filter(
-      (entry) => !(entry.kind === "reorder" && entry.date === date),
+    await writeQueue(
+      coalesceTodoReorder(await readQueue(), date, orderedIds, now()),
     );
-    entries.push({ kind: "reorder", date, orderedIds, queuedAt: now() });
-    await writeQueue(entries);
   });
 }
 
