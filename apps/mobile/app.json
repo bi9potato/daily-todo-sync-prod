@@ -83,6 +83,7 @@
       "./plugins/with-expense-tracking",
       "./plugins/with-health-connect",
       "./plugins/with-android-app-shortcuts",
+      "./plugins/with-android-performance-benchmark",
       "@maplibre/maplibre-react-native",
       [
         "expo-image-picker",

@@ -223,7 +223,7 @@ jobs:
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease \
+          ./gradlew :app:assembleRelease :macrobenchmark:assembleRelease \
             -PreactNativeArchitectures=arm64-v8a \
             -x lintVitalAnalyzeRelease \
             -x lintVitalReportRelease \
