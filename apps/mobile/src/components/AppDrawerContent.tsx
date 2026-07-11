@@ -27,6 +27,7 @@ const navItems = [
   { key: "mobility", label: "足迹地图", icon: "map-outline" },
   { key: "device-timeline", label: "设备时间线", icon: "time-outline" },
   { key: "expenses", label: "每日收支", icon: "wallet-outline" },
+  { key: "services", label: "权限与后台服务", icon: "shield-checkmark-outline" },
   { key: "sleep", label: "睡眠", icon: "moon-outline" },
   { key: "passwords", label: "密码管理", icon: "key-outline" },
   { key: "ai", label: "AI 助手", icon: "sparkles-outline" },
