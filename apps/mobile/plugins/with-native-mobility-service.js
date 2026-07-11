@@ -12,6 +12,7 @@ const {
 
 const SERVICE_NAME = "NativeMobilityService";
 const BOOT_RECEIVER_NAME = "NativeMobilityBootReceiver";
+const ACTIVITY_RECEIVER_NAME = "NativeMobilityActivityReceiver";
 const PACKAGE_NAME = "com.dailytodosync.app";
 const MOBILITY_PACKAGE_IMPORT = `${PACKAGE_NAME}.mobility.NativeMobilityPackage`;
 const PLAY_SERVICES_LOCATION =
@@ -38,6 +39,20 @@ function withNativeMobilityManifest(config) {
     ) {
       usesPermissions.push({
         $: { "android:name": "android.permission.RECEIVE_BOOT_COMPLETED" },
+      });
+    }
+    if (
+      !usesPermissions.some(
+        (permission) =>
+          permission.$["android:name"] ===
+          "com.google.android.gms.permission.ACTIVITY_RECOGNITION",
+      )
+    ) {
+      usesPermissions.push({
+        $: {
+          "android:name":
+            "com.google.android.gms.permission.ACTIVITY_RECOGNITION",
+        },
       });
     }
     const mainApplication = AndroidConfig.Manifest.getMainApplicationOrThrow(
@@ -86,6 +101,21 @@ function withNativeMobilityManifest(config) {
     ];
     if (!existingReceiver) {
       receivers.push(receiver);
+    }
+    const activityReceiverName = `.${ACTIVITY_RECEIVER_NAME}`;
+    const existingActivityReceiver = receivers.find(
+      (item) => item.$["android:name"] === activityReceiverName,
+    );
+    if (existingActivityReceiver) {
+      existingActivityReceiver.$["android:exported"] = "false";
+    } else {
+      receivers.push({
+        $: {
+          "android:name": activityReceiverName,
+          "android:enabled": "true",
+          "android:exported": "false",
+        },
+      });
     }
     return manifestConfig;
   });
@@ -164,6 +194,10 @@ function withNativeMobilityFiles(config) {
       writeFileIfChanged(
         path.join(sourceRoot, `${BOOT_RECEIVER_NAME}.kt`),
         nativeMobilityBootReceiverSource,
+      );
+      writeFileIfChanged(
+        path.join(sourceRoot, `${ACTIVITY_RECEIVER_NAME}.kt`),
+        nativeMobilityActivityReceiverSource,
       );
       writeFileIfChanged(
         path.join(mobilityRoot, "NativeMobilityModule.kt"),
@@ -402,6 +436,10 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.ActivityRecognition
+import com.google.android.gms.location.ActivityTransition
+import com.google.android.gms.location.ActivityTransitionRequest
+import com.google.android.gms.location.DetectedActivity
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -441,6 +479,15 @@ class NativeMobilityService : Service(), SensorEventListener {
   private var lastStepUploadScheduledAt = 0L
   private var lastLocationUploadScheduledAt = 0L
   private val queueLock = Any()
+
+  private val activityPendingIntent by lazy {
+    PendingIntent.getBroadcast(
+      this,
+      ACTIVITY_REQUEST_CODE,
+      Intent(this, NativeMobilityActivityReceiver::class.java),
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
 
   // Tracks the last point we accepted into the trajectory so we can tell real
   // movement apart from GPS jitter, the same way Google Maps only advances
@@ -635,6 +682,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     try {
       stopLocationUpdates()
       stopStepTracking()
+      stopActivityRecognition()
     } catch (_: Throwable) {
       // Destruction must never bring down the host process.
     }
@@ -660,6 +708,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     lastMovementAt = System.currentTimeMillis()
     requestLocationUpdates()
     startStepTracking()
+    startActivityRecognition()
     setLastError("")
     serviceRunning = true
     scheduleUpload()
@@ -683,6 +732,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     stepTrackingActive = false
     stopLocationUpdates()
     stopStepTracking()
+    stopActivityRecognition()
     scheduleUpload()
     clearConfig()
     clearActiveSnapshot()
@@ -908,6 +958,57 @@ class NativeMobilityService : Service(), SensorEventListener {
     stepTrackingActive = false
   }
 
+  private fun startActivityRecognition() {
+    if (
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    val transitions = listOf(
+      DetectedActivity.WALKING,
+      DetectedActivity.RUNNING,
+      DetectedActivity.ON_BICYCLE,
+      DetectedActivity.IN_VEHICLE,
+      DetectedActivity.STILL,
+    ).flatMap { activityType ->
+      listOf(
+        ActivityTransition.Builder()
+          .setActivityType(activityType)
+          .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
+          .build(),
+        ActivityTransition.Builder()
+          .setActivityType(activityType)
+          .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_EXIT)
+          .build(),
+      )
+    }
+    try {
+      ActivityRecognition.getClient(this)
+        .requestActivityTransitionUpdates(
+          ActivityTransitionRequest(transitions),
+          activityPendingIntent,
+        )
+        .addOnFailureListener { error ->
+          setLastError("活动识别订阅失败：\${error.message ?: error.javaClass.simpleName}")
+        }
+    } catch (error: Throwable) {
+      // Location and speed-based fallback remain active on devices without
+      // Google Play services or without Activity Recognition support.
+      setLastError("活动识别不可用，已使用速度判断：\${error.message ?: error.javaClass.simpleName}")
+    }
+  }
+
+  private fun stopActivityRecognition() {
+    try {
+      ActivityRecognition.getClient(this)
+        .removeActivityTransitionUpdates(activityPendingIntent)
+    } catch (_: Throwable) {
+      // Registration is optional; location tracking must still stop cleanly.
+    }
+  }
+
   private fun failAndStop(prefix: String, error: Throwable) {
     running = false
     serviceRunning = false
@@ -974,6 +1075,7 @@ class NativeMobilityService : Service(), SensorEventListener {
       .put("altitude", if (hasAltitude()) altitude else JSONObject.NULL)
       .put("speed", if (hasSpeed()) speed.toDouble() else JSONObject.NULL)
       .put("heading", if (hasBearing()) bearing.toDouble() else JSONObject.NULL)
+      .put("activityType", NativeMobilityActivityReceiver.currentActivity(this@NativeMobilityService))
       .put("placeName", "")
   }
 
@@ -1342,6 +1444,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     const val EXTRA_ACCESS_TOKEN = "accessToken"
     private const val CHANNEL_ID = "daily_todo_mobility"
     private const val NOTIFICATION_ID = 4307
+    private const val ACTIVITY_REQUEST_CODE = 4308
     // Sampling cadence and noise filtering are tuned to behave like Google
     // Maps' location history: sample every few seconds instead of every
     // second, require a displacement bigger than typical GPS jitter before
@@ -1534,6 +1637,58 @@ class NativeMobilityBootReceiver : BroadcastReceiver() {
     } catch (_: Throwable) {
       // Android may temporarily reject a foreground-service restart. Opening
       // the app will retry through the normal runtime reconciliation path.
+    }
+  }
+}
+`;
+
+const nativeMobilityActivityReceiverSource = `package ${PACKAGE_NAME}
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import com.google.android.gms.location.ActivityTransition
+import com.google.android.gms.location.ActivityTransitionResult
+import com.google.android.gms.location.DetectedActivity
+
+class NativeMobilityActivityReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent) {
+    if (!ActivityTransitionResult.hasResult(intent)) return
+    val result = ActivityTransitionResult.extractResult(intent) ?: return
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    for (event in result.transitionEvents) {
+      val activity = activityName(event.activityType)
+      if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) {
+        prefs.edit()
+          .putString(KEY_CURRENT_ACTIVITY, activity)
+          .putLong(KEY_ACTIVITY_CHANGED_AT, event.elapsedRealTimeNanos)
+          .apply()
+      } else if (prefs.getString(KEY_CURRENT_ACTIVITY, "") == activity) {
+        prefs.edit()
+          .remove(KEY_CURRENT_ACTIVITY)
+          .putLong(KEY_ACTIVITY_CHANGED_AT, event.elapsedRealTimeNanos)
+          .apply()
+      }
+    }
+  }
+
+  companion object {
+    private const val PREFS_NAME = "daily_todo_mobility_activity"
+    private const val KEY_CURRENT_ACTIVITY = "currentActivity"
+    private const val KEY_ACTIVITY_CHANGED_AT = "activityChangedAt"
+
+    fun currentActivity(context: Context): String =
+      context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getString(KEY_CURRENT_ACTIVITY, "")
+        .orEmpty()
+
+    private fun activityName(type: Int): String = when (type) {
+      DetectedActivity.WALKING -> "WALKING"
+      DetectedActivity.RUNNING -> "RUNNING"
+      DetectedActivity.ON_BICYCLE -> "ON_BICYCLE"
+      DetectedActivity.IN_VEHICLE -> "IN_VEHICLE"
+      DetectedActivity.STILL -> "STILL"
+      else -> ""
     }
   }
 }

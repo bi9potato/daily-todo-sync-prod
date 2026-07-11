@@ -18,6 +18,7 @@ from .models import LocationPoint, MobilityRecording, StepSample
 from .segmentation import DEFAULT_DWELL_MINUTES, build_route_points, segment_day
 
 router = Router(tags=["mobility"])
+VALID_ACTIVITY_TYPES = {"WALKING", "RUNNING", "ON_BICYCLE", "IN_VEHICLE", "STILL"}
 
 
 class LocationPointIn(Schema):
@@ -29,6 +30,7 @@ class LocationPointIn(Schema):
     altitude: float | None = None
     speed: float | None = None
     heading: float | None = None
+    activityType: str = ""
     placeName: str = ""
 
 
@@ -285,6 +287,11 @@ def add_points(request, recording_id: UUID, payload: LocationBatchIn):
                 altitude=point.altitude,
                 speed=point.speed,
                 heading=point.heading,
+                activity_type=(
+                    point.activityType.strip()
+                    if point.activityType.strip() in VALID_ACTIVITY_TYPES
+                    else ""
+                ),
                 place_name=point.placeName.strip()[:180],
             )
         )

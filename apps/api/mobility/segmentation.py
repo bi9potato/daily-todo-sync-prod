@@ -17,6 +17,15 @@ from .geo import (
 )
 from .models import LocationPoint
 
+RECOGNIZED_MODE_MAP = {
+    "WALKING": "WALKING",
+    "RUNNING": "WALKING",
+    "ON_BICYCLE": "CYCLING",
+    "IN_VEHICLE": "IN_VEHICLE",
+}
+MIN_RECOGNIZED_ACTIVITY_SAMPLES = 3
+MIN_RECOGNIZED_ACTIVITY_SHARE = 0.6
+
 # Points within this distance of where a stop began are treated as "the
 # same place" (movingpandas' stop detector measures it as the max diameter
 # of the stop), and a newly detected visit within the dedup radius of the
@@ -208,6 +217,25 @@ def _infer_mode(
     return "FLIGHT"
 
 
+def _recognized_mode(points: list[LocationPoint]) -> str | None:
+    """Return a stable Android Activity Recognition mode when one signal
+    covers most fixes in the trip. Transition events are copied onto each
+    location fix by the Android service, so counting fixes approximates time
+    spent in each activity without trusting a single noisy transition."""
+    counts: dict[str, int] = {}
+    for point in points:
+        mode = RECOGNIZED_MODE_MAP.get(point.activity_type)
+        if mode:
+            counts[mode] = counts.get(mode, 0) + 1
+    sample_count = sum(counts.values())
+    if sample_count < MIN_RECOGNIZED_ACTIVITY_SAMPLES:
+        return None
+    mode, count = max(counts.items(), key=lambda item: item[1])
+    if count / sample_count < MIN_RECOGNIZED_ACTIVITY_SHARE:
+        return None
+    return mode
+
+
 def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int) -> Segment | None:
     if end_index <= start_index:
         return None
@@ -238,6 +266,18 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
         and point.speed >= 0
         and (point.accuracy is None or point.accuracy <= SPEED_SAMPLE_MAX_ACCURACY_METERS)
     ]
+    inferred_mode = _infer_mode(distance, duration_seconds, recorded_speeds, legs)
+    recognized_mode = _recognized_mode(points[start_index : end_index + 1])
+    # Activity Recognition is authoritative for the ambiguous ground modes
+    # that GPS speed routinely confuses. Keep the speed-derived rail/flight
+    # modes because the Android API intentionally reports all of them as the
+    # broader IN_VEHICLE category.
+    mode = (
+        recognized_mode
+        if recognized_mode is not None
+        and inferred_mode in {"WALKING", "CYCLING", "IN_VEHICLE"}
+        else inferred_mode
+    )
     return Segment(
         type="trip",
         start_index=start_index,
@@ -250,7 +290,7 @@ def _trip_segment(points: list[LocationPoint], start_index: int, end_index: int)
         end_latitude=float(end_point.latitude),
         end_longitude=float(end_point.longitude),
         distance_meters=round(distance, 1),
-        mode=_infer_mode(distance, duration_seconds, recorded_speeds, legs),
+        mode=mode,
     )
 
 

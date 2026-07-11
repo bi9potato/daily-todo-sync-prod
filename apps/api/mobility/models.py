@@ -50,6 +50,7 @@ class LocationPoint(models.Model):
     altitude = models.FloatField(null=True, blank=True)
     speed = models.FloatField(null=True, blank=True)
     heading = models.FloatField(null=True, blank=True)
+    activity_type = models.CharField(max_length=24, blank=True, default="")
     place_name = models.CharField(max_length=180, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -603,6 +603,7 @@ class MobilitySegmentationTests(TestCase):
         minutes_offset: float,
         accuracy: float = 8,
         speed: float | None = None,
+        activity_type: str = "",
     ):
         base = timezone.make_aware(datetime.fromisoformat("2026-06-30T08:00:00"))
         return LocationPoint(
@@ -610,6 +611,7 @@ class MobilitySegmentationTests(TestCase):
             longitude=lng,
             accuracy=accuracy,
             speed=speed,
+            activity_type=activity_type,
             recorded_at=base + timedelta(minutes=minutes_offset),
         )
 
@@ -773,6 +775,56 @@ class MobilitySegmentationTests(TestCase):
 
         self.assertEqual([segment["type"] for segment in segments], ["trip"])
         self.assertEqual(segments[0]["mode"], "CYCLING")
+
+    def test_android_bicycle_signal_overrides_walking_speed(self):
+        points = [
+            self.make_point(
+                39.9000 + 0.0008 * step,
+                116.3000,
+                float(step),
+                speed=1.5,
+                activity_type="ON_BICYCLE",
+            )
+            for step in range(6)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "CYCLING")
+
+    def test_android_walking_signal_overrides_cycling_speed(self):
+        points = [
+            self.make_point(
+                39.9000 + 0.0015 * step,
+                116.3000,
+                float(step),
+                speed=3.0,
+                activity_type="WALKING",
+            )
+            for step in range(6)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual([segment["type"] for segment in segments], ["trip"])
+        self.assertEqual(segments[0]["mode"], "WALKING")
+
+    def test_single_activity_transition_does_not_override_speed(self):
+        points = [
+            self.make_point(
+                39.9000 + 0.0018 * step,
+                116.3000,
+                0.5 * step,
+                speed=12.0,
+                activity_type="ON_BICYCLE" if step == 0 else "",
+            )
+            for step in range(6)
+        ]
+
+        segments = build_day_segments(points, dwell_minutes=5)
+
+        self.assertEqual(segments[0]["mode"], "IN_VEHICLE")
 
     def test_subway_ride_with_gps_outage_is_subway(self):
         # A metro ride records nothing underground: walking-pace Doppler
