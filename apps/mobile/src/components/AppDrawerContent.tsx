@@ -1,5 +1,4 @@
 import {
-  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -70,19 +69,22 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
   const pathname = usePathname();
   const activeSection = sectionForPath(pathname);
   const initial = displayName.trim().slice(0, 1).toUpperCase() || "D";
+  const drawerNavigation = navigation as typeof navigation & {
+    addListener: (event: "drawerClose", listener: () => void) => () => void;
+  };
 
   // Close first, navigate after: router.replace() swaps the active drawer
   // screen, which is heavy enough (a re-render of the whole (app) group)
   // that firing it in the same tick as closeDrawer() could occasionally
   // interrupt the drawer's own close animation/gesture settle before it
   // finished - the screen changed but the panel visually stayed open.
-  // Deferring the replace past the current interactions (closeDrawer's
-  // animation included) lets the close finish first, every time.
+  // The drawerClose lifecycle event guarantees its animation has finished.
   function go(section: AppSection) {
-    navigation.closeDrawer();
-    InteractionManager.runAfterInteractions(() => {
+    const unsubscribe = drawerNavigation.addListener("drawerClose", () => {
+      unsubscribe();
       navigateToSection(section);
     });
+    navigation.closeDrawer();
   }
 
   return (
@@ -146,7 +148,7 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
           })}
         </View>
 
-        <View style={styles.viewSection}>
+        {Platform.OS !== "android" ? <View style={styles.viewSection}>
           <Text style={styles.sectionLabel}>日历视图</Text>
           <View style={styles.segmented}>
             {(["day", "week", "month"] as const).map((view) => {
@@ -159,10 +161,7 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
                   key={view}
                   onPress={() => {
                     setCalendarView(view);
-                    navigation.closeDrawer();
-                    InteractionManager.runAfterInteractions(() => {
-                      navigateToSection("calendar");
-                    });
+                    go("calendar");
                   }}
                   style={({ pressed }) => [
                     styles.segment,
@@ -177,7 +176,7 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
               );
             })}
           </View>
-        </View>
+        </View> : null}
       </DrawerContentScrollView>
 
       {/* Pinned outside the scroll so the current date stays visible; it owns

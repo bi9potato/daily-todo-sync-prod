@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  InteractionManager,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -14,6 +13,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { scheduleIdleTask } from "@/lib/schedule-idle-task";
 import Slider from "@react-native-community/slider";
 import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as FileSystem from "expo-file-system/legacy";
@@ -726,18 +726,14 @@ export function MobilityScreen({
   const liveEnabled = isToday && (recordingEnabled || userEnabledLive);
   const liveLocation = useLiveLocation(liveEnabled);
 
-  // Mounting the native MapLibre view is heavy (GL surface + style setup) and
-  // contends with ScreenEnter's entrance animation for frame budget, which is
-  // exactly what read as "laggy" opening this screen. Deferring construction
-  // until the transition (and any other queued interaction) finishes keeps
-  // the fade-in smooth; the loading spinner already shown for a pending
-  // dayQuery covers this brief extra window too.
+  // Mounting MapLibre is non-urgent (GL surface + style setup), so let the
+  // initial screen render finish first. A timeout guarantees the map appears
+  // even on a continuously busy JS thread.
   const [mapMountReady, setMapMountReady] = useState(false);
   useEffect(() => {
-    const handle = InteractionManager.runAfterInteractions(() => {
+    return scheduleIdleTask(() => {
       setMapMountReady(true);
     });
-    return () => handle.cancel();
   }, []);
 
   const handleUserPan = useCallback(() => {

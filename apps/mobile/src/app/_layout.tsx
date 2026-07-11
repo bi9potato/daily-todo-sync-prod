@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { AppState, InteractionManager, Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   defaultShouldDehydrateQuery,
@@ -33,6 +33,7 @@ import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import { initNetworkMonitoring, onNetworkReconnect } from "@/lib/network";
 import { cleanupLegacyMobilityRuntime } from "@/lib/mobility-tracking";
 import { flushTodoMutationQueue } from "@/lib/todo-mutation-queue";
+import { scheduleIdleTask } from "@/lib/schedule-idle-task";
 
 installClientLogCapture();
 initNetworkMonitoring();
@@ -105,13 +106,11 @@ const STACK_SCREEN_OPTIONS = { headerShown: false } as const;
 // elsewhere (another device, a background sync) shows up too. Reconnect
 // often fires at the exact moment the app resumes (Android re-checks
 // connectivity on foreground), so the sync itself is deferred past
-// whatever screen transition is in flight via InteractionManager - the
-// standard React Native primitive for "after animations/interactions
-// settle" - rather than competing with it for the JS thread. The device
+// whatever urgent rendering is in flight. The device
 // already reads from cache while offline; this only decides when the
 // background refresh happens, never whether the UI can be used meanwhile.
 onNetworkReconnect(() => {
-  InteractionManager.runAfterInteractions(() => {
+  scheduleIdleTask(() => {
     void flushTodoMutationQueue().then(() => {
       void queryClient.invalidateQueries({ queryKey: ["day"] });
       void queryClient.invalidateQueries({ queryKey: ["range"] });

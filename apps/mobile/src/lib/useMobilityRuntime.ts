@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, InteractionManager, Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getMobilityDay } from "./api";
+import { scheduleIdleTask } from "./schedule-idle-task";
 import { isMobilityActivationInProgress } from "./mobility-activation";
 import {
   clearMobilityDiagnostics,
@@ -203,6 +204,7 @@ export function useMobilityRuntime(today: string, enabled = true) {
       return;
     }
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelResumeIdleTask: (() => void) | null = null;
     const subscription = AppState.addEventListener("change", (state) => {
       if (resumeTimer) {
         clearTimeout(resumeTimer);
@@ -233,12 +235,10 @@ export function useMobilityRuntime(today: string, enabled = true) {
         ) {
           return;
         }
-        // The fixed delay above covers Android's own native window-resume
-        // transition (invisible to JS); this additionally waits out any
-        // in-flight JS-thread interaction (e.g. a screen transition still
-        // animating) using the standard React Native primitive for it,
-        // rather than a second guessed delay.
-        InteractionManager.runAfterInteractions(() => {
+        // Reconciliation is background work; run it once urgent resume-time
+        // rendering has yielded, with a bounded timeout.
+        cancelResumeIdleTask = scheduleIdleTask(() => {
+          cancelResumeIdleTask = null;
           void refetchDay().then(({ data }) =>
             reconcile(data?.activeRecording ?? null, Boolean(data)),
           );
@@ -249,6 +249,7 @@ export function useMobilityRuntime(today: string, enabled = true) {
       if (resumeTimer) {
         clearTimeout(resumeTimer);
       }
+      cancelResumeIdleTask?.();
       subscription.remove();
     };
   }, [enabled, queryClient, reconcile, refetchDay, today]);
