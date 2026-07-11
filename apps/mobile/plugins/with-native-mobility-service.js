@@ -394,6 +394,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.TriggerEvent
+import android.hardware.TriggerEventListener
 import android.location.Location
 import android.os.Build
 import android.os.IBinder
@@ -462,37 +464,59 @@ class NativeMobilityService : Service(), SensorEventListener {
     override fun onLocationResult(result: LocationResult) {
       if (!running || recordingId.isBlank()) return
       try {
-        val now = System.currentTimeMillis()
         if (!highPowerTracking) {
-          // Coarse fixes in low-power mode are for the wake-up decision only
-          // (they may exceed the recording accuracy gate). Upshift when one
-          // lands clearly outside the parked position's error margin.
+          // Low-power fixes are a wake-up signal ONLY - never recorded.
+          // Indoor wifi/cell positioning jitters 40-100m while still
+          // passing the 50m accuracy gate; recording those scribbled fake
+          // movement all over genuine stays and fragmented the server's
+          // visit detection. The per-fix distance gate is capped so even a
+          // very coarse cell fix can still wake GPS on a real departure.
           val anchor = lastAcceptedLocation
-          val moved = result.locations.any { fix ->
-            anchor != null &&
-              anchor.distanceTo(fix) >= maxOf(UPSHIFT_DISTANCE_METERS, fix.accuracy)
+          val moved = anchor != null && result.locations.any { fix ->
+            anchor.distanceTo(fix) >=
+              maxOf(UPSHIFT_DISTANCE_METERS, minOf(fix.accuracy, UPSHIFT_ACCURACY_GATE_CAP))
           }
           if (moved) {
             switchTrackingMode(highPower = true)
+            return
           }
+          // Keep dwell detection fed exactly like the high-power stationary
+          // path does: an anchor-snapped heartbeat - without re-anchoring or
+          // persisting the coarse fixes themselves.
+          val heartbeatAnchor = lastAcceptedLocation ?: return
+          val now = System.currentTimeMillis()
+          if (now - lastAcceptedAt >= STATIONARY_HEARTBEAT_MS) {
+            lastAcceptedAt = now
+            recordPoints(listOf(Location(heartbeatAnchor).apply { time = now }))
+          }
+          return
         }
-        val points = result.locations
+        val now = System.currentTimeMillis()
+        val accepted = result.locations
           .filter { it.accuracy <= MAX_ACCURACY_METERS }
           .mapNotNull(::acceptedLocationOrNull)
-          .map { it.toJsonPoint() }
-        if (highPowerTracking && now - lastMovementAt >= STATIONARY_DOWNSHIFT_MS) {
+        if (now - lastMovementAt >= STATIONARY_DOWNSHIFT_MS) {
           switchTrackingMode(highPower = false)
         }
-        if (points.isEmpty()) return
-        setLatestPoint(points.last().toString())
-        appendPoints(points)
-        if (now - lastLocationUploadScheduledAt >= LOCATION_UPLOAD_INTERVAL_MS) {
-          lastLocationUploadScheduledAt = now
-          scheduleUpload()
-        }
+        recordPoints(accepted)
       } catch (error: Throwable) {
         setLastError("保存后台定位点失败：\${error.message ?: error.javaClass.simpleName}")
       }
+    }
+  }
+
+  // Shared by the subscription callback and the one-shot fix requested at
+  // upshift: persist points locally, let the lazy sync interval decide when
+  // they reach the server.
+  private fun recordPoints(locations: List<Location>) {
+    if (locations.isEmpty()) return
+    val points = locations.map { it.toJsonPoint() }
+    setLatestPoint(points.last().toString())
+    appendPoints(points)
+    val now = System.currentTimeMillis()
+    if (now - lastLocationUploadScheduledAt >= LOCATION_UPLOAD_INTERVAL_MS) {
+      lastLocationUploadScheduledAt = now
+      scheduleUpload()
     }
   }
 
@@ -725,6 +749,7 @@ class NativeMobilityService : Service(), SensorEventListener {
     if (::fusedLocationClient.isInitialized) {
       fusedLocationClient.removeLocationUpdates(locationCallback)
     }
+    disarmSignificantMotionSensor()
   }
 
   private fun switchTrackingMode(highPower: Boolean) {
@@ -732,8 +757,10 @@ class NativeMobilityService : Service(), SensorEventListener {
     highPowerTracking = highPower
     if (highPower) {
       lastMovementAt = System.currentTimeMillis()
+      disarmSignificantMotionSensor()
     } else {
       stepCountAtDownshift = stepCount
+      armSignificantMotionSensor()
     }
     try {
       requestLocationUpdates()
@@ -742,6 +769,63 @@ class NativeMobilityService : Service(), SensorEventListener {
       // in and try again on the next trigger.
       highPowerTracking = !highPower
       setLastError("切换定位功耗模式失败：\${error.message ?: error.javaClass.simpleName}")
+      return
+    }
+    if (highPower) {
+      // The subscription's first fix can take a full interval; losing those
+      // seconds at departure is how track starts got clipped. Ask for one
+      // fresh high-accuracy fix right now.
+      requestImmediateFix()
+    }
+  }
+
+  // Hardware significant-motion trigger: fires on walking OR vehicle motion
+  // at effectively zero power, and is the primary departure signal while
+  // parked - the step counter misses driving entirely, and coarse fixes can
+  // take minutes to show clear displacement. One-shot by contract, so it is
+  // re-armed on every downshift.
+  private val significantMotionListener = object : TriggerEventListener() {
+    override fun onTrigger(event: TriggerEvent?) {
+      if (running && !highPowerTracking) {
+        switchTrackingMode(highPower = true)
+      }
+    }
+  }
+
+  private fun armSignificantMotionSensor() {
+    if (!::sensorManager.isInitialized) return
+    val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) ?: return
+    try {
+      sensorManager.requestTriggerSensor(significantMotionListener, sensor)
+    } catch (_: Throwable) {
+      // Device quirk - the coarse-fix and step-count wake-ups still apply.
+    }
+  }
+
+  private fun disarmSignificantMotionSensor() {
+    if (!::sensorManager.isInitialized) return
+    val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) ?: return
+    try {
+      sensorManager.cancelTriggerSensor(significantMotionListener, sensor)
+    } catch (_: Throwable) {
+      // Already fired (one-shot) or never armed; nothing to cancel.
+    }
+  }
+
+  private fun requestImmediateFix() {
+    try {
+      fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+        .addOnSuccessListener { fix ->
+          if (!running || !highPowerTracking || fix == null) {
+            return@addOnSuccessListener
+          }
+          if (fix.accuracy > MAX_ACCURACY_METERS) {
+            return@addOnSuccessListener
+          }
+          acceptedLocationOrNull(fix)?.let { recordPoints(listOf(it)) }
+        }
+    } catch (_: Throwable) {
+      // The regular subscription delivers within seconds anyway.
     }
   }
 
@@ -1277,9 +1361,16 @@ class NativeMobilityService : Service(), SensorEventListener {
     private const val STATIONARY_DOWNSHIFT_MS = 180_000L
     private const val LOW_POWER_INTERVAL_MS = 60_000L
     private const val LOW_POWER_FASTEST_INTERVAL_MS = 30_000L
-    private const val LOW_POWER_BATCH_DELAY_MS = 120_000L
+    // No batching in low-power mode: these one-per-minute fixes are the
+    // departure detector, and letting the OS hold them for two extra
+    // minutes meant driving away went unnoticed for kilometers.
+    private const val LOW_POWER_BATCH_DELAY_MS = 0L
     private const val UPSHIFT_STEP_THRESHOLD = 15
     private const val UPSHIFT_DISTANCE_METERS = 80f
+    // A very coarse cell fix (accuracy 1-2km) must not need its own full
+    // radius of displacement before waking GPS; cap what a single fix's
+    // accuracy can demand of the departure check.
+    private const val UPSHIFT_ACCURACY_GATE_CAP = 300f
     private const val MIN_DISTANCE_METERS = 8f
     // Fixes past ~50m of reported error are wifi/cell positions, not GPS -
     // in urban canyons they scatter hundreds of meters and are what drew
