@@ -15,11 +15,13 @@ Thumbs.db
 .corepack/
 .pnpm-store/
 .tmp/
+tmp/
 
 # 前端构建产物
 node_modules/
 dist/
 build/
+apps/mobile/.expo-qa/
 *.tsbuildinfo
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
