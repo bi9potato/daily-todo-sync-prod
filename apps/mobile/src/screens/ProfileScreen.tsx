@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { AuthenticatedImage } from "@/components/AuthenticatedImage";
+import { AndroidUpdatePanel } from "@/components/profile/AndroidUpdatePanel";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import {
   authorizeGoogleCalendar,
@@ -37,12 +38,10 @@ import {
   updateMe,
 } from "@/lib/api";
 import { useSession } from "@/session";
-import { formatApkSize, hasAndroidUpdate } from "@/lib/mobile-release";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
   DeletedTodoOccurrence,
   GoogleCalendarStatus,
-  MobileRelease,
   TodoOccurrence,
 } from "@/types";
 
@@ -280,7 +279,9 @@ export function ProfileScreen() {
             value={`${currentVersion} (${currentVersionCode})`}
           />
           {Platform.OS === "android" ? (
-            <UpdatePanel
+            <AndroidUpdatePanel
+              currentBuildSha={currentBuildSha}
+              currentVersionCode={Number(currentVersionCode)}
               isChecking={releaseQuery.isFetching}
               latest={releaseQuery.data}
               onCheck={() => releaseQuery.refetch()}
@@ -655,104 +656,6 @@ function ArchivedTaskViewer({
         </View>
       ) : null}
     </Modal>
-  );
-}
-
-function UpdatePanel({
-  isChecking,
-  latest,
-  onCheck,
-}: {
-  isChecking: boolean;
-  latest: MobileRelease | undefined;
-  onCheck: () => unknown;
-}) {
-  const hasUpdate = hasAndroidUpdate(
-    Number(currentVersionCode),
-    currentBuildSha,
-    latest,
-  );
-  const apkSize = formatApkSize(latest?.apkSizeBytes);
-
-  async function download() {
-    if (!latest) {
-      return;
-    }
-    try {
-      await Linking.openURL(latest.apkUrl);
-    } catch {
-      Alert.alert("无法打开下载地址", "请稍后重试，或前往 GitHub Release 下载。");
-    }
-  }
-
-  return (
-    <View style={styles.updatePanel}>
-      <View style={styles.updateHeader}>
-        <View style={styles.updateIcon}>
-          {isChecking ? (
-            <ActivityIndicator color={colors.accent} size="small" />
-          ) : (
-            <AppIcon
-              name={hasUpdate ? "download-outline" : "checkmark"}
-              color={colors.white}
-              size={21}
-            />
-          )}
-        </View>
-        <View style={styles.updateCopy}>
-          <Text style={styles.updateTitle}>
-            {isChecking
-              ? "正在检查更新"
-              : hasUpdate
-                ? "发现新版本"
-                : latest
-                  ? "已是最新版"
-                  : "暂时无法检查"}
-          </Text>
-          <Text style={styles.updateMeta}>
-            {latest
-              ? `${latest.versionName} (${latest.versionCode}) · ${latest.architecture}`
-              : `Build ${currentBuildSha.slice(0, 7)}`}
-          </Text>
-          {latest ? (
-            <Text style={styles.updateHint}>
-              {[apkSize, new Date(latest.publishedAt).toLocaleString("zh-CN")]
-                .filter(Boolean)
-                .join(" · ")}
-            </Text>
-          ) : null}
-          {hasUpdate ? (
-            <Text style={styles.updateHint}>下载后由 Android 确认安装</Text>
-          ) : null}
-        </View>
-      </View>
-
-      {hasUpdate ? (
-        <Pressable
-          accessibilityRole="link"
-          onPress={download}
-          style={({ pressed }) => [
-            styles.downloadButton,
-            pressed && styles.pressed,
-          ]}>
-          <AppIcon name="download-outline" color={colors.white} size={19} />
-          <Text style={styles.downloadText}>下载并安装</Text>
-        </Pressable>
-      ) : null}
-
-      <Pressable
-        disabled={isChecking}
-        onPress={onCheck}
-        style={({ pressed }) => [
-          styles.checkButton,
-          pressed && styles.pressed,
-        ]}>
-        <Text style={styles.checkButtonText}>重新检查</Text>
-      </Pressable>
-      <Text style={styles.privateReleaseHint}>
-        私有仓库下载时，浏览器可能要求登录 GitHub。
-      </Text>
-    </View>
   );
 }
 
