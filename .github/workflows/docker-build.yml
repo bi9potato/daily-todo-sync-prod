@@ -1,4 +1,4 @@
-name: Docker Build
+name: Android API Image
 
 on:
   push:
@@ -11,12 +11,11 @@ permissions:
 
 env:
   API_IMAGE: ghcr.io/${{ github.repository_owner }}/daily-todo-sync-api
-  WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/daily-todo-sync-web
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   build-and-push:
-    name: Build and push images
+    name: Build and push Android API image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,12 +37,3 @@ jobs:
           docker push "${API_IMAGE}:${IMAGE_TAG}"
           docker push "${API_IMAGE}:latest"
 
-      - name: Build and push Web image
-        run: |
-          docker build \
-            -f apps/web/Dockerfile \
-            -t "${WEB_IMAGE}:${IMAGE_TAG}" \
-            -t "${WEB_IMAGE}:latest" \
-            .
-          docker push "${WEB_IMAGE}:${IMAGE_TAG}"
-          docker push "${WEB_IMAGE}:latest"
