@@ -28,6 +28,7 @@ const navItems = [
   { key: "mobility", label: "足迹地图", icon: "map-outline", group: "生活记录" },
   { key: "device-timeline", label: "设备时间线", icon: "time-outline", group: "生活记录" },
   { key: "expenses", label: "每日收支", icon: "wallet-outline", group: "生活记录" },
+  { key: "timeline", label: "个人时间线", icon: "git-commit-outline", group: "生活记录" },
   { key: "services", label: "权限与后台服务", icon: "shield-checkmark-outline", group: "系统" },
   { key: "sleep", label: "睡眠", icon: "moon-outline" },
   { key: "passwords", label: "密码管理", icon: "key-outline" },
@@ -51,6 +52,7 @@ const androidOnlyNavItems: ReadonlySet<NavItemKey> = new Set([
   "device-timeline",
   "expenses",
   "services",
+  "timeline",
 ]);
 
 const platformNavItems = navItems.filter((item) =>

@@ -12,6 +12,7 @@ export type AppSection =
   | "mobility"
   | "device-timeline"
   | "expenses"
+  | "timeline"
   | "services"
   | "sleep"
   | "passwords"
@@ -29,6 +30,7 @@ const SECTION_ROUTES: Record<AppSection, Href> = {
   mobility: "/mobility",
   "device-timeline": "/device-timeline",
   expenses: "/expenses",
+  timeline: "/timeline" as Href,
   services: "/services" as Href,
   sleep: "/sleep",
   passwords: "/passwords",

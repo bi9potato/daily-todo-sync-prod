@@ -7,6 +7,7 @@ test.each([
   "mobility",
   "device-timeline",
   "expenses",
+  "timeline",
   "services",
   "profile",
 ] as const)("opens the %s drawer module through the navigator", (section) => {
