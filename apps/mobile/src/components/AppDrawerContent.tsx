@@ -19,15 +19,15 @@ import { useAppShell } from "@/lib/app-shell";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
 const navItems = [
-  { key: "today", label: "我的一天", icon: "sunny-outline" },
-  { key: "long-term", label: "长期任务", icon: "pricetag-outline" },
-  { key: "low-priority", label: "低优先级", icon: "leaf-outline" },
+  { key: "today", label: "我的一天", icon: "sunny-outline", group: "任务" },
+  { key: "long-term", label: "长期任务", icon: "pricetag-outline", group: "任务" },
+  { key: "low-priority", label: "低优先级", icon: "leaf-outline", group: "任务" },
   { key: "analytics", label: "分析", icon: "analytics-outline" },
   { key: "calendar", label: "日历", icon: "calendar-outline" },
-  { key: "mobility", label: "足迹地图", icon: "map-outline" },
-  { key: "device-timeline", label: "设备时间线", icon: "time-outline" },
-  { key: "expenses", label: "每日收支", icon: "wallet-outline" },
-  { key: "services", label: "权限与后台服务", icon: "shield-checkmark-outline" },
+  { key: "mobility", label: "足迹地图", icon: "map-outline", group: "生活记录" },
+  { key: "device-timeline", label: "设备时间线", icon: "time-outline", group: "生活记录" },
+  { key: "expenses", label: "每日收支", icon: "wallet-outline", group: "生活记录" },
+  { key: "services", label: "权限与后台服务", icon: "shield-checkmark-outline", group: "系统" },
   { key: "sleep", label: "睡眠", icon: "moon-outline" },
   { key: "passwords", label: "密码管理", icon: "key-outline" },
   { key: "ai", label: "AI 助手", icon: "sparkles-outline" },
@@ -49,12 +49,22 @@ const androidHiddenNavItems: ReadonlySet<NavItemKey> = new Set([
 const androidOnlyNavItems: ReadonlySet<NavItemKey> = new Set([
   "device-timeline",
   "expenses",
+  "services",
 ]);
 
 const platformNavItems = navItems.filter((item) =>
   Platform.OS === "android"
     ? !androidHiddenNavItems.has(item.key)
     : !androidOnlyNavItems.has(item.key),
+);
+
+const androidNavGroups = (["任务", "生活记录", "系统"] as const).map(
+  (label) => ({
+    label,
+    items: platformNavItems.filter(
+      (item) => "group" in item && item.group === label,
+    ),
+  }),
 );
 
 // Content of the app's navigation drawer. Rendered by expo-router's <Drawer>
@@ -86,6 +96,34 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
       navigateToSection(section);
     });
     navigation.closeDrawer();
+  }
+
+  function renderNavItem(item: (typeof navItems)[number]) {
+    const active = activeSection === item.key;
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        key={item.key}
+        onPress={() => go(item.key)}
+        style={({ pressed }) => [
+          styles.navItem,
+          active && styles.navItemActive,
+          pressed && styles.pressed,
+        ]}>
+        <AppIcon
+          color={active ? colors.accent : colors.textMuted}
+          name={item.icon}
+          size={21}
+        />
+        <Text
+          numberOfLines={1}
+          style={[styles.navLabel, active && styles.navLabelActive]}>
+          {item.label}
+        </Text>
+        {active ? <View style={styles.activeDot} /> : null}
+      </Pressable>
+    );
   }
 
   return (
@@ -120,33 +158,14 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
         <View style={styles.divider} />
 
         <View style={styles.navigation}>
-          {platformNavItems.map((item) => {
-            const active = activeSection === item.key;
-            return (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                key={item.key}
-                onPress={() => go(item.key)}
-                style={({ pressed }) => [
-                  styles.navItem,
-                  active && styles.navItemActive,
-                  pressed && styles.pressed,
-                ]}>
-                <AppIcon
-                  color={active ? colors.accent : colors.textMuted}
-                  name={item.icon}
-                  size={21}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[styles.navLabel, active && styles.navLabelActive]}>
-                  {item.label}
-                </Text>
-                {active ? <View style={styles.activeDot} /> : null}
-              </Pressable>
-            );
-          })}
+          {Platform.OS === "android"
+            ? androidNavGroups.map((group) => (
+                <View key={group.label} style={styles.navGroup}>
+                  <Text style={styles.navGroupLabel}>{group.label}</Text>
+                  {group.items.map(renderNavItem)}
+                </View>
+              ))
+            : platformNavItems.map(renderNavItem)}
         </View>
 
         {Platform.OS !== "android" ? <View style={styles.viewSection}>
@@ -243,6 +262,18 @@ const styles = StyleSheet.create({
   },
   navigation: {
     gap: 2,
+  },
+  navGroup: {
+    gap: 2,
+    marginBottom: spacing.sm,
+  },
+  navGroupLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
   },
   navItem: {
     alignItems: "center",
