@@ -691,7 +691,7 @@ function SourcesTab({
       <View style={styles.disclosureCard}>
         <AppIcon name="shield-checkmark-outline" color={colors.accent} size={21} />
         <Text style={styles.disclosureText}>
-          只选择你需要记录交易的应用。未验证版本只采集模板，不会自动记账；诊断采样必须单独开启，样本加密并在 7 天内删除。
+          只选择你需要记录交易的应用。识别到的交易只会进入“待核对”，经你确认才记账；诊断采样必须单独开启，样本加密并在 7 天内删除。
         </Text>
       </View>
 
@@ -785,7 +785,7 @@ function SourcesTab({
                     <Text style={styles.sourceStatusText}>
                       {source?.validationState === "validated"
                         ? "模板已验证，可按置信度规则记录"
-                        : "模板未验证，自动记录已锁定"}
+                        : "通用识别中：交易通知会进入待核对，确认后才记账"}
                     </Text>
                   </View>
                   <View style={styles.diagnosticRow}>

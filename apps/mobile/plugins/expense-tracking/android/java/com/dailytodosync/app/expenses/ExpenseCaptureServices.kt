@@ -136,10 +136,15 @@ object ExpenseDiagnosticGate {
 }
 
 /**
- * Production parsers are added only after a package/signature/version/template
- * has passed the real-device fixture gate. An empty registry is intentional:
- * unvalidated data may be sampled with explicit consent, but cannot create a
- * transaction.
+ * Parsers that turn captured text into transaction candidates.
+ *
+ * The generic CNY parser below deliberately emits LOW-confidence candidates
+ * only: acceptParsedCandidate auto-confirms nothing below "high", so every
+ * generic hit lands in the review tab (待核对) and only becomes a
+ * transaction after explicit user confirmation. Fully automatic recording
+ * stays reserved for per-app templates validated against real-device
+ * fixtures (none are registered yet); unvalidated data still cannot create
+ * a transaction on its own.
  */
 object ExpenseParserRegistry {
   fun parseNotification(
@@ -149,8 +154,13 @@ object ExpenseParserRegistry {
     text: String,
   ): ParsedExpenseCandidate? {
     @Suppress("UNUSED_VARIABLE")
-    val reservedForValidatedAdapters = listOf(source, notificationKey, eventTime, text)
-    return null
+    val reservedForValidatedAdapters = notificationKey
+    return GenericCnyParser.parse(
+      sourcePackage = source.packageName,
+      sourceKind = "notification",
+      eventTime = eventTime,
+      text = text,
+    )
   }
 
   fun parseAccessibility(
@@ -158,9 +168,103 @@ object ExpenseParserRegistry {
     eventTime: Long,
     snapshot: String,
   ): ParsedExpenseCandidate? {
+    // Full-screen accessibility snapshots routinely quote several amounts
+    // (balances, coupons, list rows), which defeats the generic parser's
+    // single-amount rule; pages stay diagnostic-only until a per-app
+    // validated template exists.
     @Suppress("UNUSED_VARIABLE")
     val reservedForValidatedAdapters = listOf(source, eventTime, snapshot)
     return null
+  }
+}
+
+/**
+ * Conservative, app-agnostic extraction for CNY payment notifications.
+ * Rules keeping it safe without per-app validation:
+ * - Parses ONLY when the text quotes exactly one distinct amount. Multiple
+ *   numbers (balance + payment, instalment breakdowns) are precisely where
+ *   naive extraction records the wrong figure, so those stay
+ *   diagnostic-sample-only.
+ * - Direction comes from unambiguous keyword cues; conflicting or missing
+ *   cues fall back to 待判断资金流, which the summary excludes from totals.
+ * - Everything is confidence "low", so nothing auto-records.
+ */
+object GenericCnyParser {
+  private val amountPattern = Regex(
+    "(?:[¥￥]|(?:RMB|CNY|人民币))\\s*([0-9]{1,9}(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)" +
+      "|([0-9]{1,9}(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)\\s*元",
+    RegexOption.IGNORE_CASE,
+  )
+  private val refundCues = listOf("退款", "已退回", "退回")
+  private val incomeCues = listOf("收款", "到账", "入账", "收入")
+  private val expenseCues =
+    listOf("支出", "已支付", "支付成功", "付款成功", "已付款", "扣款", "消费", "已扣除", "付款")
+
+  fun parse(
+    sourcePackage: String,
+    sourceKind: String,
+    eventTime: Long,
+    text: String,
+  ): ParsedExpenseCandidate? {
+    val amounts = amountPattern.findAll(text)
+      .map { match -> match.groupValues.drop(1).first(String::isNotEmpty) }
+      .map { raw -> raw.replace(",", "") }
+      .distinct()
+      .toList()
+    if (amounts.size != 1) return null
+    val amountMinor = toMinorUnits(amounts[0]) ?: return null
+    if (amountMinor <= 0L) return null
+
+    val refund = refundCues.firstOrNull(text::contains)
+    val income = incomeCues.firstOrNull(text::contains)
+    val expense = expenseCues.firstOrNull(text::contains)
+    val (nature, cue) = when {
+      refund != null -> "refund" to refund
+      income != null && expense == null -> "earned_income" to income
+      expense != null && income == null -> "purchase_expense" to expense
+      else -> "unknown_money_flow" to "ambiguous"
+    }
+
+    // Minute-bucketed content hash: the same payment re-delivered within a
+    // minute (notification updates, listener reconnects) dedupes against
+    // the candidates table's unique contentHash index, while identical
+    // amounts in different minutes are treated as separate payments.
+    val normalizedText = text.replace(Regex("\\s+"), " ").trim().take(600)
+    val minuteBucket = eventTime / 60_000L
+    val contentHash = ExpenseRepository.sha256(
+      "$sourcePackage|$sourceKind|generic-cny-v1|$normalizedText|$amountMinor|$minuteBucket",
+    )
+    return ParsedExpenseCandidate(
+      occurredAt = eventTime,
+      amountMinor = amountMinor,
+      currency = "CNY",
+      moneyNature = nature,
+      category = null,
+      merchant = null,
+      confidenceLevel = "low",
+      confidenceReasons = listOf("generic_cny_template", "single_amount", "cue_$cue"),
+      sourcePackage = sourcePackage,
+      sourceKind = sourceKind,
+      templateId = "generic-cny-v1",
+      parserVersion = "1",
+      contentHash = contentHash,
+      externalTransactionId = null,
+      extractedFields = null,
+    )
+  }
+
+  private fun toMinorUnits(value: String): Long? {
+    val parts = value.split(".")
+    if (parts.size > 2) return null
+    val yuan = parts[0].toLongOrNull() ?: return null
+    val fen = when {
+      parts.size == 1 -> 0L
+      parts[1].length == 1 -> (parts[1].toLongOrNull() ?: return null) * 10
+      parts[1].length == 2 -> parts[1].toLongOrNull() ?: return null
+      else -> return null
+    }
+    if (yuan > 9_999_999L) return null
+    return yuan * 100 + fen
   }
 }
 
