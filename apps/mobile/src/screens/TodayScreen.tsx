@@ -112,6 +112,7 @@ function createOptimisticOccurrence(
 }
 
 type TodayScreenProps = {
+  autoFocusComposer?: boolean;
   selectedDate: string;
   viewMode?: "my-day" | "long-term" | "low-priority";
 };
@@ -202,6 +203,7 @@ function updateTaskAttachments(
 }
 
 export function TodayScreen({
+  autoFocusComposer = false,
   selectedDate,
   viewMode = "my-day",
 }: TodayScreenProps) {
@@ -709,6 +711,7 @@ export function TodayScreen({
       </View>
       {content}
       <Composer
+        autoFocus={autoFocusComposer}
         isPending={createMutation.isPending || aiChatMutation.isPending}
         lastAiReply={aiChatMutation.data?.reply}
         onAiSubmit={(text) => aiChatMutation.mutateAsync(text).then(() => undefined)}

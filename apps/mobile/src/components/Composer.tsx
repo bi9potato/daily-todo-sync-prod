@@ -23,6 +23,7 @@ import { colors, radius, spacing } from "@/theme";
 type ComposerMode = "task" | "ai";
 
 type ComposerProps = {
+  autoFocus?: boolean;
   isPending: boolean;
   lastAiReply?: string;
   onAiSubmit?: (text: string) => Promise<void>;
@@ -30,6 +31,7 @@ type ComposerProps = {
 };
 
 export function Composer({
+  autoFocus = false,
   isPending,
   lastAiReply,
   onAiSubmit,
@@ -129,6 +131,7 @@ export function Composer({
         <TextInput
           accessibilityLabel="添加任务"
           autoCapitalize="sentences"
+          autoFocus={autoFocus}
           blurOnSubmit={false}
           editable={!isPending}
           onChangeText={setText}

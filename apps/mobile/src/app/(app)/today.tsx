@@ -1,12 +1,14 @@
 import { ScreenEnter } from "@/components/ScreenEnter";
 import { useAppShell } from "@/lib/app-shell";
 import { TodayScreen } from "@/screens/TodayScreen";
+import { useLocalSearchParams } from "expo-router";
 
 export default function TodayRoute() {
   const { selectedDate } = useAppShell();
+  const { compose } = useLocalSearchParams<{ compose?: string }>();
   return (
     <ScreenEnter style={{ flex: 1 }}>
-      <TodayScreen selectedDate={selectedDate} />
+      <TodayScreen autoFocusComposer={compose === "1"} selectedDate={selectedDate} />
     </ScreenEnter>
   );
 }

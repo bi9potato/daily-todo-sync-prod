@@ -49,11 +49,17 @@ const EXPENSE_CATEGORY_ENTRIES = Object.entries(expenseCategoryLabels) as [
 ][];
 const INCOME_CATEGORY_ENTRIES = Object.entries(incomeCategoryLabels);
 
-export function ExpenseTrackingScreen({ today }: { today: string }) {
+export function ExpenseTrackingScreen({
+  openManualOnMount = false,
+  today,
+}: {
+  openManualOnMount?: boolean;
+  today: string;
+}) {
   const queryClient = useQueryClient();
   const available = isExpenseTrackingAvailable();
   const [tab, setTab] = useState<ScreenTab>("ledger");
-  const [manualOpen, setManualOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(openManualOnMount);
   const [sourceSearch, setSourceSearch] = useState("");
   const [actionError, setActionError] = useState("");
   // Drawer screens stay mounted once visited; without a focus gate the
