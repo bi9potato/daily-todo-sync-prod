@@ -266,6 +266,10 @@ export type MobileRelease = {
   versionCode: number;
   buildSha: string;
   architecture: "arm64-v8a";
+  packageName?: string;
+  apkSizeBytes?: number;
+  apkSha256?: string;
+  signingCertificateSha256?: string;
   apkUrl: string;
   releaseUrl: string;
   publishedAt: string;

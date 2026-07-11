@@ -18,7 +18,10 @@ permissions:
 
 concurrency:
   group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
+  # Publishing uses one mutable android-latest release. Let queued builds finish
+  # in order so an older run cannot race a newer run while replacing its tag
+  # and assets.
+  cancel-in-progress: false
 
 env:
   CI: "true"
@@ -287,10 +290,30 @@ jobs:
             "${aapt_path}" dump badging artifacts/daily-todo-arm64-v8a.apk |
               sed -n "s/^package:.*versionCode='\([0-9][0-9]*\)'.*/\1/p"
           )"
+          apk_package="$(
+            "${aapt_path}" dump badging artifacts/daily-todo-arm64-v8a.apk |
+              sed -n "s/^package: name='\([^']*\)'.*/\1/p"
+          )"
           if [[ -z "${apk_version_code}" || "${apk_version_code}" != "${version_code}" ]]; then
             echo "APK versionCode ${apk_version_code:-missing} does not match manifest ${version_code}" >&2
             exit 1
           fi
+          if [[ "${apk_package}" != "com.dailytodosync.app" ]]; then
+            echo "Unexpected APK package ${apk_package:-missing}" >&2
+            exit 1
+          fi
+          apksigner_path="$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          signing_cert_sha256="$(
+            "${apksigner_path}" verify --print-certs artifacts/daily-todo-arm64-v8a.apk |
+              sed -n 's/^Signer #1 certificate SHA-256 digest: //p' |
+              head -n 1
+          )"
+          if [[ ! "${signing_cert_sha256}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "Could not read APK signing certificate SHA-256" >&2
+            exit 1
+          fi
+          apk_sha256="$(sha256sum artifacts/daily-todo-arm64-v8a.apk | cut -d' ' -f1)"
+          apk_size_bytes="$(stat -c '%s' artifacts/daily-todo-arm64-v8a.apk)"
           # apkUrl points at the app server, not the GitHub release asset:
           # 62MB downloads from GitHub truncate routinely on mainland-China
           # networks, failing install with Android's generic "app not
@@ -305,6 +328,10 @@ jobs:
             "versionCode": ${version_code},
             "buildSha": "${GITHUB_SHA}",
             "architecture": "arm64-v8a",
+            "packageName": "${apk_package}",
+            "apkSizeBytes": ${apk_size_bytes},
+            "apkSha256": "${apk_sha256}",
+            "signingCertificateSha256": "${signing_cert_sha256}",
             "apkUrl": "${EXPO_PUBLIC_API_BASE_URL%/api}/downloads/daily-todo-arm64-v8a.apk",
             "releaseUrl": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/android-latest",
             "publishedAt": "${published_at}"
