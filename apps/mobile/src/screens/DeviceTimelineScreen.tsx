@@ -16,6 +16,10 @@ import { AppIcon } from "@/components/AppIcon";
 import { DeviceTimelineAppIcon } from "@/components/DeviceTimelineAppIcon";
 import { ScreenEnter } from "@/components/ScreenEnter";
 import { getDeviceTimelineDay } from "@/lib/api";
+import {
+  aggregateAppUsage,
+  deviceTimelineDurationSeconds,
+} from "@/lib/device-timeline";
 import type { DeviceTimelineRuntime } from "@/lib/useDeviceTimelineRuntime";
 import { addDays, formatLongDate } from "@/lib/date";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
@@ -52,17 +56,6 @@ function formatTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function durationSeconds(item: DeviceTimelineItem) {
-  if (!item.startTime || !item.endTime) {
-    return Math.max(0, (item.durationMinutes ?? 0) * 60);
-  }
-  const start = new Date(item.startTime).getTime();
-  const end = new Date(item.endTime).getTime();
-  return Number.isFinite(start) && Number.isFinite(end)
-    ? Math.max(0, Math.round((end - start) / 1_000))
-    : 0;
 }
 
 function formatDuration(seconds: number) {
@@ -145,35 +138,7 @@ export function DeviceTimelineScreen({
   }
 
   const timeline = dayQuery.data?.timeline ?? EMPTY_TIMELINE;
-  const appUsage = useMemo(() => {
-    const byPackage = new Map<
-      string,
-      {
-        appLabel: string;
-        packageName: string;
-        sessionCount: number;
-        totalSeconds: number;
-      }
-    >();
-    for (const item of timeline) {
-      if (item.type !== "app") {
-        continue;
-      }
-      const packageName = item.packageName || item.appLabel || "unknown";
-      const current = byPackage.get(packageName) ?? {
-        appLabel: item.appLabel || packageName,
-        packageName,
-        sessionCount: 0,
-        totalSeconds: 0,
-      };
-      current.sessionCount += 1;
-      current.totalSeconds += durationSeconds(item);
-      byPackage.set(packageName, current);
-    }
-    return [...byPackage.values()]
-      .filter((item) => item.totalSeconds > 0)
-      .sort((left, right) => right.totalSeconds - left.totalSeconds);
-  }, [timeline]);
+  const appUsage = useMemo(() => aggregateAppUsage(timeline), [timeline]);
   const totalAppUsageSeconds = useMemo(
     () => appUsage.reduce((total, item) => total + item.totalSeconds, 0),
     [appUsage],
@@ -474,7 +439,7 @@ function TimelineRow({
               {item.endTime && item.endTime !== item.startTime
                 ? ` - ${formatTime(item.endTime)}`
                 : ""}
-              {` · ${formatDuration(durationSeconds(item))}`}
+              {` · ${formatDuration(deviceTimelineDurationSeconds(item))}`}
             </Text>
           </View>
         </View>
