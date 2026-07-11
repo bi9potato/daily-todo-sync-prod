@@ -37,6 +37,7 @@ import {
   updateMe,
 } from "@/lib/api";
 import { useSession } from "@/session";
+import { formatApkSize, hasAndroidUpdate } from "@/lib/mobile-release";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
   DeletedTodoOccurrence,
@@ -666,9 +667,12 @@ function UpdatePanel({
   latest: MobileRelease | undefined;
   onCheck: () => unknown;
 }) {
-  const developmentBuild = currentBuildSha === "development";
-  const hasUpdate =
-    Boolean(latest) && (developmentBuild || latest?.buildSha !== currentBuildSha);
+  const hasUpdate = hasAndroidUpdate(
+    Number(currentVersionCode),
+    currentBuildSha,
+    latest,
+  );
+  const apkSize = formatApkSize(latest?.apkSizeBytes);
 
   async function download() {
     if (!latest) {
@@ -710,6 +714,13 @@ function UpdatePanel({
               ? `${latest.versionName} (${latest.versionCode}) · ${latest.architecture}`
               : `Build ${currentBuildSha.slice(0, 7)}`}
           </Text>
+          {latest ? (
+            <Text style={styles.updateHint}>
+              {[apkSize, new Date(latest.publishedAt).toLocaleString("zh-CN")]
+                .filter(Boolean)
+                .join(" · ")}
+            </Text>
+          ) : null}
           {hasUpdate ? (
             <Text style={styles.updateHint}>下载后由 Android 确认安装</Text>
           ) : null}
