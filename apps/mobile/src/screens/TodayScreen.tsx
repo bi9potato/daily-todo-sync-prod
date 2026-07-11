@@ -26,6 +26,7 @@ import { Composer } from "@/components/Composer";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
+import { TodayOverview } from "@/components/TodayOverview";
 import {
   ApiError,
   archiveOccurrence,
@@ -648,6 +649,13 @@ export function TodayScreen({
       }
       showsVerticalScrollIndicator={false}
       style={styles.scroll}>
+      {viewMode === "my-day" ? (
+        <TodayOverview
+          doneCount={dayQuery.data?.done.length ?? 0}
+          selectedDate={selectedDate}
+          totalCount={total}
+        />
+      ) : null}
       {total === 0 ? (
         <View style={styles.empty}>
           <AppIcon name="sunny-outline" color={colors.accent} size={34} />
