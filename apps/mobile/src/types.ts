@@ -270,6 +270,8 @@ export type MobileRelease = {
   apkSizeBytes?: number;
   apkSha256?: string;
   signingCertificateSha256?: string;
+  verificationStatus?: "verified";
+  releaseNotes?: string;
   apkUrl: string;
   releaseUrl: string;
   publishedAt: string;

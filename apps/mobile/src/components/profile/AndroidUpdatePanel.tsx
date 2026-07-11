@@ -70,6 +70,12 @@ export function AndroidUpdatePanel({
                 .join(" · ")}
             </Text>
           ) : null}
+          {latest?.releaseNotes ? (
+            <Text style={styles.notes}>{latest.releaseNotes}</Text>
+          ) : null}
+          {latest?.verificationStatus === "verified" ? (
+            <Text style={styles.verified}>安装包签名与 SHA-256 已验证</Text>
+          ) : null}
           {hasUpdate ? <Text style={styles.hint}>下载后由 Android 确认安装</Text> : null}
         </View>
       </View>
@@ -101,6 +107,8 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: 17, fontWeight: "800" },
   meta: { ...typography.label, color: colors.textMuted },
   hint: { ...typography.caption, color: colors.textMuted, textAlign: "center" },
+  notes: { ...typography.caption, color: colors.text, lineHeight: 18, marginTop: spacing.xs },
+  verified: { ...typography.caption, color: colors.accent, fontWeight: "700", marginTop: spacing.xs },
   download: { alignItems: "center", backgroundColor: colors.accent, borderRadius: radius.sm, flexDirection: "row", gap: spacing.sm, justifyContent: "center", minHeight: 48 },
   downloadText: { ...typography.label, color: colors.white, fontWeight: "800" },
   check: { alignItems: "center", justifyContent: "center", minHeight: 42 },

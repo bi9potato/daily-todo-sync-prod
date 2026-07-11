@@ -1,6 +1,9 @@
 import { useCallback } from "react";
-import { ActivityIndicator, Linking, PermissionsAndroid, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Linking, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Location from "expo-location";
+import Constants from "expo-constants";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { useFocusEffect } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 
@@ -53,6 +56,53 @@ export function AndroidServicesScreen() {
   const expense = snapshot?.expense;
   const queueCount = mobilityRuntime.queuedPointCount + deviceTimeline.runtime.queuedEventCount;
 
+  async function exportDiagnostics() {
+    if (!FileSystem.cacheDirectory) return;
+    const diagnostic = {
+      generatedAt: new Date().toISOString(),
+      app: {
+        version: Constants.expoConfig?.version ?? "unknown",
+        versionCode: Constants.expoConfig?.android?.versionCode ?? null,
+        buildSha: Constants.expoConfig?.extra?.buildSha ?? "development",
+        architecture: "arm64-v8a",
+      },
+      android: { apiLevel: Platform.Version },
+      permissions: snapshot ? {
+        foregroundLocation: snapshot.foregroundLocation,
+        backgroundLocation: snapshot.backgroundLocation,
+        activityRecognition: snapshot.activityRecognition,
+        notifications: snapshot.notifications,
+        exactAlarm: snapshot.exactAlarm,
+        batteryOptimizationExempt: snapshot.mobilityBatteryExempt,
+        usageAccess: deviceTimeline.runtime.hasUsageAccess,
+        expenseNotificationAccess: expense?.notificationAccessGranted ?? false,
+        expenseAccessibility: expense?.accessibilityAccessGranted ?? false,
+      } : null,
+      services: {
+        mobilityRunning: mobilityRuntime.nativeTaskActive,
+        deviceTimelineEnabled: deviceTimeline.runtime.enabled,
+        deviceTimelineRunning: deviceTimeline.runtime.isRunning,
+        expenseAvailable: Boolean(expense),
+      },
+      queues: {
+        mobilityPoints: mobilityRuntime.queuedPointCount,
+        deviceTimelineEvents: deviceTimeline.runtime.queuedEventCount,
+      },
+      recentErrors: [mobilityRuntime.lastError, deviceTimeline.runtime.lastError]
+        .filter(Boolean)
+        .map((message) => String(message).slice(0, 500)),
+      privacy: "No tokens, passwords, exact locations, notification contents, or transaction details are included.",
+    };
+    const uri = `${FileSystem.cacheDirectory}daily-todo-android-diagnostics.json`;
+    await FileSystem.writeAsStringAsync(uri, JSON.stringify(diagnostic, null, 2));
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, {
+        dialogTitle: "导出 Android 诊断",
+        mimeType: "application/json",
+      });
+    }
+  }
+
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={styles.heading}>
       <View style={styles.headingIcon}><AppIcon name="shield-checkmark-outline" color={colors.white} size={24} /></View>
@@ -93,6 +143,10 @@ export function AndroidServicesScreen() {
       <Text style={styles.summaryText}>{queueCount ? `本机共有 ${queueCount} 条数据等待同步` : "本地后台队列已同步"}</Text>
       <Pressable onPress={() => refetch()} style={styles.refresh}><Text style={styles.refreshText}>刷新</Text></Pressable>
     </View>
+    <Pressable accessibilityRole="button" onPress={() => void exportDiagnostics()} style={styles.exportButton}>
+      <AppIcon name="document-outline" color={colors.accent} size={19} />
+      <Text style={styles.exportText}>导出脱敏诊断</Text>
+    </Pressable>
   </ScrollView>;
 }
 
@@ -128,4 +182,6 @@ const styles = StyleSheet.create({
   summaryText: { ...typography.body, color: colors.text, flex: 1 },
   refresh: { minHeight: 38, justifyContent: "center", paddingHorizontal: spacing.sm },
   refreshText: { ...typography.label, color: colors.accent },
+  exportButton: { alignItems: "center", backgroundColor: colors.surface, borderColor: colors.border, borderRadius: radius.md, borderWidth: 1, flexDirection: "row", gap: spacing.sm, justifyContent: "center", minHeight: 48 },
+  exportText: { ...typography.label, color: colors.accent },
 });
