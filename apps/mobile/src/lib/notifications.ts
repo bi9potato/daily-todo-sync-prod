@@ -11,6 +11,10 @@ import { recordClientLog } from "./client-logs";
 // future feature might add, so its importance/sound settings never get
 // diluted by an unrelated notification type sharing the channel.
 const REMINDER_ID_PREFIX = "task-reminder-";
+const TASK_REMINDER_CATEGORY = "task-reminder-actions";
+export const TASK_REMINDER_COMPLETE = "task-reminder-complete";
+export const TASK_REMINDER_SNOOZE = "task-reminder-snooze";
+export const TASK_REMINDER_OPEN = "task-reminder-open";
 
 // expo-notifications defaults to suppressing alerts while the app is in the
 // foreground (the historical "don't interrupt the user with their own app
@@ -37,6 +41,11 @@ export async function ensureReminderNotificationChannel() {
   if (Platform.OS !== "android") {
     return;
   }
+  await Notifications.setNotificationCategoryAsync(TASK_REMINDER_CATEGORY, [
+    { identifier: TASK_REMINDER_COMPLETE, buttonTitle: "完成", options: { opensAppToForeground: false } },
+    { identifier: TASK_REMINDER_SNOOZE, buttonTitle: "推迟 10 分钟", options: { opensAppToForeground: false } },
+    { identifier: TASK_REMINDER_OPEN, buttonTitle: "打开", options: { opensAppToForeground: true } },
+  ]);
   try {
     // The Android module creates the channel with the device's selected alarm
     // ringtone. Expo's "default" resolves to the shorter notification tone,
@@ -184,6 +193,7 @@ export async function scheduleTaskReminder(occurrence: {
       title: "任务提醒",
       body: occurrence.text,
       data: { occurrenceId: occurrence.id },
+      categoryIdentifier: TASK_REMINDER_CATEGORY,
       ...(Platform.OS === "android"
         ? { priority: Notifications.AndroidNotificationPriority.MAX }
         : {}),
@@ -215,11 +225,48 @@ export async function presentImmediateReminder(occurrenceId: string, title: stri
       title,
       body,
       data: { occurrenceId },
+      categoryIdentifier: TASK_REMINDER_CATEGORY,
       ...(Platform.OS === "android"
         ? { priority: Notifications.AndroidNotificationPriority.MAX }
         : {}),
       sound: "default",
     },
     trigger: { channelId: REMINDER_CHANNEL_ID },
+  });
+}
+
+export function addTaskReminderResponseListener({
+  onComplete,
+}: {
+  onComplete: (occurrenceId: string) => Promise<void>;
+}) {
+  return Notifications.addNotificationResponseReceivedListener((response) => {
+    const occurrenceId = String(
+      response.notification.request.content.data?.occurrenceId ?? "",
+    );
+    if (!occurrenceId) return;
+    if (response.actionIdentifier === TASK_REMINDER_COMPLETE) {
+      void onComplete(occurrenceId);
+      return;
+    }
+    if (response.actionIdentifier === TASK_REMINDER_SNOOZE) {
+      const content = response.notification.request.content;
+      void Notifications.scheduleNotificationAsync({
+        identifier: reminderIdentifier(occurrenceId),
+        content: {
+          title: content.title ?? "任务提醒",
+          body: content.body ?? "任务等待处理",
+          data: { occurrenceId },
+          categoryIdentifier: TASK_REMINDER_CATEGORY,
+          priority: Notifications.AndroidNotificationPriority.MAX,
+          sound: "default",
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: new Date(Date.now() + 10 * 60 * 1000),
+          channelId: REMINDER_CHANNEL_ID,
+        },
+      });
+    }
   });
 }

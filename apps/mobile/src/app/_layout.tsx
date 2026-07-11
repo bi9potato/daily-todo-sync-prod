@@ -32,8 +32,16 @@ import "@/lib/location-reminders";
 import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import { initNetworkMonitoring, onNetworkReconnect } from "@/lib/network";
 import { cleanupLegacyMobilityRuntime } from "@/lib/mobility-tracking";
-import { flushTodoMutationQueue } from "@/lib/todo-mutation-queue";
+import {
+  enqueueTodoUpdate,
+  flushTodoMutationQueue,
+} from "@/lib/todo-mutation-queue";
 import { scheduleIdleTask } from "@/lib/schedule-idle-task";
+import { ApiError, updateOccurrence } from "@/lib/api";
+import {
+  addTaskReminderResponseListener,
+  cancelTaskReminder,
+} from "@/lib/notifications";
 
 installClientLogCapture();
 initNetworkMonitoring();
@@ -122,6 +130,23 @@ onNetworkReconnect(() => {
 });
 
 export default function RootLayout() {
+  useEffect(() => {
+    const subscription = addTaskReminderResponseListener({
+      onComplete: async (occurrenceId) => {
+        try {
+          await updateOccurrence(occurrenceId, { done: true });
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          await enqueueTodoUpdate(occurrenceId, { done: true });
+        }
+        await cancelTaskReminder(occurrenceId);
+        void queryClient.invalidateQueries({ queryKey: ["day"] });
+        void queryClient.invalidateQueries({ queryKey: ["range"] });
+      },
+    });
+    return () => subscription.remove();
+  }, []);
+
   useEffect(() => {
     void (async () => {
       recordClientLog("info", "Running legacy mobility runtime cleanup", {
