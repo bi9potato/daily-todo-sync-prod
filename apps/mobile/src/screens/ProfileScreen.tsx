@@ -2,7 +2,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -18,8 +17,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
-import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { AndroidUpdatePanel } from "@/components/profile/AndroidUpdatePanel";
+import {
+  ArchivedLongTermPanel,
+  TrashPanel,
+} from "@/components/profile/ProfileHistoryPanels";
 import { ErrorState, LoadingState } from "@/components/ScreenState";
 import {
   authorizeGoogleCalendar,
@@ -40,9 +42,7 @@ import {
 import { useSession } from "@/session";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
-  DeletedTodoOccurrence,
   GoogleCalendarStatus,
-  TodoOccurrence,
 } from "@/types";
 
 const currentVersion = Constants.expoConfig?.version ?? "1.0.0";
@@ -466,196 +466,6 @@ function CalendarAccounts({
         </Pressable>
       </View>
     </View>
-  );
-}
-
-function TrashPanel({
-  isBusy,
-  items,
-  onClear,
-  onRestore,
-}: {
-  isBusy: boolean;
-  items: DeletedTodoOccurrence[];
-  onClear: () => void;
-  onRestore: (id: string) => void;
-}) {
-  return (
-    <View style={styles.trashPanel}>
-      {items.length ? (
-        items.map((item) => (
-          <View key={item.id} style={styles.trashRow}>
-            <View style={styles.trashCopy}>
-              <Text numberOfLines={1} style={styles.trashTitle}>
-                {item.text}
-              </Text>
-              <Text style={styles.trashMeta}>{item.taskDate}</Text>
-            </View>
-            <Pressable
-              disabled={isBusy}
-              onPress={() => onRestore(item.id)}
-              style={styles.restoreButton}>
-              <Text style={styles.restoreText}>恢复</Text>
-            </Pressable>
-          </View>
-        ))
-      ) : (
-        <Text style={styles.emptySetting}>回收站为空。</Text>
-      )}
-      {items.length ? (
-        <Pressable
-          disabled={isBusy}
-          onPress={onClear}
-          style={styles.clearTrashButton}>
-          <AppIcon name="trash-outline" color={colors.danger} size={18} />
-          <Text style={styles.clearTrashText}>清空回收站</Text>
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
-
-function ArchivedLongTermPanel({
-  isBusy,
-  items,
-  onUnarchive,
-}: {
-  isBusy: boolean;
-  items: TodoOccurrence[];
-  onUnarchive: (id: string) => void;
-}) {
-  // Archived tasks used to be restore-or-nothing; their note and images were
-  // unreachable without unarchiving first. Tapping a row now opens a
-  // read-only viewer.
-  const [viewing, setViewing] = useState<TodoOccurrence | null>(null);
-
-  return (
-    <View style={styles.trashPanel}>
-      {items.length ? (
-        items.map((item) => (
-          <View key={item.id} style={styles.trashRow}>
-            <Pressable
-              accessibilityHint="查看归档任务详情"
-              accessibilityRole="button"
-              onPress={() => setViewing(item)}
-              style={({ pressed }) => [styles.trashCopy, pressed && styles.pressed]}>
-              <Text numberOfLines={1} style={styles.trashTitle}>
-                {item.text}
-              </Text>
-              <Text style={styles.trashMeta}>
-                {item.archivedAt
-                  ? `归档于 ${item.archivedAt.slice(0, 10)}`
-                  : item.taskDate}
-              </Text>
-            </Pressable>
-            <Pressable
-              disabled={isBusy}
-              onPress={() => onUnarchive(item.id)}
-              style={styles.restoreButton}>
-              <Text style={styles.restoreText}>取消归档</Text>
-            </Pressable>
-          </View>
-        ))
-      ) : (
-        <Text style={styles.emptySetting}>暂无已归档的长期任务。</Text>
-      )}
-      <ArchivedTaskViewer
-        isBusy={isBusy}
-        onClose={() => setViewing(null)}
-        onUnarchive={(id) => {
-          setViewing(null);
-          onUnarchive(id);
-        }}
-        task={viewing}
-      />
-    </View>
-  );
-}
-
-function ArchivedTaskViewer({
-  isBusy,
-  onClose,
-  onUnarchive,
-  task,
-}: {
-  isBusy: boolean;
-  onClose: () => void;
-  onUnarchive: (id: string) => void;
-  task: TodoOccurrence | null;
-}) {
-  const [preview, setPreview] = useState<string | null>(null);
-  return (
-    <Modal
-      animationType="slide"
-      onRequestClose={onClose}
-      presentationStyle="pageSheet"
-      visible={Boolean(task)}>
-      {task ? (
-        <View style={styles.archiveViewerPage}>
-          <View style={styles.archiveViewerHeader}>
-            <Pressable
-              accessibilityLabel="关闭"
-              hitSlop={8}
-              onPress={onClose}
-              style={styles.archiveViewerClose}>
-              <AppIcon name="close" color={colors.text} size={22} />
-            </Pressable>
-            <Text numberOfLines={1} style={styles.archiveViewerTitle}>
-              归档任务
-            </Text>
-            <Pressable
-              disabled={isBusy}
-              onPress={() => onUnarchive(task.id)}
-              style={[styles.restoreButton, isBusy && styles.pressed]}>
-              <Text style={styles.restoreText}>取消归档</Text>
-            </Pressable>
-          </View>
-          <ScrollView contentContainerStyle={styles.archiveViewerBody}>
-            <Text style={styles.archiveViewerTaskText}>{task.text}</Text>
-            <Text style={styles.trashMeta}>
-              {task.archivedAt
-                ? `归档于 ${task.archivedAt.slice(0, 10)}`
-                : task.taskDate}
-            </Text>
-            {task.note.trim() ? (
-              <Text style={styles.archiveViewerNote}>{task.note}</Text>
-            ) : null}
-            {task.attachments.length ? (
-              <View style={styles.archiveViewerImages}>
-                {task.attachments.map((attachment) => (
-                  <Pressable
-                    key={attachment.id}
-                    onPress={() => setPreview(attachment.contentUrl)}
-                    style={styles.archiveViewerThumb}>
-                    <AuthenticatedImage
-                      contentUrl={attachment.contentUrl}
-                      style={styles.archiveViewerThumbImage}
-                    />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-          </ScrollView>
-          <Modal
-            animationType="fade"
-            onRequestClose={() => setPreview(null)}
-            transparent
-            visible={Boolean(preview)}>
-            <Pressable
-              onPress={() => setPreview(null)}
-              style={styles.archiveViewerPreviewBackdrop}>
-              {preview ? (
-                <AuthenticatedImage
-                  contentUrl={preview}
-                  resizeMode="contain"
-                  style={styles.archiveViewerPreviewImage}
-                />
-              ) : null}
-            </Pressable>
-          </Modal>
-        </View>
-      ) : null}
-    </Modal>
   );
 }
 
