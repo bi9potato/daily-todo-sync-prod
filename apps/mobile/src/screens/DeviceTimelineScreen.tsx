@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  InteractionManager,
+  FlatList,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -93,21 +92,7 @@ export function DeviceTimelineScreen({
   const isToday = selectedDate === today;
   const [actionError, setActionError] = useState("");
   const [isTogglePending, setIsTogglePending] = useState(false);
-
-  // Every app-usage row and timeline entry resolves its icon through a
-  // native PackageManager call (drawable -> bitmap -> PNG -> base64). A busy
-  // day easily has a dozen distinct apps, and firing all of those the
-  // instant the screen mounts was competing with ScreenEnter's fade-in for
-  // frame budget - the same class of jank fixed for the footprint map.
-  // Deferring the icon-bearing content past the transition keeps entry
-  // smooth; the query itself still loads immediately.
-  const [contentReady, setContentReady] = useState(false);
-  useEffect(() => {
-    const handle = InteractionManager.runAfterInteractions(() => {
-      setContentReady(true);
-    });
-    return () => handle.cancel();
-  }, []);
+  const [isTimelineExpanded, setIsTimelineExpanded] = useState(false);
 
   const dayQuery = useQuery({
     queryKey: ["device-timeline-day", selectedDate],
@@ -206,13 +191,24 @@ export function DeviceTimelineScreen({
     return { named, otherSeconds };
   }, [appUsage]);
 
-  const showContent = contentReady && !dayQuery.isPending;
+  const renderTimelineItem = useCallback(
+    ({ item, index }: { item: DeviceTimelineItem; index: number }) => (
+      <TimelineRow item={item} isLast={index === timeline.length - 1} />
+    ),
+    [timeline.length],
+  );
 
   return (
     <ScreenEnter style={{ backgroundColor: colors.surface, flex: 1 }}>
-      <ScrollView
+      <FlatList
         contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}>
+        data={isTimelineExpanded ? timeline : EMPTY_TIMELINE}
+        initialNumToRender={8}
+        keyExtractor={(item, index) =>
+          `${item.type}-${item.time ?? item.startTime}-${index}`
+        }
+        ListHeaderComponent={
+          <>
         <View style={styles.heading}>
           <Text style={styles.title}>设备时间线</Text>
           <Text style={styles.subtitle}>
@@ -309,7 +305,7 @@ export function DeviceTimelineScreen({
           </View>
         ) : null}
 
-        {!showContent ? (
+        {dayQuery.isPending ? (
           <ActivityIndicator color={colors.accent} style={styles.loading} />
         ) : (
           <>
@@ -391,26 +387,40 @@ export function DeviceTimelineScreen({
               </View>
             ) : null}
 
-            <Text style={styles.sectionTitle}>时间线</Text>
-            <View style={styles.timelineSection}>
-              {timeline.length ? (
-                timeline.map((item, index) => (
-                  <TimelineRow
-                    item={item}
-                    isLast={index === timeline.length - 1}
-                    key={`${item.type}-${item.time ?? item.startTime}-${index}`}
-                  />
-                ))
-              ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: isTimelineExpanded }}
+              onPress={() => setIsTimelineExpanded((expanded) => !expanded)}
+              style={({ pressed }) => [
+                styles.timelineHeader,
+                pressed && styles.pressed,
+              ]}>
+              <View style={styles.timelineHeaderCopy}>
+                <Text style={styles.sectionTitle}>时间线</Text>
+                <Text style={styles.timelineCount}>
+                  {timeline.length ? `${timeline.length} 条记录` : "暂无记录"}
+                </Text>
+              </View>
+              <AppIcon
+                color={colors.textMuted}
+                name={isTimelineExpanded ? "chevron-up" : "chevron-down"}
+                size={20}
+              />
+            </Pressable>
+            {!timeline.length ? (
+              <View style={styles.timelineSection}>
                 <Text style={styles.emptyTimeline}>
                   这一天还没有记录，开启记录后会在这里显示时间线
                 </Text>
-              )}
-            </View>
+              </View>
+            ) : null}
           </>
         )}
-
-        {runtime.runtime.queuedEventCount ? (
+          </>
+        }
+        ListFooterComponent={
+          <>
+          {runtime.runtime.queuedEventCount ? (
           <Text style={styles.queueHint}>
             {runtime.runtime.queuedEventCount} 条事件待同步
           </Text>
@@ -427,7 +437,14 @@ export function DeviceTimelineScreen({
           <AppIcon name="trash-outline" color={colors.danger} size={18} />
           <Text style={styles.dangerRowText}>清除设备时间线历史记录</Text>
         </Pressable>
-      </ScrollView>
+          </>
+        }
+        maxToRenderPerBatch={8}
+        renderItem={renderTimelineItem}
+        showsVerticalScrollIndicator={false}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+      />
     </ScreenEnter>
   );
 }
@@ -602,6 +619,21 @@ const styles = StyleSheet.create({
   timelineSection: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.xs,
+  },
+  timelineHeader: {
+    alignItems: "center",
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+  },
+  timelineHeaderCopy: {
+    gap: 2,
+  },
+  timelineCount: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   sectionTitle: {
     ...typography.section,
