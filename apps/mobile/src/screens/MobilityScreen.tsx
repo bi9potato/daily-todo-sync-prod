@@ -54,6 +54,11 @@ import {
 import { flushMobilityPointQueue } from "@/lib/mobility-queue";
 import { reverseGeocode } from "@/lib/reverse-geocode";
 import {
+  formatMobilitySegmentTimeRange,
+  mergeMobilityPoints,
+  mobilitySegmentKey,
+} from "@/lib/mobility-view-model";
+import {
   clearNativeMobilityQueue,
   flushNativeMobilityQueueNow,
   getLatestNativeMobilityPoint,
@@ -610,7 +615,7 @@ export function MobilityScreen({
             segment.longitude != null,
         )
         .map((segment) => ({
-          id: segmentKey(segment),
+          id: mobilitySegmentKey(segment),
           longitude: segment.longitude as number,
           latitude: segment.latitude as number,
         })),
@@ -646,7 +651,7 @@ export function MobilityScreen({
 
   const focusSegment = useCallback(
     (segment: MobilitySegment) => {
-      const key = segmentKey(segment);
+      const key = mobilitySegmentKey(segment);
 
       setHighlightedSegmentKey(key);
       if (highlightTimeoutRef.current) {
@@ -707,7 +712,7 @@ export function MobilityScreen({
     (id: string) => {
       const segment = timelineSegments.find(
         (candidate) =>
-          candidate.type === "visit" && segmentKey(candidate) === id,
+          candidate.type === "visit" && mobilitySegmentKey(candidate) === id,
       );
       if (segment) {
         focusSegment(segment);
@@ -1156,7 +1161,7 @@ export function MobilityScreen({
           timelineSegments.map((segment, index) => {
             const isLast = index === timelineSegments.length - 1;
             if (segment.type === "visit") {
-              const key = segmentKey(segment);
+              const key = mobilitySegmentKey(segment);
               const label = segmentPlaceNames[key] || `停留地点 ${index + 1}`;
               const highlighted = highlightedSegmentKey === key;
               return (
@@ -1185,7 +1190,7 @@ export function MobilityScreen({
                   <View style={styles.placeCopy}>
                     <Text style={styles.placeName}>{label}</Text>
                     <Text style={styles.placeTime}>
-                      {formatSegmentTimeRange(segment)} · 停留{" "}
+                      {formatMobilitySegmentTimeRange(segment)} · 停留{" "}
                       {segment.durationMinutes} 分钟
                     </Text>
                   </View>
@@ -1215,7 +1220,7 @@ export function MobilityScreen({
                     </Text>
                   </View>
                   <Text style={styles.placeTime}>
-                    {formatSegmentTimeRange(segment)} · {segment.durationMinutes}{" "}
+                    {formatMobilitySegmentTimeRange(segment)} · {segment.durationMinutes}{" "}
                     分钟
                   </Text>
                 </View>
@@ -1368,62 +1373,11 @@ function formatRuntimeTime(value: string) {
   });
 }
 
-function mergeMobilityPoints(
-  persisted: MobilityPoint[],
-  live: MobilityPoint[],
-) {
-  // The server de-spikes, thins, and visit-anchors everything it has already
-  // stored, and today's query refetches every few seconds while recording.
-  // Live points therefore only bridge the gap after the newest persisted
-  // point: keeping older live samples in the union would permanently re-add
-  // the raw jitter and drift spikes the server just filtered out.
-  const lastPersistedAt = persisted.length
-    ? new Date(persisted[persisted.length - 1].recordedAt).getTime()
-    : Number.NEGATIVE_INFINITY;
-  const liveTail = live.filter(
-    (point) => new Date(point.recordedAt).getTime() > lastPersistedAt,
-  );
-  const unique = new Map<string, MobilityPoint>();
-  [...persisted, ...liveTail].forEach((point) => {
-    unique.set(
-      `${point.recordedAt}:${point.latitude.toFixed(6)}:${point.longitude.toFixed(6)}`,
-      point,
-    );
-  });
-  const sorted = [...unique.values()].sort(
-    (first, second) =>
-      new Date(first.recordedAt).getTime() -
-      new Date(second.recordedAt).getTime(),
-  );
-  if (sorted.length <= 6_000) {
-    return sorted;
-  }
-  const stride = Math.ceil(sorted.length / 5_999);
-  return [
-    sorted[0],
-    ...sorted.slice(1, -1).filter((_, index) => index % stride === 0),
-    sorted.at(-1)!,
-  ];
-}
-
 // Visit/Trip segmentation now happens server-side (mobility/segmentation.py)
 // so the Timeline UI, the map, and the Google Takeout export all agree on
 // the same boundaries. The client's only remaining job is turning a visit's
 // coordinate into a place name, the same on-device reverse geocode it did
 // before this moved server-side.
-function segmentKey(segment: MobilitySegment) {
-  return `${segment.startTime}:${segment.latitude?.toFixed(5)}:${segment.longitude?.toFixed(5)}`;
-}
-
-function formatSegmentTimeRange(segment: MobilitySegment) {
-  const format = (value: string) =>
-    new Date(value).toLocaleTimeString("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  return `${format(segment.startTime)} - ${format(segment.endTime)}`;
-}
-
 const TRIP_MODE_ICON: Record<string, React.ComponentProps<typeof AppIcon>["name"]> = {
   WALKING: "walk-outline",
   CYCLING: "bicycle-outline",
@@ -1455,13 +1409,13 @@ function useSegmentPlaceNames(segments: MobilitySegment[]) {
     {},
   );
   const unresolvedKeys = visits
-    .filter((segment) => !resolvedNames[segmentKey(segment)])
-    .map(segmentKey)
+    .filter((segment) => !resolvedNames[mobilitySegmentKey(segment)])
+    .map(mobilitySegmentKey)
     .join("|");
 
   useEffect(() => {
     const unresolved = visits.filter(
-      (segment) => !resolvedNames[segmentKey(segment)],
+      (segment) => !resolvedNames[mobilitySegmentKey(segment)],
     );
     if (!unresolved.length) {
       return;
@@ -1470,10 +1424,10 @@ function useSegmentPlaceNames(segments: MobilitySegment[]) {
     void Promise.all(
       unresolved.map(async (segment, index) => {
         if (segment.latitude == null || segment.longitude == null) {
-          return [segmentKey(segment), `停留地点 ${index + 1}`] as const;
+          return [mobilitySegmentKey(segment), `停留地点 ${index + 1}`] as const;
         }
         const label = await reverseGeocode(segment.latitude, segment.longitude);
-        return [segmentKey(segment), label || `停留地点 ${index + 1}`] as const;
+        return [mobilitySegmentKey(segment), label || `停留地点 ${index + 1}`] as const;
       }),
     ).then((entries) => {
       if (!cancelled) {
