@@ -75,27 +75,17 @@ const androidNavGroups = (["任务", "生活记录", "系统"] as const).map(
 // unbounded parent and stopped scrolling on short screens.
 export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
   const insets = useSafeAreaInsets();
-  const { calendarView, setCalendarView, displayName, selectedDate, navigateToSection } =
+  const { calendarView, setCalendarView, displayName, selectedDate } =
     useAppShell();
   const pathname = usePathname();
   const activeSection = sectionForPath(pathname);
   const initial = displayName.trim().slice(0, 1).toUpperCase() || "D";
-  const drawerNavigation = navigation as typeof navigation & {
-    addListener: (event: "drawerClose", listener: () => void) => () => void;
-  };
-
-  // Close first, navigate after: router.replace() swaps the active drawer
-  // screen, which is heavy enough (a re-render of the whole (app) group)
-  // that firing it in the same tick as closeDrawer() could occasionally
-  // interrupt the drawer's own close animation/gesture settle before it
-  // finished - the screen changed but the panel visually stayed open.
-  // The drawerClose lifecycle event guarantees its animation has finished.
+  // Use the drawer navigator's own route action. It atomically selects the
+  // target screen and closes the panel; relying on a drawerClose listener is
+  // invalid here because DrawerNavigationHelpers does not expose addListener
+  // on every native implementation.
   function go(section: AppSection) {
-    const unsubscribe = drawerNavigation.addListener("drawerClose", () => {
-      unsubscribe();
-      navigateToSection(section);
-    });
-    navigation.closeDrawer();
+    navigation.navigate(section);
   }
 
   function renderNavItem(item: (typeof navItems)[number]) {
