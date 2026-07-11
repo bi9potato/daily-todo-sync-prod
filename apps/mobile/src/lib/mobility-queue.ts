@@ -2,12 +2,13 @@ import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 
 import { addMobilityPoints } from "./api";
+import {
+  mergeMobilityBatches,
+  type QueuedMobilityBatch,
+} from "./mobility-queue-merge";
 import type { MobilityPointInput } from "@/types";
 
-type QueuedBatch = {
-  recordingId: string;
-  points: MobilityPointInput[];
-};
+type QueuedBatch = QueuedMobilityBatch;
 
 const QUEUE_FILE = FileSystem.documentDirectory
   ? `${FileSystem.documentDirectory}pending-mobility-points.json`
@@ -108,19 +109,6 @@ async function writeLastFlushAttemptAt(value: number) {
   }
 }
 
-function mergeBatches(batches: QueuedBatch[]) {
-  const merged = new Map<string, MobilityPointInput[]>();
-  for (const batch of batches) {
-    const current = merged.get(batch.recordingId) ?? [];
-    current.push(...batch.points);
-    merged.set(batch.recordingId, current);
-  }
-  return [...merged].map(([recordingId, points]) => ({
-    recordingId,
-    points: [...new Map(points.map((point) => [point.clientId, point])).values()],
-  }));
-}
-
 function isMissingRecordingError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("404") || message.toLowerCase().includes("not found");
@@ -134,7 +122,7 @@ export async function queueMobilityPoints(
     return;
   }
   await runQueueMutation(async () => {
-    const batches = mergeBatches([
+    const batches = mergeMobilityBatches([
       ...(await readQueue()),
       { recordingId, points },
     ]);
@@ -171,7 +159,9 @@ export async function importNativeMobilityPointQueue() {
     if (!nativeBatches.length) {
       return false;
     }
-    await writeQueue(mergeBatches([...(await readQueue()), ...nativeBatches]));
+    await writeQueue(
+      mergeMobilityBatches([...(await readQueue()), ...nativeBatches]),
+    );
     return true;
   });
 }
@@ -182,7 +172,7 @@ export async function flushMobilityPointQueue() {
   }
   await writeLastFlushAttemptAt(Date.now());
   flushPromise = runQueueMutation(async () => {
-    const batches = mergeBatches(await readQueue());
+    const batches = mergeMobilityBatches(await readQueue());
     if (!batches.length) {
       return false;
     }
