@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppIcon } from "./AppIcon";
 import { sectionForPath, type AppSection } from "@/lib/app-routes";
 import { useAppShell } from "@/lib/app-shell";
+import { navigateFromDrawer } from "@/lib/drawer-navigation";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
 const navItems = [
@@ -85,7 +86,7 @@ export function AppDrawerContent({ navigation }: DrawerContentComponentProps) {
   // invalid here because DrawerNavigationHelpers does not expose addListener
   // on every native implementation.
   function go(section: AppSection) {
-    navigation.navigate(section);
+    navigateFromDrawer(navigation, section);
   }
 
   function renderNavItem(item: (typeof navItems)[number]) {
