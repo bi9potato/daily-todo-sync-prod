@@ -25,7 +25,6 @@ env:
   EXPO_NO_TELEMETRY: "1"
   EXPO_FAST_ANDROID_BUILD: "1"
   EXPO_PUBLIC_API_BASE_URL: ${{ vars.MOBILE_API_BASE_URL || 'https://68.183.180.19.sslip.io/api' }}
-  EXPO_PUBLIC_BUILD_NUMBER: ${{ github.run_number }}
   EXPO_PUBLIC_BUILD_SHA: ${{ github.sha }}
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 2G
@@ -59,6 +58,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Set Android version code
+        run: |
+          # Devices already have builds from the old private repository, whose
+          # run counter was higher. Keep the +200 offset in the real APK config;
+          # repack-app reads this value when rewriting AndroidManifest.xml.
+          echo "EXPO_PUBLIC_BUILD_NUMBER=$((GITHUB_RUN_NUMBER + 200))" >> "$GITHUB_ENV"
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -88,7 +94,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/daily-todo-native-base
-          key: android-native-base-v1-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
+          key: android-native-base-v2-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
 
       - name: Repack JavaScript-only APK
         if: steps.native-base-cache.outputs.cache-hit == 'true'
@@ -143,7 +149,7 @@ jobs:
           # with a versionCode from the old repo (which reached 102) --
           # Android refuses to install an APK with a lower versionCode than
           # what's already on the device.
-          version_code="$(( ${EXPO_PUBLIC_BUILD_NUMBER:-1} + 200 ))"
+          version_code="${EXPO_PUBLIC_BUILD_NUMBER:-1}"
           if grep -qE 'versionCode [0-9]+' apps/mobile/android/app/build.gradle; then
             sed -i "s/versionCode [0-9][0-9]*/versionCode ${version_code}/" \
               apps/mobile/android/app/build.gradle
@@ -241,7 +247,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/daily-todo-native-base
-          key: android-native-base-v1-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
+          key: android-native-base-v2-${{ runner.os }}-${{ steps.native-fingerprint.outputs.hash }}
 
       - name: Save Android incremental outputs
         if: success() && steps.native-base-cache.outputs.cache-hit != 'true'
@@ -275,7 +281,16 @@ jobs:
           sha256sum artifacts/daily-todo-arm64-v8a.apk > artifacts/daily-todo-arm64-v8a.apk.sha256
           published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           version_name="$(node -p "require('./apps/mobile/package.json').version")"
-          version_code="$(( ${{ github.run_number }} + 200 ))"
+          version_code="${EXPO_PUBLIC_BUILD_NUMBER}"
+          aapt_path="$(find "${ANDROID_HOME}/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          apk_version_code="$(
+            "${aapt_path}" dump badging artifacts/daily-todo-arm64-v8a.apk |
+              sed -n "s/^package:.*versionCode='\([0-9][0-9]*\)'.*/\1/p"
+          )"
+          if [[ -z "${apk_version_code}" || "${apk_version_code}" != "${version_code}" ]]; then
+            echo "APK versionCode ${apk_version_code:-missing} does not match manifest ${version_code}" >&2
+            exit 1
+          fi
           # apkUrl points at the app server, not the GitHub release asset:
           # 62MB downloads from GitHub truncate routinely on mainland-China
           # networks, failing install with Android's generic "app not
