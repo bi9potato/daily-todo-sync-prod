@@ -763,7 +763,9 @@ export function TodayScreen({
         isPending={createMutation.isPending || aiChatMutation.isPending}
         lastAiReply={aiChatMutation.data?.reply}
         onAiSubmit={(text) => aiChatMutation.mutateAsync(text).then(() => undefined)}
-        onSubmit={(text) => createMutation.mutateAsync({ text }).then(() => undefined)}
+        onSubmit={(text, reminderTime) =>
+          createMutation.mutateAsync({ text, reminderTime }).then(() => undefined)
+        }
       />
       {viewMode === "my-day" ? (
         <Pressable

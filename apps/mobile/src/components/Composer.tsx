@@ -1,4 +1,6 @@
 import { useState } from "react";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import dayjs from "dayjs";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -28,7 +30,7 @@ type ComposerProps = {
   isPending: boolean;
   lastAiReply?: string;
   onAiSubmit?: (text: string) => Promise<void>;
-  onSubmit: (text: string) => Promise<void>;
+  onSubmit: (text: string, reminderTime: string | null) => Promise<void>;
 };
 
 export function Composer({
@@ -42,6 +44,11 @@ export function Composer({
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ComposerMode>("task");
   const [isListening, setIsListening] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  // Samsung Reminders' create toolkit: a reminder time can be staged before
+  // the task exists, shown as a removable chip, applied on submit.
+  const [stagedTime, setStagedTime] = useState<string | null>(null);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
   const { keyboardInset, keyboardVisible } = useKeyboardControllerShim(
     insets.bottom,
   );
@@ -112,9 +119,10 @@ export function Composer({
     if (mode === "ai") {
       await onAiSubmit?.(value);
     } else {
-      await onSubmit(value);
+      await onSubmit(value, stagedTime);
     }
     setText("");
+    setStagedTime(null);
     Keyboard.dismiss();
   }
 
@@ -128,6 +136,53 @@ export function Composer({
 
   return (
     <View style={[styles.wrapper, wrapperStyle]}>
+      {Platform.OS === "android" &&
+      mode === "task" &&
+      (isFocused || stagedTime) ? (
+        // Samsung Reminders' create toolkit row: condition buttons floating
+        // above the keyboard while composing; a staged time shows as a
+        // removable chip and is applied when the task is saved.
+        <View style={styles.toolkit}>
+          {stagedTime ? (
+            <View style={styles.toolkitChip}>
+              <AppIcon name="alarm" color={colors.accent} size={15} />
+              <Text style={styles.toolkitChipText}>{stagedTime}</Text>
+              <Pressable
+                accessibilityLabel="移除提醒时间"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => setStagedTime(null)}>
+                <AppIcon name="close-circle" color={colors.accent} size={16} />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              accessibilityLabel="为新任务设置提醒时间"
+              accessibilityRole="button"
+              onPress={() => setTimePickerOpen(true)}
+              style={({ pressed }) => [
+                styles.toolkitButton,
+                pressed && styles.voicePressed,
+              ]}>
+              <AppIcon name="alarm-outline" color={colors.textMuted} size={19} />
+              <Text style={styles.toolkitButtonText}>时间</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : null}
+      {timePickerOpen && Platform.OS === "android" ? (
+        <DateTimePicker
+          is24Hour
+          mode="time"
+          onChange={(event, date) => {
+            setTimePickerOpen(false);
+            if (event.type === "set" && date) {
+              setStagedTime(dayjs(date).format("HH:mm"));
+            }
+          }}
+          value={new Date()}
+        />
+      ) : null}
       <View style={[styles.container, mode === "ai" && styles.aiContainer]}>
         <Pressable
           accessibilityLabel={mode === "ai" ? "切回普通添加任务" : "切换到 AI 模式"}
@@ -147,7 +202,9 @@ export function Composer({
           autoFocus={autoFocus}
           blurOnSubmit={false}
           editable={!isPending}
+          onBlur={() => setIsFocused(false)}
           onChangeText={setText}
+          onFocus={() => setIsFocused(true)}
           onSubmitEditing={submit}
           placeholder={
             mode === "ai"
@@ -205,6 +262,46 @@ export function Composer({
 }
 
 const styles = StyleSheet.create({
+  toolkit: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  toolkitButton: {
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 4,
+    minHeight: 36,
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+  },
+  toolkitButtonText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  toolkitChip: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accent,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 4,
+    minHeight: 36,
+    paddingHorizontal: spacing.md,
+  },
+  toolkitChipText: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: "700",
+  },
   wrapper: {
     bottom: spacing.sm,
     elevation: 12,
