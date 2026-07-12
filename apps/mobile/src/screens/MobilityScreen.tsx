@@ -3,8 +3,6 @@ import { useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
-  AppState,
-  PermissionsAndroid,
   Platform,
   Pressable,
   ScrollView,
@@ -14,8 +12,6 @@ import {
   View,
 } from "react-native";
 import { scheduleIdleTask } from "@/lib/schedule-idle-task";
-import Slider from "@react-native-community/slider";
-import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
@@ -25,11 +21,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppIcon } from "@/components/AppIcon";
 import {
   RouteMap,
-  VISIT_MARKER_COLOR,
   type RouteMapHandle,
   type RouteMapVisit,
 } from "@/components/RouteMap";
 import { ScreenEnter } from "@/components/ScreenEnter";
+import {
+  MobilityDetails,
+  formatRuntimeTime,
+} from "@/components/mobility/MobilityDetails";
+import { MobilityPlaybackBar } from "@/components/mobility/MobilityPlaybackBar";
+import { MobilityTimeline } from "@/components/mobility/MobilityTimeline";
 import { flushClientLogs, recordClientLog } from "@/lib/client-logs";
 import {
   clearMobilityHistory,
@@ -49,12 +50,13 @@ import {
   setActiveMobilityRecordingId,
   setAutoTrackingEnabled,
   setVisitDwellMinutes,
-  VISIT_DWELL_MINUTE_OPTIONS,
 } from "@/lib/mobility-storage";
-import { flushMobilityPointQueue } from "@/lib/mobility-queue";
-import { reverseGeocode } from "@/lib/reverse-geocode";
 import {
-  formatMobilitySegmentTimeRange,
+  promptForBatteryOptimization,
+  requestTrackingPermissions,
+} from "@/lib/mobility-permissions";
+import { flushMobilityPointQueue } from "@/lib/mobility-queue";
+import {
   mergeMobilityPoints,
   mobilitySegmentKey,
 } from "@/lib/mobility-view-model";
@@ -62,8 +64,6 @@ import {
   clearNativeMobilityQueue,
   flushNativeMobilityQueueNow,
   getLatestNativeMobilityPoint,
-  isBatteryOptimizationDisabled,
-  openBatteryOptimizationSettings,
 } from "@/lib/mobility-native-service";
 import {
   startMobilityLocationTracking,
@@ -74,176 +74,13 @@ import { useLiveLocation } from "@/lib/useLiveLocation";
 import type { MobilityRuntimeState } from "@/lib/useMobilityRuntime";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 import type {
-  MobilityDay,
   MobilityPoint,
   MobilityRecording,
   MobilitySegment,
 } from "@/types";
 
-const PLAYBACK_SPEED_OPTIONS = [1, 2, 5, 10] as const;
 const EMPTY_MOBILITY_POINTS: MobilityPoint[] = [];
 const EMPTY_MOBILITY_SEGMENTS: MobilitySegment[] = [];
-
-function explainBackgroundPermission() {
-  if (Platform.OS !== "android") {
-    return Promise.resolve(true);
-  }
-  return new Promise<boolean>((resolve) => {
-    Alert.alert(
-      "允许后台记录",
-      "授权打开后，Daily Todo 会通过常驻通知持续记录行走路线；关闭授权开关才会停止。",
-      [
-        { text: "暂不", style: "cancel", onPress: () => resolve(false) },
-        { text: "继续", onPress: () => resolve(true) },
-      ],
-      { cancelable: true, onDismiss: () => resolve(false) },
-    );
-  });
-}
-
-async function requestAndroidNotificationPermission() {
-  const version =
-    typeof Platform.Version === "string"
-      ? Number.parseInt(Platform.Version, 10)
-      : Platform.Version;
-  if (
-    Platform.OS !== "android" ||
-    !Number.isFinite(version) ||
-    version < 33
-  ) {
-    return;
-  }
-  try {
-    await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-    );
-  } catch (error) {
-    console.warn("Notification permission request failed", error);
-  }
-}
-
-async function requestAndroidActivityRecognitionPermission() {
-  const version =
-    typeof Platform.Version === "string"
-      ? Number.parseInt(Platform.Version, 10)
-      : Platform.Version;
-  if (
-    Platform.OS !== "android" ||
-    !Number.isFinite(version) ||
-    version < 29
-  ) {
-    return true;
-  }
-  try {
-    return (
-      (await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
-      )) === PermissionsAndroid.RESULTS.GRANTED
-    );
-  } catch (error) {
-    console.warn("Activity recognition permission request failed", error);
-    return false;
-  }
-}
-
-async function waitForAndroidActivityToResume() {
-  if (Platform.OS !== "android") {
-    return;
-  }
-  if (AppState.currentState !== "active") {
-    await withTimeout(
-      new Promise<void>((resolve) => {
-        const subscription = AppState.addEventListener("change", (state) => {
-          if (state === "active") {
-            subscription.remove();
-            resolve();
-          }
-        });
-      }),
-      10_000,
-      "应用未能从系统授权页面恢复，请返回应用后重试。",
-    );
-  }
-  // Android can publish AppState.active slightly before the Activity window
-  // regains focus. Starting a location FGS in that gap crashes API 34+.
-  await new Promise<void>((resolve) => setTimeout(resolve, 600));
-}
-
-async function requestTrackingPermissions({
-  requireBackground,
-}: {
-  requireBackground: boolean;
-}) {
-  if (Platform.OS === "web") {
-    throw new Error("网页端不能持续记录轨迹，请在 Android APK 中使用。");
-  }
-  recordClientLog("info", "Requesting foreground location permission", {
-    source: "mobility",
-  });
-  await flushClientLogs();
-  if (!(await Location.hasServicesEnabledAsync())) {
-    throw new Error("请先打开系统定位服务。");
-  }
-  const foreground = await Location.requestForegroundPermissionsAsync();
-  if (!foreground.granted) {
-    throw new Error("需要“精确位置”权限才能记录路线。");
-  }
-  if (!requireBackground) {
-    return;
-  }
-  await requestAndroidActivityRecognitionPermission();
-  await requestAndroidNotificationPermission();
-  if (!(await explainBackgroundPermission())) {
-    throw new Error("未开启后台位置权限。");
-  }
-  recordClientLog("info", "Requesting background location permission", {
-    source: "mobility",
-  });
-  await flushClientLogs();
-  const background = await Location.requestBackgroundPermissionsAsync();
-  if (!background.granted) {
-    throw new Error("需要选择“始终允许”才能在锁屏后继续记录。");
-  }
-  await waitForAndroidActivityToResume();
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
-    }),
-  ]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  });
-}
-
-async function promptForBatteryOptimization() {
-  if (Platform.OS !== "android") {
-    return;
-  }
-  if (await isBatteryOptimizationDisabled().catch(() => true)) {
-    return;
-  }
-  Alert.alert(
-    "允许持续后台记录",
-    "为减少系统省电策略中断足迹，请在电池优化设置中将 Daily Todo 设为“不优化”。该设置必须由你在系统页面确认。",
-    [
-      { text: "稍后", style: "cancel" },
-      {
-        text: "去设置",
-        onPress: () => {
-          void openBatteryOptimizationSettings().catch((error) => {
-            console.warn("Battery optimization settings unavailable", error);
-          });
-        },
-      },
-    ],
-  );
-}
 
 export function MobilityScreen({
   runtime,
@@ -600,7 +437,6 @@ export function MobilityScreen({
     () => dayQuery.data?.segments ?? EMPTY_MOBILITY_SEGMENTS,
     [dayQuery.data?.segments],
   );
-  const segmentPlaceNames = useSegmentPlaceNames(timelineSegments);
   const latestLivePoint = recordingEnabled ? (livePoints.at(-1) ?? null) : null;
 
   // Visit stops marked on the map, keyed the same way as the timeline rows so
@@ -720,6 +556,10 @@ export function MobilityScreen({
     },
     [timelineSegments, focusSegment],
   );
+
+  const registerRowRef = useCallback((key: string, node: View | null) => {
+    rowRefs.current[key] = node;
+  }, []);
 
   // Live "you are here" puck + heading. It only makes sense for today (a past
   // day has no "now"), and only runs once we hold foreground location
@@ -976,58 +816,14 @@ export function MobilityScreen({
       </Text>
 
       {mapAvailable && routePoints.length > 1 ? (
-        <View style={styles.playbackBar}>
-          <Pressable
-            accessibilityLabel={isPlaying ? "暂停回放" : "回放轨迹"}
-            accessibilityRole="button"
-            onPress={togglePlayback}
-            style={({ pressed }) => [
-              styles.playbackButton,
-              pressed && styles.pressed,
-            ]}>
-            <AppIcon
-              color={colors.white}
-              name={isPlaying ? "pause" : "play"}
-              size={17}
-            />
-          </Pressable>
-          <Slider
-            accessibilityLabel="回放进度"
-            maximumTrackTintColor={colors.surfaceMuted}
-            maximumValue={1}
-            minimumTrackTintColor={colors.accent}
-            minimumValue={0}
-            onValueChange={seekPlayback}
-            style={styles.scrubber}
-            thumbTintColor={colors.accent}
-            value={playbackRatio}
-          />
-          <View style={styles.speedOptions}>
-            {PLAYBACK_SPEED_OPTIONS.map((speed) => {
-              const active = speed === playbackSpeed;
-              return (
-                <Pressable
-                  accessibilityLabel={`${speed} 倍速回放`}
-                  accessibilityRole="button"
-                  key={speed}
-                  onPress={() => choosePlaybackSpeed(speed)}
-                  style={({ pressed }) => [
-                    styles.speedChip,
-                    active && styles.speedChipActive,
-                    pressed && styles.pressed,
-                  ]}>
-                  <Text
-                    style={[
-                      styles.speedChipText,
-                      active && styles.speedChipTextActive,
-                    ]}>
-                    {speed}x
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+        <MobilityPlaybackBar
+          isPlaying={isPlaying}
+          onChooseSpeed={choosePlaybackSpeed}
+          onSeek={seekPlayback}
+          onTogglePlayback={togglePlayback}
+          playbackRatio={playbackRatio}
+          playbackSpeed={playbackSpeed}
+        />
       ) : null}
 
       <View style={styles.distanceSummary}>
@@ -1130,109 +926,14 @@ export function MobilityScreen({
         </View>
       ) : null}
 
-      <View style={styles.placesSection}>
-        <View style={styles.placesHeading}>
-          <Text style={styles.sectionTitle}>足迹时间轴</Text>
-        </View>
-        <View style={styles.dwellSettingRow}>
-          <Text style={styles.dwellSettingLabel}>停留多久算到访（分钟）</Text>
-          <SegmentedControl
-            accessibilityLabel="停留多久算到访"
-            activeFontStyle={styles.dwellSegmentActiveFont}
-            backgroundColor={colors.surfaceMuted}
-            fontStyle={styles.dwellSegmentFont}
-            onChange={(event) => {
-              const minutes =
-                VISIT_DWELL_MINUTE_OPTIONS[
-                  event.nativeEvent.selectedSegmentIndex
-                ];
-              if (minutes != null) {
-                chooseVisitDwellMinutes(minutes);
-              }
-            }}
-            selectedIndex={(VISIT_DWELL_MINUTE_OPTIONS as readonly number[]).indexOf(
-              visitDwellMinutes,
-            )}
-            tintColor={colors.accent}
-            values={VISIT_DWELL_MINUTE_OPTIONS.map(String)}
-          />
-        </View>
-        {timelineSegments.length ? (
-          timelineSegments.map((segment, index) => {
-            const isLast = index === timelineSegments.length - 1;
-            if (segment.type === "visit") {
-              const key = mobilitySegmentKey(segment);
-              const label = segmentPlaceNames[key] || `停留地点 ${index + 1}`;
-              const highlighted = highlightedSegmentKey === key;
-              return (
-                <Pressable
-                  accessibilityLabel={`查看到访地点 ${label}`}
-                  accessibilityRole="button"
-                  key={`${segment.startTime}-${index}`}
-                  onPress={() => focusSegment(segment)}
-                  ref={(node) => {
-                    rowRefs.current[key] = node;
-                  }}
-                  style={({ pressed }) => [
-                    styles.placeRow,
-                    highlighted && styles.placeRowHighlighted,
-                    pressed && styles.pressed,
-                  ]}>
-                  <View style={styles.timeline}>
-                    <View
-                      style={[
-                        styles.placeDot,
-                        highlighted && styles.placeDotHighlighted,
-                      ]}
-                    />
-                    {!isLast ? <View style={styles.placeLine} /> : null}
-                  </View>
-                  <View style={styles.placeCopy}>
-                    <Text style={styles.placeName}>{label}</Text>
-                    <Text style={styles.placeTime}>
-                      {formatMobilitySegmentTimeRange(segment)} · 停留{" "}
-                      {segment.durationMinutes} 分钟
-                    </Text>
-                  </View>
-                </Pressable>
-              );
-            }
-            const modeLabel = segment.mode ? TRIP_MODE_LABEL[segment.mode] : null;
-            const modeIcon = segment.mode ? TRIP_MODE_ICON[segment.mode] : null;
-            return (
-              <View key={`${segment.startTime}-${index}`} style={styles.placeRow}>
-                <View style={styles.timeline}>
-                  <View style={styles.tripDot} />
-                  {!isLast ? <View style={styles.placeLine} /> : null}
-                </View>
-                <View style={styles.placeCopy}>
-                  <View style={styles.tripHeading}>
-                    <AppIcon
-                      color={colors.textMuted}
-                      name={modeIcon ?? "walk-outline"}
-                      size={15}
-                    />
-                    <Text style={styles.placeName}>
-                      {modeLabel ?? "移动"}
-                      {segment.distanceMeters != null
-                        ? ` · ${(segment.distanceMeters / 1000).toFixed(2)} 公里`
-                        : ""}
-                    </Text>
-                  </View>
-                  <Text style={styles.placeTime}>
-                    {formatMobilitySegmentTimeRange(segment)} · {segment.durationMinutes}{" "}
-                    分钟
-                  </Text>
-                </View>
-              </View>
-            );
-          })
-        ) : (
-          <Text style={styles.emptyPlaces}>
-            在约 80 米范围停留满 {visitDwellMinutes} 分钟后自动显示到访地点，途中的移动会显示为行程
-          </Text>
-        )}
-      </View>
+      <MobilityTimeline
+        highlightedSegmentKey={highlightedSegmentKey}
+        onChooseVisitDwellMinutes={chooseVisitDwellMinutes}
+        onPressVisit={focusSegment}
+        registerRowRef={registerRowRef}
+        segments={timelineSegments}
+        visitDwellMinutes={visitDwellMinutes}
+      />
 
       <Pressable
         accessibilityLabel="清除足迹历史记录"
@@ -1252,214 +953,6 @@ export function MobilityScreen({
       </Pressable>
       </ScrollView>
     </ScreenEnter>
-  );
-}
-
-function MobilityDetails({
-  day,
-  onBack,
-  runtime,
-  selectedDate,
-  totalSteps,
-}: {
-  day: MobilityDay | undefined;
-  onBack: () => void;
-  runtime: MobilityRuntimeState;
-  selectedDate: string;
-  totalSteps: number;
-}) {
-  const stepSource =
-    runtime.stepSource === "device"
-      ? "原生设备计步传感器"
-      : "暂无可用来源";
-
-  return (
-    <ScrollView
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}>
-      <View style={styles.detailsHeader}>
-        <Pressable
-          accessibilityLabel="返回足迹地图"
-          onPress={onBack}
-          style={({ pressed }) => [
-            styles.detailsBackButton,
-            pressed && styles.pressed,
-          ]}>
-          <AppIcon name="chevron-back" color={colors.text} size={21} />
-        </Pressable>
-        <View style={styles.detailsHeadingCopy}>
-          <Text style={styles.title}>足迹详情</Text>
-          <Text style={styles.subtitle}>{formatLongDate(selectedDate)}</Text>
-        </View>
-      </View>
-
-      <View style={styles.metrics}>
-        <Metric
-          icon="footsteps-outline"
-          label="步数"
-          value={totalSteps.toLocaleString()}
-        />
-        <Metric
-          icon="navigate-outline"
-          label="公里"
-          value={((day?.distanceMeters ?? 0) / 1000).toFixed(2)}
-        />
-        <Metric
-          icon="time-outline"
-          label="记录分钟"
-          value={String(day?.durationMinutes ?? 0)}
-        />
-      </View>
-
-      <View style={styles.detailsPanel}>
-        <DetailRow
-          icon="location-outline"
-          label="定位点"
-          value={`${day?.points.length ?? 0} 个`}
-        />
-        <DetailRow
-          icon="footsteps-outline"
-          label="步数来源"
-          value={stepSource}
-        />
-        <DetailRow
-          icon="cloud-upload-outline"
-          label="等待同步"
-          value={`${runtime.queuedPointCount} 个定位点`}
-        />
-        <DetailRow
-          icon="time-outline"
-          label="最近定位"
-          value={
-            runtime.lastLocationAt
-              ? formatRuntimeTime(runtime.lastLocationAt)
-              : "暂无"
-          }
-        />
-      </View>
-
-      <Text style={styles.stepNote}>
-        Android 会在你开启足迹记录后使用设备传感器统计本次步数。
-      </Text>
-    </ScrollView>
-  );
-}
-
-function DetailRow({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ComponentProps<typeof AppIcon>["name"];
-  label: string;
-  value: string;
-}) {
-  return (
-    <View style={styles.detailRow}>
-      <AppIcon name={icon} color={colors.accent} size={19} />
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text numberOfLines={2} style={styles.detailValue}>
-        {value}
-      </Text>
-    </View>
-  );
-}
-
-function formatRuntimeTime(value: string) {
-  return new Date(value).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-// Visit/Trip segmentation now happens server-side (mobility/segmentation.py)
-// so the Timeline UI, the map, and the Google Takeout export all agree on
-// the same boundaries. The client's only remaining job is turning a visit's
-// coordinate into a place name, the same on-device reverse geocode it did
-// before this moved server-side.
-const TRIP_MODE_ICON: Record<string, React.ComponentProps<typeof AppIcon>["name"]> = {
-  WALKING: "walk-outline",
-  CYCLING: "bicycle-outline",
-  IN_VEHICLE: "car-outline",
-  SUBWAY: "subway-outline",
-  TRAIN: "train-outline",
-  HIGH_SPEED_RAIL: "train-outline",
-  FLIGHT: "airplane-outline",
-};
-
-const TRIP_MODE_LABEL: Record<string, string> = {
-  WALKING: "步行",
-  CYCLING: "骑行",
-  // Driver vs passenger can't be told apart from GPS, so road vehicles stay
-  // one bucket; rail and air split out by their distinctive speed profiles.
-  IN_VEHICLE: "乘车",
-  SUBWAY: "地铁",
-  TRAIN: "火车",
-  HIGH_SPEED_RAIL: "高铁",
-  FLIGHT: "飞行",
-};
-
-function useSegmentPlaceNames(segments: MobilitySegment[]) {
-  const visits = useMemo(
-    () => segments.filter((segment) => segment.type === "visit"),
-    [segments],
-  );
-  const [resolvedNames, setResolvedNames] = useState<Record<string, string>>(
-    {},
-  );
-  const unresolvedKeys = visits
-    .filter((segment) => !resolvedNames[mobilitySegmentKey(segment)])
-    .map(mobilitySegmentKey)
-    .join("|");
-
-  useEffect(() => {
-    const unresolved = visits.filter(
-      (segment) => !resolvedNames[mobilitySegmentKey(segment)],
-    );
-    if (!unresolved.length) {
-      return;
-    }
-    let cancelled = false;
-    void Promise.all(
-      unresolved.map(async (segment, index) => {
-        if (segment.latitude == null || segment.longitude == null) {
-          return [mobilitySegmentKey(segment), `停留地点 ${index + 1}`] as const;
-        }
-        const label = await reverseGeocode(segment.latitude, segment.longitude);
-        return [mobilitySegmentKey(segment), label || `停留地点 ${index + 1}`] as const;
-      }),
-    ).then((entries) => {
-      if (!cancelled) {
-        setResolvedNames((current) => ({
-          ...current,
-          ...Object.fromEntries(entries),
-        }));
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [visits, resolvedNames, unresolvedKeys]);
-
-  return resolvedNames;
-}
-
-function Metric({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ComponentProps<typeof AppIcon>["name"];
-  label: string;
-  value: string;
-}) {
-  return (
-    <View style={styles.metric}>
-      <AppIcon name={icon} color={colors.accent} size={18} />
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
-    </View>
   );
 }
 
@@ -1593,74 +1086,6 @@ const styles = StyleSheet.create({
     marginTop: -spacing.sm,
     textAlign: "center",
   },
-  playbackBar: {
-    ...shadows.card,
-    alignItems: "center",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: spacing.sm,
-    padding: spacing.sm,
-  },
-  playbackButton: {
-    alignItems: "center",
-    backgroundColor: colors.accent,
-    borderRadius: radius.full,
-    height: 36,
-    justifyContent: "center",
-    width: 36,
-  },
-  scrubber: {
-    flex: 1,
-  },
-  speedOptions: {
-    flexDirection: "row",
-    gap: 4,
-  },
-  speedChip: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.full,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-  },
-  speedChipActive: {
-    backgroundColor: colors.accent,
-  },
-  speedChipText: {
-    ...typography.label,
-    color: colors.textMuted,
-    fontSize: 11,
-  },
-  speedChipTextActive: {
-    color: colors.white,
-  },
-  metrics: {
-    ...shadows.card,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    flexDirection: "row",
-    paddingVertical: spacing.md,
-  },
-  metric: {
-    alignItems: "center",
-    borderRightColor: colors.border,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    flex: 1,
-    gap: 2,
-  },
-  metricValue: {
-    color: colors.text,
-    fontSize: 22,
-    fontWeight: "800",
-  },
-  metricLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
   distanceSummary: {
     ...shadows.card,
     alignItems: "center",
@@ -1771,156 +1196,6 @@ const styles = StyleSheet.create({
   runtimeError: {
     ...typography.caption,
     color: colors.danger,
-  },
-  detailsHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.md,
-  },
-  detailsBackButton: {
-    alignItems: "center",
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    height: 42,
-    justifyContent: "center",
-    width: 42,
-  },
-  detailsHeadingCopy: {
-    flex: 1,
-  },
-  detailsPanel: {
-    ...shadows.card,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-  },
-  detailRow: {
-    alignItems: "center",
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row",
-    gap: spacing.sm,
-    minHeight: 54,
-    paddingVertical: spacing.sm,
-  },
-  detailLabel: {
-    ...typography.body,
-    color: colors.textMuted,
-    flex: 1,
-  },
-  detailValue: {
-    ...typography.label,
-    color: colors.text,
-    flex: 1.4,
-    textAlign: "right",
-  },
-  placesSection: {
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    padding: spacing.lg,
-  },
-  sectionTitle: {
-    ...typography.section,
-    color: colors.text,
-  },
-  placesHeading: {
-    marginBottom: spacing.sm,
-  },
-  dwellSettingRow: {
-    gap: spacing.xs,
-    marginBottom: spacing.md,
-  },
-  dwellSettingLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  dwellSegmentFont: {
-    ...typography.label,
-    color: colors.text,
-  },
-  dwellSegmentActiveFont: {
-    ...typography.label,
-    color: colors.white,
-  },
-  placeRow: {
-    borderRadius: radius.md,
-    flexDirection: "row",
-    minHeight: 58,
-  },
-  placeRowHighlighted: {
-    backgroundColor: colors.accentSoft,
-  },
-  timeline: {
-    alignItems: "center",
-    width: 24,
-  },
-  placeDot: {
-    // Matches VISIT_MARKER_COLOR in RouteMap.tsx so a stop's map pin and its
-    // timeline row read as the same thing.
-    backgroundColor: VISIT_MARKER_COLOR,
-    borderColor: colors.white,
-    borderRadius: radius.full,
-    borderWidth: 2,
-    height: 13,
-    marginTop: 3,
-    width: 13,
-  },
-  placeDotHighlighted: {
-    height: 16,
-    marginTop: 1,
-    width: 16,
-  },
-  placeLine: {
-    backgroundColor: colors.borderStrong,
-    flex: 1,
-    marginVertical: 3,
-    width: 1,
-  },
-  tripDot: {
-    backgroundColor: colors.surface,
-    borderColor: colors.borderStrong,
-    borderRadius: radius.full,
-    borderWidth: 2,
-    height: 13,
-    marginTop: 3,
-    width: 13,
-  },
-  tripHeading: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 5,
-  },
-  placeCopy: {
-    flex: 1,
-    gap: 2,
-    paddingBottom: spacing.md,
-    paddingLeft: spacing.sm,
-  },
-  placeName: {
-    ...typography.body,
-    color: colors.text,
-    fontWeight: "600",
-  },
-  placeTime: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  emptyPlaces: {
-    ...typography.body,
-    color: colors.textMuted,
-    paddingBottom: spacing.sm,
-  },
-  stepNote: {
-    ...typography.caption,
-    color: colors.textMuted,
-    lineHeight: 18,
-    textAlign: "center",
   },
   dangerRow: {
     alignItems: "center",
