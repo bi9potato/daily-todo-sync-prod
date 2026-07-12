@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
 import { sectionForPath, type AppSection } from "@/lib/app-routes";
+import { ANDROID_HIDDEN_SECTIONS } from "@/lib/platform-sections";
 import { useAppShell } from "@/lib/app-shell";
 import { navigateFromDrawer } from "@/lib/drawer-navigation";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
@@ -37,13 +38,11 @@ const navItems = [
 
 type NavItemKey = (typeof navItems)[number]["key"];
 
-const androidHiddenNavItems: ReadonlySet<NavItemKey> = new Set([
-  "analytics",
-  "calendar",
-  "sleep",
-  "passwords",
-  "ai",
-]);
+// Kept in lib/platform-sections so the route components enforce the same
+// list: a drawer that merely hides an entry still leaves the route reachable.
+const androidHiddenNavItems: ReadonlySet<AppSection> = new Set(
+  ANDROID_HIDDEN_SECTIONS,
+);
 
 // The reverse of the set above: features with no non-Android implementation
 // at all (device-timeline has no iOS/web native service, unlike mobility
