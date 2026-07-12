@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppIcon } from "./AppIcon";
 import { useKeyboardControllerShim } from "@/lib/useKeyboardControllerShim";
+import { isVoiceCommandSessionActive } from "@/lib/voice-session";
 import { colors, radius, spacing } from "@/theme";
 
 type ComposerMode = "task" | "ai";
@@ -45,9 +46,18 @@ export function Composer({
     insets.bottom,
   );
 
-  useSpeechRecognitionEvent("start", () => setIsListening(true));
+  // Speech events are global to the app; sessions started by the
+  // voice-command overlay must not leak transcripts into this input.
+  useSpeechRecognitionEvent("start", () => {
+    if (!isVoiceCommandSessionActive()) {
+      setIsListening(true);
+    }
+  });
   useSpeechRecognitionEvent("end", () => setIsListening(false));
   useSpeechRecognitionEvent("result", (event) => {
+    if (isVoiceCommandSessionActive()) {
+      return;
+    }
     const transcript = event.results[0]?.transcript?.trim();
     if (transcript) {
       setText(transcript);
@@ -55,6 +65,9 @@ export function Composer({
   });
   useSpeechRecognitionEvent("error", (event) => {
     setIsListening(false);
+    if (isVoiceCommandSessionActive()) {
+      return;
+    }
     if (event.error !== "no-speech" && event.error !== "aborted") {
       Alert.alert("语音输入不可用", event.message || "请检查麦克风和语音识别权限。");
     }

@@ -5,10 +5,17 @@ import { useLocalSearchParams } from "expo-router";
 
 export default function TodayRoute() {
   const { selectedDate } = useAppShell();
-  const { compose } = useLocalSearchParams<{ compose?: string }>();
+  const { compose, voice } = useLocalSearchParams<{
+    compose?: string;
+    voice?: string;
+  }>();
   return (
     <ScreenEnter style={{ flex: 1 }}>
-      <TodayScreen autoFocusComposer={compose === "1"} selectedDate={selectedDate} />
+      <TodayScreen
+        autoFocusComposer={compose === "1"}
+        autoOpenVoice={voice === "1"}
+        selectedDate={selectedDate}
+      />
     </ScreenEnter>
   );
 }

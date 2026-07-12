@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppIcon } from "@/components/AppIcon";
 import { AndroidUpdatePanel } from "@/components/profile/AndroidUpdatePanel";
+import { AssistantLlmPanel } from "@/components/profile/AssistantLlmPanel";
 import {
   ArchivedLongTermPanel,
   TrashPanel,
@@ -294,6 +295,12 @@ export function ProfileScreen() {
             />
           )}
         </Section>
+
+        {Platform.OS === "android" ? (
+          <Section title="语音助手 AI 解析">
+            <AssistantLlmPanel />
+          </Section>
+        ) : null}
 
         <Section title="关于">
           <SettingRow

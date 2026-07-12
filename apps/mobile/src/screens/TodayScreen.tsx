@@ -3,6 +3,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -27,6 +28,7 @@ import { ErrorState, LoadingState } from "@/components/ScreenState";
 import { TaskEditor } from "@/components/TaskEditor";
 import { TaskRow } from "@/components/TaskRow";
 import { TodayOverview } from "@/components/TodayOverview";
+import { VoiceCommandOverlay } from "@/components/VoiceCommandOverlay";
 import {
   ApiError,
   archiveOccurrence,
@@ -113,6 +115,7 @@ function createOptimisticOccurrence(
 
 type TodayScreenProps = {
   autoFocusComposer?: boolean;
+  autoOpenVoice?: boolean;
   selectedDate: string;
   viewMode?: "my-day" | "long-term" | "low-priority";
 };
@@ -204,6 +207,7 @@ function updateTaskAttachments(
 
 export function TodayScreen({
   autoFocusComposer = false,
+  autoOpenVoice = false,
   selectedDate,
   viewMode = "my-day",
 }: TodayScreenProps) {
@@ -211,6 +215,17 @@ export function TodayScreen({
   const insets = useSafeAreaInsets();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(autoOpenVoice);
+  // Deep links (daily-todo://today?voice=1) can flip the prop while the
+  // screen stays mounted; adjust state during render instead of in an
+  // effect (react-hooks/set-state-in-effect).
+  const [prevAutoOpenVoice, setPrevAutoOpenVoice] = useState(autoOpenVoice);
+  if (autoOpenVoice !== prevAutoOpenVoice) {
+    setPrevAutoOpenVoice(autoOpenVoice);
+    if (autoOpenVoice) {
+      setVoiceOpen(true);
+    }
+  }
 
   const dayQuery = useQuery({
     queryKey: ["day", selectedDate],
@@ -225,14 +240,37 @@ export function TodayScreen({
     [dayQuery.data, selectedTaskId],
   );
 
+  // The id/text pairs voice commands match against ("完成买牛奶" needs the
+  // day's task titles).
+  const voiceTasks = useMemo(
+    () => ({
+      pending: (dayQuery.data?.pending ?? []).map((task) => ({
+        id: task.id,
+        text: task.text,
+      })),
+      done: (dayQuery.data?.done ?? []).map((task) => ({
+        id: task.id,
+        text: task.text,
+      })),
+    }),
+    [dayQuery.data],
+  );
+
   const createMutation = useMutation({
-    mutationFn: async (text: string) => {
+    mutationFn: async ({
+      text,
+      reminderTime,
+    }: {
+      text: string;
+      reminderTime?: string | null;
+    }) => {
       const clientId = createTodoClientId();
       const payload: TaskCreatePayload = {
         text,
         isLongTerm: viewMode === "long-term",
         isLowPriority: viewMode === "low-priority",
         clientId,
+        ...(reminderTime ? { reminderTime } : {}),
       };
       try {
         return await createTask(selectedDate, payload);
@@ -249,6 +287,16 @@ export function TodayScreen({
         appendTask(current, task),
       );
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (Platform.OS === "android" && task.reminderTime) {
+        // Voice-added tasks can carry a reminder; make sure it reaches
+        // Android's scheduler like editor-saved ones do.
+        void scheduleTaskReminder(task).catch(() => {
+          Alert.alert(
+            "任务已保存，但提醒设置失败",
+            "请检查通知及“闹钟和提醒”权限后重试。",
+          );
+        });
+      }
     },
   });
 
@@ -715,8 +763,35 @@ export function TodayScreen({
         isPending={createMutation.isPending || aiChatMutation.isPending}
         lastAiReply={aiChatMutation.data?.reply}
         onAiSubmit={(text) => aiChatMutation.mutateAsync(text).then(() => undefined)}
-        onSubmit={(text) => createMutation.mutateAsync(text).then(() => undefined)}
+        onSubmit={(text) => createMutation.mutateAsync({ text }).then(() => undefined)}
       />
+      {viewMode === "my-day" ? (
+        <Pressable
+          accessibilityLabel="语音操作任务"
+          accessibilityRole="button"
+          onPress={() => setVoiceOpen(true)}
+          style={({ pressed }) => [
+            styles.voiceFab,
+            { bottom: insets.bottom + spacing.sm + 56 + spacing.sm },
+            pressed && styles.voiceFabPressed,
+          ]}>
+          <AppIcon name="mic" color={colors.white} size={22} />
+        </Pressable>
+      ) : null}
+      {viewMode === "my-day" ? (
+        <VoiceCommandOverlay
+          onAdd={(text, reminderTime) =>
+            createMutation.mutateAsync({ text, reminderTime }).then(() => undefined)
+          }
+          onClose={() => setVoiceOpen(false)}
+          onComplete={(taskId) =>
+            updateMutation.mutate({ id: taskId, payload: { done: true } })
+          }
+          onDelete={(taskId) => deleteMutation.mutate(taskId)}
+          open={voiceOpen}
+          tasks={voiceTasks}
+        />
+      ) : null}
       <TaskEditor
         key={selectedTask?.id ?? "empty-editor"}
         isAttachmentMutating={
@@ -896,6 +971,22 @@ const styles = StyleSheet.create({
   page: {
     backgroundColor: colors.background,
     flex: 1,
+  },
+  voiceFab: {
+    ...shadows.floating,
+    alignItems: "center",
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    elevation: 12,
+    height: 48,
+    justifyContent: "center",
+    position: "absolute",
+    right: spacing.md,
+    width: 48,
+    zIndex: 12,
+  },
+  voiceFabPressed: {
+    backgroundColor: colors.accentPressed,
   },
   header: {
     ...shadows.panel,
