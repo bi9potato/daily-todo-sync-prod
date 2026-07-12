@@ -6,6 +6,7 @@ import {
   enqueueTodoUpdate,
   flushTodoMutationQueue,
 } from "@/lib/todo-mutation-queue";
+import { withTimeout } from "@/lib/with-timeout";
 import type { DayTodos } from "@/types";
 
 import {
@@ -59,13 +60,27 @@ export async function loadTodayWidgetData(): Promise<TodayTasksWidgetData> {
   }
 }
 
+// The instant view for right after a widget click: rebuilt from the local
+// snapshot instead of refetching the day, so the tapped task disappears
+// immediately. The next periodic/app-background update reconciles with the
+// server.
+export async function loadTodayWidgetDataFromCache(): Promise<TodayTasksWidgetData> {
+  const date = toDateKey(new Date());
+  const dateLabel = formatLongDate(date);
+  const cached = await readCache();
+  if (cached && cached.date === date) {
+    return { dateLabel, offline: false, ...selectWidgetTasks(cached, { date }) };
+  }
+  return loadTodayWidgetData();
+}
+
 // Completion goes through the same offline queue the app uses, so a tap
-// works without network and the app reconciles it on next launch.
+// works without network and the app reconciles it on next launch. The cache
+// is updated first (that is what the post-click render shows) and the
+// network flush is capped so a dead connection cannot make the tap feel
+// stuck; a timed-out flush stays queued and syncs later.
 export async function completeTaskFromWidget(occurrenceId: string) {
   await enqueueTodoUpdate(occurrenceId, { done: true });
-  await flushTodoMutationQueue().catch(() => {
-    // Offline - the queued entry syncs when the app next reaches the API.
-  });
   const cached = await readCache();
   if (cached) {
     const completed = cached.pending.find((task) => task.id === occurrenceId);
@@ -77,4 +92,12 @@ export async function completeTaskFromWidget(occurrenceId: string) {
       });
     }
   }
+  await withTimeout(
+    flushTodoMutationQueue(),
+    4_000,
+    "widget flush timed out",
+  ).catch(() => {
+    // Offline or slow - the queued entry syncs when the app next reaches
+    // the API.
+  });
 }

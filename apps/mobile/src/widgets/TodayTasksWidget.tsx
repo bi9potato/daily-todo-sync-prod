@@ -1,6 +1,7 @@
 import { FlexWidget, ListWidget, TextWidget } from "react-native-android-widget";
 
 import type { TodayWidgetTask } from "./select-widget-tasks";
+import type { TodayWidgetLayout } from "./widget-layout";
 
 export type WidgetColorScheme = "light" | "dark";
 
@@ -44,11 +45,16 @@ export type TodayTasksWidgetData = {
 export function TodayTasksWidget({
   colorScheme = "light",
   data,
+  layout = { dense: false, narrow: false },
 }: {
   colorScheme?: WidgetColorScheme;
   data: TodayTasksWidgetData;
+  layout?: TodayWidgetLayout;
 }) {
   const palette = palettes[colorScheme];
+  const caption = layout.narrow
+    ? `待办 ${data.pendingCount}${data.offline ? " · 离线" : ""}`
+    : `${data.dateLabel} · 待办 ${data.pendingCount} · 已完成 ${data.doneCount}${data.offline ? " · 离线" : ""}`;
   return (
     <FlexWidget
       style={{
@@ -57,7 +63,7 @@ export function TodayTasksWidget({
         flex: 1,
         flexDirection: "column",
         height: "match_parent",
-        padding: 16,
+        padding: layout.dense ? 12 : 16,
         width: "match_parent",
       }}>
       <FlexWidget
@@ -70,12 +76,16 @@ export function TodayTasksWidget({
           clickAction="OPEN_APP"
           style={{ flex: 1, flexDirection: "column" }}>
           <TextWidget
-            style={{ color: palette.text, fontSize: 16, fontWeight: "700" }}
+            style={{
+              color: palette.text,
+              fontSize: layout.dense ? 14 : 16,
+              fontWeight: "700",
+            }}
             text="今日任务"
           />
           <TextWidget
-            style={{ color: palette.textMuted, fontSize: 11, marginTop: 1 }}
-            text={`${data.dateLabel} · 待办 ${data.pendingCount} · 已完成 ${data.doneCount}${data.offline ? " · 离线" : ""}`}
+            style={{ color: palette.textMuted, fontSize: 11 }}
+            text={caption}
           />
         </FlexWidget>
         <FlexWidget
@@ -84,13 +94,13 @@ export function TodayTasksWidget({
           style={{
             alignItems: "center",
             backgroundColor: palette.accent,
-            borderRadius: 18,
-            height: 36,
+            borderRadius: layout.dense ? 15 : 18,
+            height: layout.dense ? 30 : 36,
             justifyContent: "center",
-            width: 36,
+            width: layout.dense ? 30 : 36,
           }}>
           <TextWidget
-            style={{ color: palette.onAccent, fontSize: 20 }}
+            style={{ color: palette.onAccent, fontSize: layout.dense ? 17 : 20 }}
             text="＋"
           />
         </FlexWidget>
@@ -100,7 +110,7 @@ export function TodayTasksWidget({
         <ListWidget
           style={{
             height: "match_parent",
-            marginTop: 10,
+            marginTop: layout.dense ? 4 : 6,
             width: "match_parent",
           }}>
           {data.pendingTasks.map((task) => (
@@ -109,7 +119,7 @@ export function TodayTasksWidget({
               style={{
                 alignItems: "center",
                 flexDirection: "row",
-                paddingVertical: 8,
+                paddingVertical: layout.dense ? 3 : 4,
                 width: "match_parent",
               }}>
               <TextWidget
@@ -117,29 +127,29 @@ export function TodayTasksWidget({
                 clickActionData={{ id: task.id }}
                 style={{
                   color: palette.accent,
-                  fontSize: 22,
-                  paddingHorizontal: 6,
+                  fontSize: 20,
+                  paddingHorizontal: 5,
+                  paddingVertical: 3,
                 }}
                 text="○"
               />
               <FlexWidget
                 clickAction="OPEN_APP"
-                style={{ flex: 1, flexDirection: "column", marginLeft: 6 }}>
+                style={{ flex: 1, flexDirection: "column", marginLeft: 5 }}>
                 <TextWidget
                   maxLines={1}
                   style={{
                     color: palette.text,
-                    fontSize: 15,
+                    fontSize: 14,
                   }}
                   text={task.text}
                   truncate="END"
                 />
-                {task.reminderTime ? (
+                {task.reminderTime && !layout.dense ? (
                   <TextWidget
                     style={{
                       color: task.overdue ? palette.overdue : palette.textMuted,
-                      fontSize: 12,
-                      marginTop: 1,
+                      fontSize: 11,
                     }}
                     text={`${task.reminderTime}${task.overdue ? " · 已过时间" : ""}`}
                   />

@@ -2,7 +2,12 @@ import { Appearance } from "react-native";
 import type { WidgetTaskHandlerProps } from "react-native-android-widget";
 
 import { TodayTasksWidget } from "./TodayTasksWidget";
-import { completeTaskFromWidget, loadTodayWidgetData } from "./today-tasks-data";
+import { layoutForWidgetSize } from "./widget-layout";
+import {
+  completeTaskFromWidget,
+  loadTodayWidgetData,
+  loadTodayWidgetDataFromCache,
+} from "./today-tasks-data";
 
 export const TODAY_TASKS_WIDGET_NAME = "DailyTodoToday";
 
@@ -17,6 +22,7 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps) {
   if (props.widgetInfo.widgetName !== TODAY_TASKS_WIDGET_NAME) {
     return;
   }
+  const layout = layoutForWidgetSize(props.widgetInfo);
   switch (props.widgetAction) {
     case "WIDGET_ADDED":
     case "WIDGET_UPDATE":
@@ -25,6 +31,7 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps) {
         <TodayTasksWidget
           colorScheme={currentWidgetColorScheme()}
           data={await loadTodayWidgetData()}
+          layout={layout}
         />,
       );
       break;
@@ -36,10 +43,13 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps) {
         if (occurrenceId) {
           await completeTaskFromWidget(occurrenceId);
         }
+        // Render from the local snapshot rather than refetching the day, so
+        // the tapped task disappears without waiting on another round trip.
         props.renderWidget(
           <TodayTasksWidget
             colorScheme={currentWidgetColorScheme()}
-            data={await loadTodayWidgetData()}
+            data={await loadTodayWidgetDataFromCache()}
+            layout={layout}
           />,
         );
       }
