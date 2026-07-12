@@ -2,8 +2,13 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
 import {
+  cancelNativeReminderAlarm,
   ensureNativeReminderNotificationChannel,
+  getNativeReminderAlarmIds,
+  hasNativeReminderAlarms,
+  presentNativeReminderNow,
   REMINDER_CHANNEL_ID,
+  scheduleNativeReminderAlarm,
 } from "./android-reminder-settings";
 import { recordClientLog } from "./client-logs";
 
@@ -162,6 +167,11 @@ export async function getScheduledReminderOccurrenceIds(): Promise<Set<string>> 
       ids.add(occurrenceId);
     }
   }
+  // Native alarm-pipeline reminders (the Samsung-style popup path) live in
+  // the module's own store, not expo's scheduler.
+  for (const id of await getNativeReminderAlarmIds()) {
+    ids.add(id);
+  }
   return ids;
 }
 
@@ -179,12 +189,27 @@ export async function scheduleTaskReminder(occurrence: {
   await ensureReminderNotificationChannel();
   const identifier = reminderIdentifier(occurrence.id);
   await Notifications.cancelScheduledNotificationAsync(identifier).catch(() => undefined);
+  if (hasNativeReminderAlarms) {
+    await cancelNativeReminderAlarm(occurrence.id);
+  }
   scheduledReminderSignatures.delete(occurrence.id);
   if (!occurrence.reminderAt || occurrence.status === "done") {
     return;
   }
   const date = new Date(occurrence.reminderAt);
   if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
+    return;
+  }
+  if (hasNativeReminderAlarms) {
+    // Android rides the native alarm pipeline: exact alarm -> full-screen
+    // popup over the lockscreen with 完成/稍后 actions (the Samsung
+    // Reminders behavior), instead of a plain scheduled notification.
+    await scheduleNativeReminderAlarm(
+      occurrence.id,
+      occurrence.text,
+      date.getTime(),
+    );
+    scheduledReminderSignatures.set(occurrence.id, reminderSignature(occurrence));
     return;
   }
   await Notifications.scheduleNotificationAsync({
@@ -212,6 +237,9 @@ export async function cancelTaskReminder(occurrenceId: string) {
   await Notifications.cancelScheduledNotificationAsync(
     reminderIdentifier(occurrenceId),
   ).catch(() => undefined);
+  if (hasNativeReminderAlarms) {
+    await cancelNativeReminderAlarm(occurrenceId);
+  }
   scheduledReminderSignatures.delete(occurrenceId);
 }
 
@@ -220,6 +248,13 @@ export async function cancelTaskReminder(occurrenceId: string) {
 // channel-only trigger (no "type") presents right away on that channel.
 export async function presentImmediateReminder(occurrenceId: string, title: string, body: string) {
   await ensureReminderNotificationChannel();
+  if (hasNativeReminderAlarms) {
+    // Location arrivals get the same full-screen popup treatment as timed
+    // reminders (Samsung shows its alert page for both).
+    if (await presentNativeReminderNow(occurrenceId, body || title)) {
+      return;
+    }
+  }
   await Notifications.scheduleNotificationAsync({
     content: {
       title,
