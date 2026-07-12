@@ -43,11 +43,11 @@ export async function loadTodayWidgetData(): Promise<TodayTasksWidgetData> {
   try {
     const day = await getDay(date);
     await writeCache({ date, pending: day.pending, done: day.done });
-    return { dateLabel, offline: false, ...selectWidgetTasks(day) };
+    return { dateLabel, offline: false, ...selectWidgetTasks(day, { date }) };
   } catch {
     const cached = await readCache();
     if (cached && cached.date === date) {
-      return { dateLabel, offline: true, ...selectWidgetTasks(cached) };
+      return { dateLabel, offline: true, ...selectWidgetTasks(cached, { date }) };
     }
     return {
       dateLabel,

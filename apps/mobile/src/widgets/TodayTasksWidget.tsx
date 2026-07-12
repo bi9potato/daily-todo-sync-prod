@@ -2,15 +2,29 @@ import { FlexWidget, ListWidget, TextWidget } from "react-native-android-widget"
 
 import type { TodayWidgetTask } from "./select-widget-tasks";
 
-// RemoteViews cannot load the app theme, so the palette from src/theme.ts is
-// repeated here as plain hex values.
-const palette = {
-  surface: "#FFFFFF",
-  text: "#161B18",
-  textMuted: "#687168",
-  accent: "#2C5745",
-  accentSoft: "#E8F0EB",
-  border: "#D5DDD3",
+export type WidgetColorScheme = "light" | "dark";
+
+// RemoteViews cannot load the app theme, so both palettes live here as plain
+// hex values. Light mirrors src/theme.ts; dark follows One UI widget
+// conventions (near-black card, desaturated accent) since the layout is
+// modeled on Samsung Reminders' widget.
+const palettes = {
+  light: {
+    surface: "#FFFFFF",
+    text: "#161B18",
+    textMuted: "#687168",
+    accent: "#2C5745",
+    onAccent: "#FFFFFF",
+    overdue: "#C64236",
+  },
+  dark: {
+    surface: "#1B201D",
+    text: "#F1F4F1",
+    textMuted: "#96A099",
+    accent: "#8FC3AA",
+    onAccent: "#10281C",
+    overdue: "#FF7B6E",
+  },
 } as const;
 
 export type TodayTasksWidgetData = {
@@ -21,20 +35,29 @@ export type TodayTasksWidgetData = {
   offline: boolean;
 };
 
-// Home-screen "今日任务" widget. Tapping a task's circle completes it via
-// the offline mutation queue; tapping its text opens the app; the plus
-// button deep-links straight into the My Day composer (same URI as the
-// long-press app shortcut).
-export function TodayTasksWidget({ data }: { data: TodayTasksWidgetData }) {
+// Home-screen "今日任务" widget, modeled on Samsung Reminders' widget: each
+// row is a circle tap-to-complete button plus the task title with a small
+// reminder-time line underneath (red once the time has passed - the detail
+// One UI 8 dropped and users missed). Completion goes through the offline
+// mutation queue; the row opens the app; ＋ deep-links into the My Day
+// composer like the long-press app shortcut.
+export function TodayTasksWidget({
+  colorScheme = "light",
+  data,
+}: {
+  colorScheme?: WidgetColorScheme;
+  data: TodayTasksWidgetData;
+}) {
+  const palette = palettes[colorScheme];
   return (
     <FlexWidget
       style={{
         backgroundColor: palette.surface,
-        borderRadius: 18,
+        borderRadius: 24,
         flex: 1,
         flexDirection: "column",
         height: "match_parent",
-        padding: 14,
+        padding: 16,
         width: "match_parent",
       }}>
       <FlexWidget
@@ -47,34 +70,37 @@ export function TodayTasksWidget({ data }: { data: TodayTasksWidgetData }) {
           clickAction="OPEN_APP"
           style={{ flex: 1, flexDirection: "column" }}>
           <TextWidget
-            style={{ color: palette.text, fontSize: 15, fontWeight: "700" }}
+            style={{ color: palette.text, fontSize: 16, fontWeight: "700" }}
             text="今日任务"
           />
           <TextWidget
-            style={{ color: palette.textMuted, fontSize: 11 }}
+            style={{ color: palette.textMuted, fontSize: 11, marginTop: 1 }}
             text={`${data.dateLabel} · 待办 ${data.pendingCount} · 已完成 ${data.doneCount}${data.offline ? " · 离线" : ""}`}
           />
         </FlexWidget>
-        <TextWidget
+        <FlexWidget
           clickAction="OPEN_URI"
           clickActionData={{ uri: "daily-todo://today?compose=1" }}
           style={{
+            alignItems: "center",
             backgroundColor: palette.accent,
-            borderRadius: 16,
-            color: "#FFFFFF",
-            fontSize: 18,
-            paddingHorizontal: 12,
-            paddingVertical: 2,
-          }}
-          text="＋"
-        />
+            borderRadius: 18,
+            height: 36,
+            justifyContent: "center",
+            width: 36,
+          }}>
+          <TextWidget
+            style={{ color: palette.onAccent, fontSize: 20 }}
+            text="＋"
+          />
+        </FlexWidget>
       </FlexWidget>
 
       {data.pendingTasks.length ? (
         <ListWidget
           style={{
             height: "match_parent",
-            marginTop: 8,
+            marginTop: 10,
             width: "match_parent",
           }}>
           {data.pendingTasks.map((task) => (
@@ -83,7 +109,7 @@ export function TodayTasksWidget({ data }: { data: TodayTasksWidgetData }) {
               style={{
                 alignItems: "center",
                 flexDirection: "row",
-                paddingVertical: 7,
+                paddingVertical: 8,
                 width: "match_parent",
               }}>
               <TextWidget
@@ -91,23 +117,33 @@ export function TodayTasksWidget({ data }: { data: TodayTasksWidgetData }) {
                 clickActionData={{ id: task.id }}
                 style={{
                   color: palette.accent,
-                  fontSize: 20,
+                  fontSize: 22,
                   paddingHorizontal: 6,
                 }}
                 text="○"
               />
               <FlexWidget
                 clickAction="OPEN_APP"
-                style={{ flex: 1, marginLeft: 4 }}>
+                style={{ flex: 1, flexDirection: "column", marginLeft: 6 }}>
                 <TextWidget
                   maxLines={1}
                   style={{
                     color: palette.text,
-                    fontSize: 14,
+                    fontSize: 15,
                   }}
                   text={task.text}
                   truncate="END"
                 />
+                {task.reminderTime ? (
+                  <TextWidget
+                    style={{
+                      color: task.overdue ? palette.overdue : palette.textMuted,
+                      fontSize: 12,
+                      marginTop: 1,
+                    }}
+                    text={`${task.reminderTime}${task.overdue ? " · 已过时间" : ""}`}
+                  />
+                ) : null}
               </FlexWidget>
             </FlexWidget>
           ))}

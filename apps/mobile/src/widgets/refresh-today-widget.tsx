@@ -12,11 +12,16 @@ export async function refreshTodayTasksWidget() {
     const { requestWidgetUpdate } = await import("react-native-android-widget");
     const { TodayTasksWidget } = await import("./TodayTasksWidget");
     const { loadTodayWidgetData } = await import("./today-tasks-data");
-    const { TODAY_TASKS_WIDGET_NAME } = await import("./widget-task-handler");
+    const { TODAY_TASKS_WIDGET_NAME, currentWidgetColorScheme } = await import(
+      "./widget-task-handler"
+    );
     const data = await loadTodayWidgetData();
+    const colorScheme = currentWidgetColorScheme();
     await requestWidgetUpdate({
       widgetName: TODAY_TASKS_WIDGET_NAME,
-      renderWidget: () => <TodayTasksWidget data={data} />,
+      renderWidget: () => (
+        <TodayTasksWidget colorScheme={colorScheme} data={data} />
+      ),
       widgetNotFound: () => {
         // No widget on the launcher yet - nothing to refresh.
       },
