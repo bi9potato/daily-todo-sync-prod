@@ -1,4 +1,12 @@
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useEffect } from "react";
+import {
+  AppState,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { Drawer } from "expo-router/drawer";
 import type { DrawerHeaderProps } from "expo-router/drawer";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -6,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppDrawerContent } from "@/components/AppDrawerContent";
 import { AppIcon } from "@/components/AppIcon";
 import { AppShellProvider, useAppShell } from "@/lib/app-shell";
+import { refreshTodayTasksWidget } from "@/widgets/refresh-today-widget";
 import { colors, radius, shadows, spacing, typography } from "@/theme";
 
 // Without this, expo-router falls back to the first route alphabetically --
@@ -23,6 +32,18 @@ export default function AppGroupLayout() {
   // compute the open/close translation; capped so it never gets absurdly wide
   // on tablets.
   const drawerWidth = Math.min(320, Math.round(width * 0.84));
+
+  // Task edits made in-app should be visible on the launcher the moment the
+  // user leaves; the widget otherwise only refreshes on its 30-minute period
+  // or its own clicks.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "background") {
+        void refreshTodayTasksWidget();
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   return (
     <AppShellProvider>

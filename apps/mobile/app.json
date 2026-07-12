@@ -12,7 +12,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.dailytodosync.app",
       "infoPlist": {
-        "UIBackgroundModes": ["location"],
+        "UIBackgroundModes": [
+          "location"
+        ],
         "NSMotionUsageDescription": "允许 Daily Todo 读取计步数据，为你记录每日步数。"
       }
     },
@@ -83,6 +85,24 @@
       "./plugins/with-expense-tracking",
       "./plugins/with-health-connect",
       "./plugins/with-android-app-shortcuts",
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "DailyTodoToday",
+              "label": "今日任务",
+              "description": "查看今天的任务，点圆圈直接完成",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            }
+          ]
+        }
+      ],
       "./plugins/with-android-performance-benchmark",
       "@maplibre/maplibre-react-native",
       [

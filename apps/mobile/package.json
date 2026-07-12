@@ -1,6 +1,6 @@
 {
   "name": "@daily-todo-sync/mobile",
-  "main": "expo-router/entry",
+  "main": "./index.js",
   "version": "1.0.0",
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
@@ -42,6 +42,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.85.3",
+    "react-native-android-widget": "0.21.0",
     "react-native-draggable-flatlist": "^4.0.3",
     "react-native-gesture-handler": "~2.31.0",
     "react-native-health-connect": "~3.5.3",
