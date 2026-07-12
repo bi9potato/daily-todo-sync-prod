@@ -391,19 +391,16 @@ export function AndroidReminderSettings({
 }
 
 const styles = StyleSheet.create({
+  // Flat One UI-style rows (Samsung Reminders): no card chrome, icons
+  // aligned with the editor's title input, hairline separators only.
   card: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    overflow: "hidden",
+    backgroundColor: "transparent",
   },
   row: {
     alignItems: "center",
     flexDirection: "row",
     gap: spacing.sm,
-    minHeight: 50,
-    paddingHorizontal: spacing.md,
+    minHeight: 54,
   },
   rowMain: {
     alignItems: "center",
@@ -412,7 +409,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minWidth: 0,
     // Keep the whole slim row tappable without growing its visual height.
-    minHeight: 50,
+    minHeight: 54,
   },
   rowLabel: {
     ...typography.body,
@@ -449,7 +446,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: spacing.xs,
     paddingBottom: spacing.sm,
-    paddingHorizontal: spacing.md,
+    paddingLeft: 20 + spacing.sm,
   },
   presetChip: {
     alignItems: "center",
@@ -487,14 +484,16 @@ const styles = StyleSheet.create({
   divider: {
     backgroundColor: colors.border,
     height: StyleSheet.hairlineWidth,
-    marginLeft: spacing.md + 20 + spacing.sm,
+    marginLeft: 20 + spacing.sm,
   },
   warningRow: {
     alignItems: "center",
     backgroundColor: colors.dangerSoft,
+    borderRadius: radius.sm,
     flexDirection: "row",
     gap: spacing.xs,
-    paddingHorizontal: spacing.md,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   warningText: {
@@ -504,9 +503,10 @@ const styles = StyleSheet.create({
   },
   locationEditor: {
     backgroundColor: colors.surfaceMuted,
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
     gap: spacing.sm,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xs,
     padding: spacing.sm,
   },
   searchRow: {

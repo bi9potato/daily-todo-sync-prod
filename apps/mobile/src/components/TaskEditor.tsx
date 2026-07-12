@@ -300,9 +300,12 @@ export function TaskEditor({
             autoFocus={false}
             multiline
             onChangeText={setText}
-            placeholder="要完成什么？"
+            placeholder={Platform.OS === "android" ? "输入任务" : "要完成什么？"}
             placeholderTextColor={colors.textMuted}
-            style={styles.heroInput}
+            style={[
+              styles.heroInput,
+              Platform.OS === "android" && styles.androidHeroInput,
+            ]}
             value={text}
           />
           <View style={styles.quickActions}>
@@ -441,14 +444,26 @@ export function TaskEditor({
                 taskLocation={taskLocation}
               />
             )}
-            <View style={[styles.detailRow, styles.noteRow]}>
-              <AppIcon name="document-text-outline" color={colors.text} size={21} />
+            {Platform.OS === "android" ? (
+              <View style={styles.androidDivider} />
+            ) : null}
+            <View
+              style={[
+                styles.detailRow,
+                styles.noteRow,
+                Platform.OS === "android" && styles.androidNoteRow,
+              ]}>
+              <AppIcon
+                name="document-text-outline"
+                color={Platform.OS === "android" ? colors.textMuted : colors.text}
+                size={Platform.OS === "android" ? 20 : 21}
+              />
               <View style={styles.noteContent}>
                 <TextInput
                   accessibilityLabel="备注"
                   multiline
                   onChangeText={setNote}
-                  placeholder="添加备注"
+                  placeholder={Platform.OS === "android" ? "备注" : "添加备注"}
                   placeholderTextColor={colors.textMuted}
                   style={styles.noteInput}
                   textAlignVertical="top"
@@ -637,8 +652,22 @@ const styles = StyleSheet.create({
   androidDetailsSurface: {
     backgroundColor: "transparent",
     borderWidth: 0,
-    gap: spacing.md,
+    gap: 0,
     overflow: "visible",
+  },
+  androidHeroInput: {
+    fontSize: 24,
+    lineHeight: 32,
+    minHeight: 64,
+  },
+  androidDivider: {
+    backgroundColor: colors.border,
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 20 + spacing.sm,
+  },
+  androidNoteRow: {
+    paddingHorizontal: 0,
+    paddingTop: spacing.md,
   },
   detailRow: {
     alignItems: "center",
