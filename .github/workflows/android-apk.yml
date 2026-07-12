@@ -321,6 +321,14 @@ jobs:
           fi
           apk_sha256="$(sha256sum artifacts/daily-todo-arm64-v8a.apk | cut -d' ' -f1)"
           apk_size_bytes="$(stat -c '%s' artifacts/daily-todo-arm64-v8a.apk)"
+          # The update screen shows these notes verbatim; edit
+          # apps/mobile/release-notes.txt alongside user-visible changes.
+          release_notes_json="$(jq -Rs 'gsub("\\s+$"; "")' apps/mobile/release-notes.txt)"
+          {
+            echo "APK_PACKAGE=${apk_package}"
+            echo "APK_VERSION_CODE=${version_code}"
+            echo "APK_CERT_SHA256=${signing_cert_sha256}"
+          } >> "$GITHUB_ENV"
           # apkUrl points at the app server, not the GitHub release asset:
           # 62MB downloads from GitHub truncate routinely on mainland-China
           # networks, failing install with Android's generic "app not
@@ -340,12 +348,47 @@ jobs:
             "apkSha256": "${apk_sha256}",
             "signingCertificateSha256": "${signing_cert_sha256}",
             "verificationStatus": "verified",
-            "releaseNotes": "Android reliability, diagnostics, navigation, and daily overview improvements.",
+            "releaseNotes": ${release_notes_json},
             "apkUrl": "${EXPO_PUBLIC_API_BASE_URL%/api}/downloads/daily-todo-arm64-v8a.apk",
             "releaseUrl": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/android-latest",
             "publishedAt": "${published_at}"
           }
           EOF
+
+      # Android only allows an update install when the package name matches,
+      # the signing certificate matches, and the versionCode does not go
+      # backwards. Check all three against the build users currently have
+      # (the live server manifest) before publishing, so a regenerated
+      # signing keystore or a versionCode reset can never ship a build that
+      # devices reject with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+      - name: Gate on overwrite-install compatibility
+        run: |
+          manifest_url="${EXPO_PUBLIC_API_BASE_URL}/mobile/releases/latest"
+          live="$(curl -fsS --max-time 30 --retry 3 "${manifest_url}" || true)"
+          if [[ -z "${live}" ]]; then
+            echo "::warning::No live release manifest at ${manifest_url}; skipping the upgrade gate (first publish or server unreachable)."
+            exit 0
+          fi
+          live_package="$(jq -r '.packageName // empty' <<< "${live}")"
+          live_version_code="$(jq -r '.versionCode // empty' <<< "${live}")"
+          live_cert="$(jq -r '.signingCertificateSha256 // empty' <<< "${live}")"
+          if [[ -z "${live_package}" || ! "${live_version_code}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Live manifest lacks packageName/versionCode; skipping the upgrade gate."
+            exit 0
+          fi
+          if [[ "${live_package}" != "${APK_PACKAGE}" ]]; then
+            echo "Package name changed: installed builds are ${live_package}, new APK is ${APK_PACKAGE}." >&2
+            exit 1
+          fi
+          if [[ -n "${live_cert}" && "${live_cert,,}" != "${APK_CERT_SHA256}" ]]; then
+            echo "Signing certificate changed (live ${live_cert}, new ${APK_CERT_SHA256}); devices would refuse the update." >&2
+            exit 1
+          fi
+          if (( APK_VERSION_CODE <= live_version_code )); then
+            echo "versionCode ${APK_VERSION_CODE} does not increase on the published ${live_version_code}; devices would refuse to overwrite-install." >&2
+            exit 1
+          fi
+          echo "Overwrite-install gate passed: ${live_package} ${live_version_code} -> ${APK_VERSION_CODE}, same signing certificate."
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
