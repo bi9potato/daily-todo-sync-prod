@@ -117,6 +117,19 @@ export function TaskEditor({
   const [reminderPermissionWarning, setReminderPermissionWarning] = useState("");
   const [reminderSettingsTarget, setReminderSettingsTarget] =
     useState<ReminderSettingsTarget>(null);
+  // The editor body (reminder settings, attachments, repeat menu) is the
+  // expensive part of this modal; mounting it during the slide-in animation
+  // is what made opening feel janky. Defer it to the Modal's onShow, which
+  // fires once the animation has settled.
+  const visible = Boolean(task);
+  const [contentReady, setContentReady] = useState(false);
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (!visible) {
+      setContentReady(false);
+    }
+  }
   const {
     captureCurrentLocation,
     isLocating,
@@ -232,8 +245,9 @@ export function TaskEditor({
     <Modal
       animationType="slide"
       onRequestClose={handleKeyboardGuard}
+      onShow={() => setContentReady(true)}
       presentationStyle="pageSheet"
-      visible={Boolean(task)}>
+      visible={visible}>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={[styles.page, { paddingBottom: insets.bottom }]}>
@@ -247,24 +261,34 @@ export function TaskEditor({
             <AppIcon name="close" color={colors.text} />
           </Pressable>
           <Text style={styles.title}>任务详情</Text>
-          <Pressable
-            accessibilityLabel="保存"
-            accessibilityRole="button"
-            disabled={isSaving || !text.trim()}
-            onPress={save}
-            style={({ pressed }) => [
-              styles.saveButton,
-              (!text.trim() || isSaving) && styles.saveButtonDisabled,
-              pressed && styles.pressed,
-            ]}>
-            {isSaving ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <AppIcon name="checkmark" color={colors.white} size={24} />
-            )}
-          </Pressable>
+          {Platform.OS !== "android" ? (
+            <Pressable
+              accessibilityLabel="保存"
+              accessibilityRole="button"
+              disabled={isSaving || !text.trim()}
+              onPress={save}
+              style={({ pressed }) => [
+                styles.saveButton,
+                (!text.trim() || isSaving) && styles.saveButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              {isSaving ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <AppIcon name="checkmark" color={colors.white} size={24} />
+              )}
+            </Pressable>
+          ) : (
+            <View style={styles.iconButton} />
+          )}
         </View>
 
+        {!contentReady ? (
+          <View style={styles.contentLoading}>
+            <ActivityIndicator color={colors.accent} />
+          </View>
+        ) : null}
+        {contentReady ? (
         <ScrollView
           contentContainerStyle={[
             styles.content,
@@ -371,12 +395,19 @@ export function TaskEditor({
                   onOpenTimePicker={() => setTimePickerOpen(true)}
                   onSearchLocation={searchLocation}
                   onSelectSearchResult={selectSearchResult}
+                  onSelectTime={(time) => {
+                    setReminderTime(time);
+                    setReminderPermissionWarning("");
+                    setReminderSettingsTarget(null);
+                    void checkAndroidTimeReminderAccess(true);
+                  }}
                   onToggleLocationReminder={(enabled) =>
                     void toggleLocationReminder(enabled)
                   }
                   onUseCurrentLocation={() => void captureCurrentLocation()}
                   reminderPermissionWarning={reminderPermissionWarning}
                   reminderTime={reminderTime}
+                  taskDate={task?.taskDate ?? ""}
                 />
                 {timePickerOpen ? (
                   <DateTimePicker
@@ -474,20 +505,62 @@ export function TaskEditor({
             </>
           ) : null}
         </ScrollView>
-        <RepeatMenu
-          interval={repeatInterval}
-          isLongTerm={isLongTerm}
-          onChangeInterval={setRepeatInterval}
-          onClose={() => setRepeatMenuOpen(false)}
-          onSelect={(kind) => {
-            setRepeatKind(kind);
-            if (kind === "none" || kind === "weekdays") {
-              setRepeatInterval("1");
-            }
-          }}
-          repeatKind={isLongTerm ? "daily" : repeatKind}
-          visible={repeatMenuOpen}
-        />
+        ) : null}
+        {Platform.OS === "android" ? (
+          // One UI-style bottom action bar (Samsung Reminders): full-width
+          // 取消/保存 instead of a small header icon.
+          <View style={styles.bottomBar}>
+            <Pressable
+              accessibilityLabel="取消"
+              accessibilityRole="button"
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.bottomAction,
+                pressed && styles.bottomActionPressed,
+              ]}>
+              <Text style={styles.bottomActionText}>取消</Text>
+            </Pressable>
+            <View style={styles.bottomBarDivider} />
+            <Pressable
+              accessibilityLabel="保存"
+              accessibilityRole="button"
+              disabled={isSaving || !text.trim()}
+              onPress={save}
+              style={({ pressed }) => [
+                styles.bottomAction,
+                pressed && styles.bottomActionPressed,
+              ]}>
+              {isSaving ? (
+                <ActivityIndicator color={colors.accent} size="small" />
+              ) : (
+                <Text
+                  style={[
+                    styles.bottomActionText,
+                    styles.bottomActionPrimary,
+                    !text.trim() && styles.bottomActionDisabled,
+                  ]}>
+                  保存
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        ) : null}
+        {contentReady ? (
+          <RepeatMenu
+            interval={repeatInterval}
+            isLongTerm={isLongTerm}
+            onChangeInterval={setRepeatInterval}
+            onClose={() => setRepeatMenuOpen(false)}
+            onSelect={(kind) => {
+              setRepeatKind(kind);
+              if (kind === "none" || kind === "weekdays") {
+                setRepeatInterval("1");
+              }
+            }}
+            repeatKind={isLongTerm ? "daily" : repeatKind}
+            visible={repeatMenuOpen}
+          />
+        ) : null}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -618,5 +691,44 @@ const styles = StyleSheet.create({
   copyText: {
     ...typography.label,
     color: colors.accent,
+  },
+  contentLoading: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+  },
+  bottomBar: {
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    minHeight: 54,
+  },
+  bottomBarDivider: {
+    backgroundColor: colors.border,
+    height: 22,
+    width: StyleSheet.hairlineWidth,
+  },
+  bottomAction: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 54,
+  },
+  bottomActionPressed: {
+    backgroundColor: colors.surfaceMuted,
+  },
+  bottomActionText: {
+    ...typography.body,
+    color: colors.text,
+    fontWeight: "600",
+  },
+  bottomActionPrimary: {
+    color: colors.accent,
+    fontWeight: "800",
+  },
+  bottomActionDisabled: {
+    opacity: 0.4,
   },
 });

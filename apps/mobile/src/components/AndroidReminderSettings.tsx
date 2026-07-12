@@ -12,6 +12,8 @@ import {
 import Slider from "@react-native-community/slider";
 
 import { AppIcon } from "./AppIcon";
+import { isReminderTimeUpcoming } from "@/lib/task-reminder-time";
+import { toDateKey } from "@/lib/date";
 import { colors, radius, spacing, typography } from "@/theme";
 import type { PlaceSearchResult, TaskLocation } from "@/types";
 
@@ -28,6 +30,14 @@ function clampRadius(value: number) {
   return Math.min(MAX_RADIUS_METERS, Math.max(MIN_RADIUS_METERS, value));
 }
 
+// The quick suggestions Samsung Reminders offers before the full picker;
+// past slots are hidden when the task is for today.
+const TIME_PRESETS = [
+  { label: "上午 9:00", time: "09:00" },
+  { label: "下午 3:00", time: "15:00" },
+  { label: "晚上 8:00", time: "20:00" },
+] as const;
+
 type AndroidReminderSettingsProps = {
   isLocationBusy: boolean;
   isRequestingLocationReminder: boolean;
@@ -41,10 +51,12 @@ type AndroidReminderSettingsProps = {
   onOpenTimePicker: () => void;
   onSearchLocation: (address: string) => Promise<PlaceSearchResult[]>;
   onSelectSearchResult: (result: PlaceSearchResult) => void;
+  onSelectTime: (time: string) => void;
   onToggleLocationReminder: (enabled: boolean) => void;
   onUseCurrentLocation: () => void;
   reminderPermissionWarning: string;
   reminderTime: string;
+  taskDate: string;
 };
 
 // Compact reminder rows in the Microsoft To Do style: one slim line per
@@ -64,20 +76,27 @@ export function AndroidReminderSettings({
   onOpenTimePicker,
   onSearchLocation,
   onSelectSearchResult,
+  onSelectTime,
   onToggleLocationReminder,
   onUseCurrentLocation,
   reminderPermissionWarning,
   reminderTime,
+  taskDate,
 }: AndroidReminderSettingsProps) {
   const [address, setAddress] = useState(location?.name ?? "");
   // The location editor is heavy; keep it closed unless there is nothing
   // configured yet (first-time setup) or the user opens it.
   const [isLocationExpanded, setIsLocationExpanded] = useState(false);
+  const [isTimeExpanded, setIsTimeExpanded] = useState(false);
   const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
 
   const locationReminderEnabled = Boolean(location?.reminderEnabled);
   const hasTime = Boolean(reminderTime);
+  const isForToday = taskDate === toDateKey(new Date());
+  const presets = TIME_PRESETS.filter(
+    (preset) => !isForToday || isReminderTimeUpcoming(taskDate, preset.time),
+  );
 
   async function handleSearch() {
     if (!address.trim()) {
@@ -93,29 +112,81 @@ export function AndroidReminderSettings({
       <Pressable
         accessibilityLabel={hasTime ? `时间提醒 ${reminderTime.slice(0, 5)}` : "添加时间提醒"}
         accessibilityRole="button"
-        onPress={onOpenTimePicker}
+        onPress={() =>
+          hasTime
+            ? onOpenTimePicker()
+            : setIsTimeExpanded((current) => !current)
+        }
         style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
         <AppIcon
           name={hasTime ? "alarm" : "alarm-outline"}
           color={hasTime ? colors.accent : colors.textMuted}
           size={20}
         />
-        <Text style={[styles.rowLabel, hasTime && styles.rowLabelActive]}>
-          {hasTime ? reminderTime.slice(0, 5) : "时间提醒"}
-        </Text>
         {hasTime ? (
-          <Pressable
-            accessibilityLabel="清除时间提醒"
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={onClearTime}
-            style={styles.trailingButton}>
-            <AppIcon name="close-circle" color={colors.textMuted} size={19} />
-          </Pressable>
+          <>
+            <View style={styles.rowChipArea}>
+              <View style={styles.valueChip}>
+                <Text style={styles.valueChipText}>{reminderTime.slice(0, 5)}</Text>
+                <Pressable
+                  accessibilityLabel="清除时间提醒"
+                  accessibilityRole="button"
+                  hitSlop={10}
+                  onPress={onClearTime}>
+                  <AppIcon name="close-circle" color={colors.accent} size={17} />
+                </Pressable>
+              </View>
+            </View>
+            <AppIcon name="chevron-forward" color={colors.textMuted} size={16} />
+          </>
         ) : (
-          <AppIcon name="chevron-forward" color={colors.textMuted} size={16} />
+          <>
+            <Text style={styles.rowLabel}>时间提醒</Text>
+            <AppIcon
+              name={isTimeExpanded ? "chevron-up" : "chevron-down"}
+              color={colors.textMuted}
+              size={16}
+            />
+          </>
         )}
       </Pressable>
+
+      {!hasTime && isTimeExpanded ? (
+        // Samsung Reminders-style quick suggestions before the full picker.
+        <View style={styles.presetRow}>
+          {presets.map((preset) => (
+            <Pressable
+              accessibilityLabel={`提醒时间 ${preset.label}`}
+              accessibilityRole="button"
+              key={preset.time}
+              onPress={() => {
+                setIsTimeExpanded(false);
+                onSelectTime(preset.time);
+              }}
+              style={({ pressed }) => [
+                styles.presetChip,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.presetChipText}>{preset.label}</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityLabel="自定义提醒时间"
+            accessibilityRole="button"
+            onPress={() => {
+              setIsTimeExpanded(false);
+              onOpenTimePicker();
+            }}
+            style={({ pressed }) => [
+              styles.presetChip,
+              styles.presetChipCustom,
+              pressed && styles.pressed,
+            ]}>
+            <AppIcon name="time-outline" color={colors.accent} size={14} />
+            <Text style={styles.presetChipCustomText}>自定义</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {reminderPermissionWarning ? (
         <Pressable
@@ -352,6 +423,60 @@ const styles = StyleSheet.create({
   rowLabelActive: {
     color: colors.accent,
     fontWeight: "600",
+  },
+  rowChipArea: {
+    flex: 1,
+    flexDirection: "row",
+    minWidth: 0,
+  },
+  valueChip: {
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.full,
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 32,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.sm,
+  },
+  valueChipText: {
+    ...typography.label,
+    color: colors.accent,
+    fontWeight: "700",
+  },
+  presetRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  presetChip: {
+    alignItems: "center",
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 4,
+    minHeight: 34,
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+  },
+  presetChipText: {
+    ...typography.label,
+    color: colors.text,
+    fontSize: 13,
+  },
+  presetChipCustom: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accent,
+  },
+  presetChipCustomText: {
+    ...typography.label,
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: "700",
   },
   trailingButton: {
     alignItems: "center",
