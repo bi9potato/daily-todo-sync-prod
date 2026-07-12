@@ -4,7 +4,6 @@ import {
   Linking,
   Pressable,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -38,6 +37,16 @@ const TIME_PRESETS = [
   { label: "晚上 8:00", time: "20:00" },
 ] as const;
 
+// Samsung's "1 hour from now" quick condition; only meaningful for today's
+// tasks and only while it still lands inside the same day.
+function oneHourFromNow(): string | null {
+  const date = new Date(Date.now() + 60 * 60 * 1000);
+  if (date.getDate() !== new Date().getDate()) {
+    return null;
+  }
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 type AndroidReminderSettingsProps = {
   isLocationBusy: boolean;
   isRequestingLocationReminder: boolean;
@@ -52,7 +61,6 @@ type AndroidReminderSettingsProps = {
   onSearchLocation: (address: string) => Promise<PlaceSearchResult[]>;
   onSelectSearchResult: (result: PlaceSearchResult) => void;
   onSelectTime: (time: string) => void;
-  onToggleLocationReminder: (enabled: boolean) => void;
   onUseCurrentLocation: () => void;
   reminderPermissionWarning: string;
   reminderTime: string;
@@ -77,7 +85,6 @@ export function AndroidReminderSettings({
   onSearchLocation,
   onSelectSearchResult,
   onSelectTime,
-  onToggleLocationReminder,
   onUseCurrentLocation,
   reminderPermissionWarning,
   reminderTime,
@@ -97,6 +104,7 @@ export function AndroidReminderSettings({
   const presets = TIME_PRESETS.filter(
     (preset) => !isForToday || isReminderTimeUpcoming(taskDate, preset.time),
   );
+  const inOneHour = isForToday ? oneHourFromNow() : null;
 
   async function handleSearch() {
     if (!address.trim()) {
@@ -141,7 +149,7 @@ export function AndroidReminderSettings({
           </>
         ) : (
           <>
-            <Text style={styles.rowLabel}>时间提醒</Text>
+            <Text style={styles.rowLabel}>时间</Text>
             <AppIcon
               name={isTimeExpanded ? "chevron-up" : "chevron-down"}
               color={colors.textMuted}
@@ -152,8 +160,24 @@ export function AndroidReminderSettings({
       </Pressable>
 
       {!hasTime && isTimeExpanded ? (
-        // Samsung Reminders-style quick suggestions before the full picker.
+        // Samsung Reminders-style quick conditions before the full picker
+        // ("1 hour from now" / preset slots / date-time picker).
         <View style={styles.presetRow}>
+          {inOneHour ? (
+            <Pressable
+              accessibilityLabel="1 小时后提醒"
+              accessibilityRole="button"
+              onPress={() => {
+                setIsTimeExpanded(false);
+                onSelectTime(inOneHour);
+              }}
+              style={({ pressed }) => [
+                styles.presetChip,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.presetChipText}>1 小时后</Text>
+            </Pressable>
+          ) : null}
           {presets.map((preset) => (
             <Pressable
               accessibilityLabel={`提醒时间 ${preset.label}`}
@@ -201,53 +225,64 @@ export function AndroidReminderSettings({
 
       <View style={styles.divider} />
 
-      <View style={styles.row}>
-        <Pressable
-          accessibilityHint={isLocationExpanded ? "收起地点设置" : "展开地点设置"}
-          accessibilityRole="button"
-          onPress={() => setIsLocationExpanded((current) => !current)}
-          style={({ pressed }) => [styles.rowMain, pressed && styles.pressed]}>
-          <AppIcon
-            name={locationReminderEnabled ? "location" : "location-outline"}
-            color={locationReminderEnabled ? colors.accent : colors.textMuted}
-            size={20}
-          />
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.rowLabel,
-              locationReminderEnabled && styles.rowLabelActive,
-            ]}>
-            {location
-              ? `${location.name || "已选地点"} · ${formatRadius(location.radiusMeters)}`
-              : "到达提醒"}
-          </Text>
-          <AppIcon
-            name={isLocationExpanded ? "chevron-up" : "chevron-down"}
-            color={colors.textMuted}
-            size={16}
-          />
-        </Pressable>
-        {isRequestingLocationReminder ? (
-          <ActivityIndicator color={colors.accent} size="small" />
+      <Pressable
+        accessibilityHint={isLocationExpanded ? "收起地点设置" : "展开地点设置"}
+        accessibilityRole="button"
+        onPress={() => setIsLocationExpanded((current) => !current)}
+        style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+        <AppIcon
+          name={location ? "location" : "location-outline"}
+          color={location ? colors.accent : colors.textMuted}
+          size={20}
+        />
+        {location ? (
+          // Samsung semantics: a chosen place IS the condition. The pill
+          // reads "到达 · 地点名"; its ✕ removes the condition entirely.
+          <>
+            <View style={styles.rowChipArea}>
+              <View style={styles.valueChip}>
+                <Text numberOfLines={1} style={styles.valueChipText}>
+                  {locationReminderEnabled ? "到达 · " : ""}
+                  {location.name || "已选地点"}
+                </Text>
+                {isRequestingLocationReminder ? (
+                  <ActivityIndicator color={colors.accent} size="small" />
+                ) : (
+                  <Pressable
+                    accessibilityLabel="移除地点条件"
+                    accessibilityRole="button"
+                    hitSlop={10}
+                    onPress={() => {
+                      setAddress("");
+                      setIsLocationExpanded(false);
+                      onClearLocation();
+                    }}>
+                    <AppIcon name="close-circle" color={colors.accent} size={17} />
+                  </Pressable>
+                )}
+              </View>
+            </View>
+            <AppIcon
+              name={isLocationExpanded ? "chevron-up" : "chevron-down"}
+              color={colors.textMuted}
+              size={16}
+            />
+          </>
         ) : (
-          <Switch
-            accessibilityLabel="到达提醒"
-            onValueChange={(enabled) => {
-              if (enabled && !location) {
-                setIsLocationExpanded(true);
-              }
-              onToggleLocationReminder(enabled);
-            }}
-            thumbColor={colors.white}
-            trackColor={{
-              false: colors.borderStrong,
-              true: colors.accent,
-            }}
-            value={locationReminderEnabled}
-          />
+          <>
+            <Text style={styles.rowLabel}>地点</Text>
+            {isRequestingLocationReminder ? (
+              <ActivityIndicator color={colors.accent} size="small" />
+            ) : (
+              <AppIcon
+                name={isLocationExpanded ? "chevron-up" : "chevron-down"}
+                color={colors.textMuted}
+                size={16}
+              />
+            )}
+          </>
         )}
-      </View>
+      </Pressable>
 
       {isLocationExpanded ? (
         <View style={styles.locationEditor}>
@@ -439,6 +474,7 @@ const styles = StyleSheet.create({
   valueChipText: {
     ...typography.label,
     color: colors.accent,
+    flexShrink: 1,
     fontWeight: "700",
   },
   presetRow: {

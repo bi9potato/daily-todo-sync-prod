@@ -397,17 +397,23 @@ export function TaskEditor({
                   }}
                   onOpenTimePicker={() => setTimePickerOpen(true)}
                   onSearchLocation={searchLocation}
-                  onSelectSearchResult={selectSearchResult}
+                  onSelectSearchResult={(result) => {
+                    // Samsung semantics: picking a place immediately arms
+                    // the arrival condition (permission prompts included).
+                    const picked = selectSearchResult(result);
+                    void toggleLocationReminder(true, picked);
+                  }}
                   onSelectTime={(time) => {
                     setReminderTime(time);
                     setReminderPermissionWarning("");
                     setReminderSettingsTarget(null);
                     void checkAndroidTimeReminderAccess(true);
                   }}
-                  onToggleLocationReminder={(enabled) =>
-                    void toggleLocationReminder(enabled)
-                  }
-                  onUseCurrentLocation={() => void captureCurrentLocation()}
+                  onUseCurrentLocation={() => {
+                    void captureCurrentLocation().then((picked) =>
+                      picked ? toggleLocationReminder(true, picked) : undefined,
+                    );
+                  }}
                   reminderPermissionWarning={reminderPermissionWarning}
                   reminderTime={reminderTime}
                   taskDate={task?.taskDate ?? ""}
@@ -469,7 +475,7 @@ export function TaskEditor({
                   textAlignVertical="top"
                   value={note}
                 />
-                {task ? (
+                {task && Platform.OS !== "android" ? (
                   <AttachmentGallery
                     isMutating={isAttachmentMutating}
                     onDelete={onDeleteAttachment}
@@ -480,6 +486,25 @@ export function TaskEditor({
                 ) : null}
               </View>
             </View>
+            {task && Platform.OS === "android" ? (
+              // Samsung Reminders gives images their own row rather than
+              // burying them under the note.
+              <>
+                <View style={styles.androidDivider} />
+                <View style={[styles.detailRow, styles.noteRow, styles.androidNoteRow]}>
+                  <AppIcon name="image-outline" color={colors.textMuted} size={20} />
+                  <View style={styles.noteContent}>
+                    <AttachmentGallery
+                      isMutating={isAttachmentMutating}
+                      onDelete={onDeleteAttachment}
+                      onReorder={onReorderAttachments}
+                      onUpload={onUploadAttachment}
+                      task={task}
+                    />
+                  </View>
+                </View>
+              </>
+            ) : null}
           </View>
 
           {task ? (

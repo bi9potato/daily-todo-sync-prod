@@ -26,14 +26,21 @@ export function useTaskLocationEditor(initialLocation: TaskLocation | null) {
   const [isRequestingLocationReminder, setIsRequestingLocationReminder] =
     useState(false);
 
-  async function toggleLocationReminder(enabled: boolean) {
+  // `explicitLocation` lets callers arm the reminder for a location they
+  // just picked in the same tick, before React has committed the state
+  // update (the Samsung-style flow arms immediately on selection).
+  async function toggleLocationReminder(
+    enabled: boolean,
+    explicitLocation?: TaskLocation | null,
+  ) {
+    const base = explicitLocation ?? taskLocation;
     if (!enabled) {
-      if (taskLocation) {
-        setTaskLocation({ ...taskLocation, reminderEnabled: false });
+      if (base) {
+        setTaskLocation({ ...base, reminderEnabled: false });
       }
       return;
     }
-    if (!taskLocation) {
+    if (!base) {
       setLocationError("请先输入地点或使用当前位置。");
       return;
     }
@@ -65,7 +72,7 @@ export function useTaskLocationEditor(initialLocation: TaskLocation | null) {
       if (!(await ensureNotificationPermission())) {
         throw new Error("需要开启通知权限，到达地点后才能弹出提醒。");
       }
-      setTaskLocation({ ...taskLocation, reminderEnabled: true });
+      setTaskLocation({ ...base, reminderEnabled: true });
     } catch (error) {
       setLocationError(
         error instanceof Error ? error.message : "开启到达提醒失败",
@@ -99,19 +106,21 @@ export function useTaskLocationEditor(initialLocation: TaskLocation | null) {
     }
   }
 
-  function selectSearchResult(result: PlaceSearchResult) {
+  function selectSearchResult(result: PlaceSearchResult): TaskLocation {
     setLocationError("");
-    setTaskLocation({
+    const location: TaskLocation = {
       name: result.name,
       latitude: result.latitude,
       longitude: result.longitude,
       recordedAt: new Date().toISOString(),
       reminderEnabled: taskLocation?.reminderEnabled ?? false,
       radiusMeters: Math.max(100, taskLocation?.radiusMeters ?? 150),
-    });
+    };
+    setTaskLocation(location);
+    return location;
   }
 
-  async function captureCurrentLocation() {
+  async function captureCurrentLocation(): Promise<TaskLocation | null> {
     setIsLocating(true);
     setLocationError("");
     try {
@@ -142,7 +151,7 @@ export function useTaskLocationEditor(initialLocation: TaskLocation | null) {
         current.coords.latitude,
         current.coords.longitude,
       ).catch(() => null);
-      setTaskLocation({
+      const location: TaskLocation = {
         name:
           name ||
           `${current.coords.latitude.toFixed(5)}, ${current.coords.longitude.toFixed(5)}`,
@@ -151,11 +160,14 @@ export function useTaskLocationEditor(initialLocation: TaskLocation | null) {
         recordedAt: new Date(current.timestamp).toISOString(),
         reminderEnabled: taskLocation?.reminderEnabled ?? false,
         radiusMeters: taskLocation?.radiusMeters ?? 150,
-      });
+      };
+      setTaskLocation(location);
+      return location;
     } catch (error) {
       setLocationError(
         error instanceof Error ? error.message : "无法获取当前位置",
       );
+      return null;
     } finally {
       setIsLocating(false);
     }
